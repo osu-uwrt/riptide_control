@@ -4,8 +4,8 @@
   <name>riptide_planners</name>
   <version>0.0.0</version>
   <description>TODO: Package description</description>
-  <maintainer email="cjtucker321@gmail.com">coalman321</maintainer>
-  <license>TODO: License declaration</license>
+  <maintainer email="tucker.737@osu.edu">Cole Tucker</maintainer>
+  <license>Apache 2.0</license>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
