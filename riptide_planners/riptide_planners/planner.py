@@ -1,6 +1,5 @@
 #!/bin/python3
 
-from geometry_msgs.msg import Vector3
 from math import sqrt
 import numpy as np
 import matplotlib.pyplot as plt
@@ -8,27 +7,17 @@ import matplotlib.pyplot as plt
 def main():
 
     waypts = [
-        Vector3(x=0.0, y=0.0, z=0.0),
-        Vector3(x=1.0, y=0.0, z=1.0),
-        Vector3(x=1.0, y=1.0, z=2.0),
-        Vector3(x=1.0, y=1.0, z=3.0),
-        Vector3(x=1.0, y=4.0, z=3.0)
+        np.array([0.0, 0.0, 0.0]),
+        np.array([1.0, 0.0, 1.0]),
+        np.array([1.0, 1.0, 2.0]),
+        np.array([1.0, 1.0, 3.0]),
+        np.array([1.0, 4.0, 3.0])
     ]
 
-    spline = spline_path(waypts, 500)
-
-    splinePts = []
-    for point in spline:
-        splinePts.append([point.x, point.y, point.z])
-
-    splineArr = np.array(splinePts)
-
-    print(np.min(splineArr[:, 0]))
-    print(np.argmin(splineArr[:, 0]))
-
-    print(splinePts[0])
-    print(splinePts[24])
-    print(splinePts[-1])
+    spline = spline_path(waypts, 50)
+    print(spline)
+    splineArr = np.array(spline)
+    print(splineArr.shape)
 
     # Creating an empty figure
     # or plot
@@ -45,9 +34,7 @@ def main():
     plt.show()
     
 
-def spline_path(points: list, samples: int) -> Vector3:
-    samplePts = []
-
+def spline_path(points: list, samples: int) -> list:
     # dont have to check for colinearity at all
     # the spline will lerp on its own if needed
 
@@ -61,38 +48,38 @@ def spline_path(points: list, samples: int) -> Vector3:
 
     # assign the pt 0 tangent to be the vector between pt 0 and pt 1
     tangentVect = np.array([
-        points[1].x - points[0].x,
-        points[1].y - points[0].y,
-        points[1].z - points[0].z
+        points[1][0] - points[0][0],
+        points[1][1] - points[0][1],
+        points[1][2] - points[0][2]
     ])
     tangentVect = tangentVect / np.linalg.norm(tangentVect)
-    tangents.append(Vector3(x=tangentVect[0], y=tangentVect[1], z=tangentVect[2]))
+    tangents.append(np.array([tangentVect[0], tangentVect[1], tangentVect[2]]))
 
     # assign the pt n tangent to be the vector between pt n-1 and pt n
     tangentVect = np.array([
-        points[len(points)-1].x - points[len(points)-2].x,
-        points[len(points)-1].y - points[len(points)-2].y,
-        points[len(points)-1].z - points[len(points)-2].z
+        points[len(points)-1][0] - points[len(points)-2][0],
+        points[len(points)-1][1] - points[len(points)-2][1],
+        points[len(points)-1][2] - points[len(points)-2][2]
     ])
     tangentVect = tangentVect / np.linalg.norm(tangentVect)
-    tangents.append(Vector3(x=tangentVect[0], y=tangentVect[1], z=tangentVect[2]))
+    tangents.append(np.array([tangentVect[0], tangentVect[1], tangentVect[2]]))
 
     
     # iterate from 1 to n-1
     for i in range(1, len(points)-1):
         # calculate vector P from pt k-1 to pt k
         p = np.array([
-            points[i].x - points[i-1].x,
-            points[i].y - points[i-1].y,
-            points[i].z - points[i-1].z
+            points[i][0] - points[i-1][0],
+            points[i][1] - points[i-1][1],
+            points[i][2] - points[i-1][2]
         ])
         p = p / np.linalg.norm(p)
 
         # calculate vector A from pt k to pt k+1
         a = np.array([
-            points[i+1].x - points[i].x,
-            points[i+1].y - points[i].y,
-            points[i+1].z - points[i].z
+            points[i+1][0] - points[i][0],
+            points[i+1][1] - points[i][1],
+            points[i+1][2] - points[i][2]
         ])
         a = a / np.linalg.norm(a)
 
@@ -106,8 +93,9 @@ def spline_path(points: list, samples: int) -> Vector3:
         tangentK = tangentK / np.linalg.norm(tangentK)
 
         # save the tangent to the list of tangents
-        tangents.insert(-1, Vector3(x=tangentK[0], y=tangentK[1], z=tangentK[2]))
-    
+        tangents.insert(-1, np.array([tangentK[0], tangentK[1], tangentK[2]]))
+
+    samplePts = []
         
     # re-iterate to generate curve from 1 to n-1
     for i in range(1, len(points)):
@@ -125,12 +113,12 @@ def spline_path(points: list, samples: int) -> Vector3:
 
 
 
-def radial_dist(point1: Vector3, point2: Vector3) -> float:
-    return sqrt((point1.x - point2.x) ** 2 + (point1.y - point2.y) ** 2 + (point1.z - point2.z) ** 2)
+def radial_dist(point1: np.ndarray, point2: np.ndarray) -> float:
+    return sqrt((point1[0] - point2[0]) ** 2 + (point1[1] - point2[1]) ** 2 + (point1[2] - point2[2]) ** 2)
 
 
-def spline_interp(position1: Vector3, tangent1: Vector3, position2: Vector3, tangent2: Vector3, t: float) -> Vector3:
-    result = Vector3()
+def spline_interp(position1: np.ndarray, tangent1: np.ndarray,
+                  position2: np.ndarray, tangent2: np.ndarray, t: float) -> np.ndarray:
 
     # timing params
     t2 = t * t
@@ -142,11 +130,10 @@ def spline_interp(position1: Vector3, tangent1: Vector3, position2: Vector3, tan
     T1 = t3 - t2                    # partial of position wrt tangent2
 
     # this computes position
-    result.x = P0 * position1.x + T0 * tangent1.x + P1 * position2.x + T1 * tangent2.x
-    result.y = P0 * position1.y + T0 * tangent1.y + P1 * position2.y + T1 * tangent2.y
-    result.z = P0 * position1.z + T0 * tangent1.z + P1 * position2.z + T1 * tangent2.z
+    result = P0 * position1 + T0 * tangent1 + P1 * position2 + T1 * tangent2
+    # for some reason this becomes a tuple? dont know why
 
-    return result
+    return result[0]
 
 if __name__ == '__main__':
     main()
