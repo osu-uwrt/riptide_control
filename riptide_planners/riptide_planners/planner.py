@@ -6,28 +6,25 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 def main():
-    pose1 = Vector3()
-    pose1.x = 0.0
-    pose1.y = 0.0
-    pose1.z = 0.0
 
-    pose2 = Vector3()
-    pose2.x = 1.0
-    pose2.y = 0.0
-    pose2.z = 0.0
+    waypts = [
+        Vector3(x=0.0, y=0.0, z=0.0),
+        Vector3(x=1.0, y=0.0, z=1.0),
+        Vector3(x=1.0, y=1.0, z=2.0),
+        Vector3(x=1.0, y=1.0, z=3.0),
+        Vector3(x=1.0, y=4.0, z=3.0)
+    ]
 
-    pose3 = Vector3()
-    pose3.x = 1.0
-    pose3.y = 0.0
-    pose3.z = 1.0
-
-    spline = spline_path([pose1, pose2, pose3], 500)
+    spline = spline_path(waypts, 500)
 
     splinePts = []
     for point in spline:
         splinePts.append([point.x, point.y, point.z])
 
     splineArr = np.array(splinePts)
+
+    print(np.min(splineArr[:, 0]))
+    print(np.argmin(splineArr[:, 0]))
 
     print(splinePts[0])
     print(splinePts[24])
@@ -51,18 +48,8 @@ def main():
 def spline_path(points: list, samples: int) -> Vector3:
     samplePts = []
 
-    # check for colinearity on each possible group of 3 pts
-    # iterate from 1 to n-1 for possible colinear midpts
-    for i in range(1, len(points)-1):
-        # if colinear remove this point and continue
-        pass
-
-    # if path has 2 pts left handle as lerp
-    if len(points) < 3:
-        # setup lerp
-        # run lerp
-
-        pass
+    # dont have to check for colinearity at all
+    # the spline will lerp on its own if needed
 
     # accumulate radial linear dist of path
     distances = []
@@ -116,9 +103,11 @@ def spline_path(points: list, samples: int) -> Vector3:
 
         # assign tangent at pk according to A * dk / dk+1 + p * dk+1 / dk 
         tangentK = a * dk / dk1 + p * dk1 / dk
+        tangentK = tangentK / np.linalg.norm(tangentK)
 
-        # keep track of the tangent
+        # save the tangent to the list of tangents
         tangents.insert(-1, Vector3(x=tangentK[0], y=tangentK[1], z=tangentK[2]))
+    
         
     # re-iterate to generate curve from 1 to n-1
     for i in range(1, len(points)):
