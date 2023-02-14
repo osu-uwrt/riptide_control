@@ -42,8 +42,7 @@ def spline_path_sampled(points: list, numSamples: int) -> list:
         distances.append(radial_dist(points[i-1], points[i]))
     totalDistance = np.sum(distances)
 
-    print("one")
-
+    # run the path generator
     return spline_path_gen(points, numSamples, distances, totalDistance)
 
 # spline path but given the max sampling ratio in samples / m travelled
@@ -55,8 +54,10 @@ def spline_path_spaced(points: list, samples_per_m: int) -> list:
         distances.append(radial_dist(points[i-1], points[i]))
     totalDistance = np.sum(distances)
 
+    # figure out the number of samples needed for this spacing
     numSamples = int(totalDistance * samples_per_m)
 
+    # run the path gen
     return spline_path_gen(points, numSamples, distances, totalDistance)
     
 
@@ -131,11 +132,12 @@ def spline_path_gen(points: list, numSamples: int, distances: list, totalDistanc
     return sampledPts
 
 
-
+# helper function for getting radial distance (l2 norm) between 2 vectors
 def radial_dist(point1: np.ndarray, point2: np.ndarray) -> float:
-    return sqrt((point1[0] - point2[0]) ** 2 + (point1[1] - point2[1]) ** 2 + (point1[2] - point2[2]) ** 2)
+    return np.linalg.norm(point1 - point2)
 
-
+# cubic hermite interpolation function. Can extend to any dimensional order
+# tested with 2d and 3d cases first but should extend to higher dimensionality
 def spline_interp(position1: np.ndarray, tangent1: np.ndarray,
                   position2: np.ndarray, tangent2: np.ndarray, t: float) -> np.ndarray:
 
@@ -150,7 +152,6 @@ def spline_interp(position1: np.ndarray, tangent1: np.ndarray,
 
     # this computes position
     result = P0 * position1 + T0 * tangent1 + P1 * position2 + T1 * tangent2
-    # for some reason this becomes a tuple? dont know why
 
     return result
 
