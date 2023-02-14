@@ -15,7 +15,7 @@ def main():
         np.array([-1.0, 2.0, 1.0])
     ]
 
-    spline = spline_path(waypts, 1000)
+    spline = spline_path(waypts, 50)
     splineArr = np.array(spline)
 
     # Creating an empty figure
@@ -24,7 +24,8 @@ def main():
     ax = plt.axes(projection="3d")
 
 
-    ax.scatter(splineArr[:, 0], splineArr[:, 1], splineArr[:, 2], 'red')
+    # ax.scatter(splineArr[:, 0], splineArr[:, 1], splineArr[:, 2])
+    ax.plot3D(splineArr[:, 0], splineArr[:, 1], splineArr[:, 2], 'red')
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.set_zlabel("z")
