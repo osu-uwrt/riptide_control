@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 
 def main():
 
+    # list of waypoints for the generator to make
     waypts = [
         np.array([0.0, 0.0, 0.0]),
         np.array([1.0, 0.0, 1.0]),
@@ -19,12 +20,12 @@ def main():
     spline = spline_path_spaced(waypts, 5)
     splineArr = np.array(spline)
 
-    # Creating an empty figure
-    # or plot
+    # Creating an empty figure and setup the 3d plot axes
     fig = plt.figure()
     ax = plt.axes(projection="3d")
 
-
+    # plot the resulting curve in either a line or a scatter 
+    # (depends on what info you want)
     ax.scatter(splineArr[:, 0], splineArr[:, 1], splineArr[:, 2])
     # ax.plot3D(splineArr[:, 0], splineArr[:, 1], splineArr[:, 2], 'red')
     ax.set_xlabel("x")
