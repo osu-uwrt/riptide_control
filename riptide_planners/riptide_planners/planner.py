@@ -1,51 +1,37 @@
 #!/bin/python3
 
-from geometry_msgs.msg import Pose, Quaternion
-from transforms3d.euler import euler2quat
+from geometry_msgs.msg import Vector3
+from math import sqrt
 import numpy as np
 import matplotlib.pyplot as plt
 
 def main():
-    pose1 = Pose()
-    pose1.position.x = 0.0
-    pose1.position.y = 0.0
-    pose1.position.z = 0.0
-    orient1 = euler2quat(0, 0, 0)
-    pose1.orientation.w = orient1[0]
-    pose1.orientation.x = orient1[1]
-    pose1.orientation.y = orient1[2]
-    pose1.orientation.z = orient1[3]
-    
+    pose1 = Vector3()
+    pose1.x = 0.0
+    pose1.y = 0.0
+    pose1.z = 0.0
 
-    pose2 = Pose()
-    pose2.position.x = 1.0
-    pose2.position.y = 0.0
-    pose2.position.z = 1.0
-    orient2 = euler2quat(3.14, 0, 0)
-    pose2.orientation.w = orient2[0]
-    pose2.orientation.x = orient2[1]
-    pose2.orientation.y = orient2[2]
-    pose2.orientation.z = orient2[3]
+    pose2 = Vector3()
+    pose2.x = 1.0
+    pose2.y = 0.0
+    pose2.z = 0.0
 
-    
+    pose3 = Vector3()
+    pose3.x = 1.0
+    pose3.y = 0.0
+    pose3.z = 1.0
+
+    spline = spline_path([pose1, pose2, pose3], 500)
 
     splinePts = []
-
-    for t in np.linspace(0.0, 1.0, 50):
-        splPose = spline_interp(pose1, pose2, t)
-        splinePts.append([
-            splPose.position.x, splPose.position.y, splPose.position.z, 
-            splPose.orientation.x, splPose.orientation.y, 
-            splPose.orientation.z, splPose.orientation.w
-        ])
+    for point in spline:
+        splinePts.append([point.x, point.y, point.z])
 
     splineArr = np.array(splinePts)
 
-    print(pose1)
-
+    print(splinePts[0])
     print(splinePts[24])
-
-    print(pose2)
+    print(splinePts[-1])
 
     # Creating an empty figure
     # or plot
@@ -62,9 +48,100 @@ def main():
     plt.show()
     
 
+def spline_path(points: list, samples: int) -> Vector3:
+    samplePts = []
 
-def spline_interp(pose1: Pose, pose2: Pose, t: float) -> Pose:
-    result = Pose()
+    # check for colinearity on each possible group of 3 pts
+    # iterate from 1 to n-1 for possible colinear midpts
+    for i in range(1, len(points)-1):
+        # if colinear remove this point and continue
+        pass
+
+    # if path has 2 pts left handle as lerp
+    if len(points) < 3:
+        # setup lerp
+        # run lerp
+
+        pass
+
+    # accumulate radial linear dist of path
+    distances = []
+    for i in range(len(points)):
+        distances.append(radial_dist(points[i-1], points[i]))
+    totalDistance = np.sum(distances)
+
+    tangents = []
+
+    # assign the pt 0 tangent to be the vector between pt 0 and pt 1
+    tangentVect = np.array([
+        points[1].x - points[0].x,
+        points[1].y - points[0].y,
+        points[1].z - points[0].z
+    ])
+    tangentVect = tangentVect / np.linalg.norm(tangentVect)
+    tangents.append(Vector3(x=tangentVect[0], y=tangentVect[1], z=tangentVect[2]))
+
+    # assign the pt n tangent to be the vector between pt n-1 and pt n
+    tangentVect = np.array([
+        points[len(points)-1].x - points[len(points)-2].x,
+        points[len(points)-1].y - points[len(points)-2].y,
+        points[len(points)-1].z - points[len(points)-2].z
+    ])
+    tangentVect = tangentVect / np.linalg.norm(tangentVect)
+    tangents.append(Vector3(x=tangentVect[0], y=tangentVect[1], z=tangentVect[2]))
+
+    
+    # iterate from 1 to n-1
+    for i in range(1, len(points)-1):
+        # calculate vector P from pt k-1 to pt k
+        p = np.array([
+            points[i].x - points[i-1].x,
+            points[i].y - points[i-1].y,
+            points[i].z - points[i-1].z
+        ])
+        p = p / np.linalg.norm(p)
+
+        # calculate vector A from pt k to pt k+1
+        a = np.array([
+            points[i+1].x - points[i].x,
+            points[i+1].y - points[i].y,
+            points[i+1].z - points[i].z
+        ])
+        a = a / np.linalg.norm(a)
+
+        # calculate raidal distance dk from pt k-1 to pt k
+        dk = distances[i]
+        # calculate radial distance dk+1 from pt k to pt k+1
+        dk1 = distances[i+1]
+
+        # assign tangent at pk according to A * dk / dk+1 + p * dk+1 / dk 
+        tangentK = a * dk / dk1 + p * dk1 / dk
+
+        # keep track of the tangent
+        tangents.insert(-1, Vector3(x=tangentK[0], y=tangentK[1], z=tangentK[2]))
+        
+    # re-iterate to generate curve from 1 to n-1
+    for i in range(1, len(points)):
+        # calculate num samples for this portion based on pct of total distance between pts
+        numSamples = int(distances[i] / totalDistance * samples)
+
+        # generate the sample indicies
+        locSamples = np.linspace(0.0, 1.0, numSamples)
+
+        # sample the spline and save
+        for sample in locSamples:
+            samplePts.append(spline_interp(points[i-1], tangents[i-1], points[i], tangents[i], sample))
+    
+    return samplePts
+
+
+
+def radial_dist(point1: Vector3, point2: Vector3) -> float:
+    return sqrt((point1.x - point2.x) ** 2 + (point1.y - point2.y) ** 2 + (point1.z - point2.z) ** 2)
+
+
+def spline_interp(position1: Vector3, tangent1: Vector3, position2: Vector3, tangent2: Vector3, t: float) -> Vector3:
+    result = Vector3()
 
     # timing params
     t2 = t * t
@@ -76,15 +153,9 @@ def spline_interp(pose1: Pose, pose2: Pose, t: float) -> Pose:
     T1 = t3 - t2                    # partial of position wrt tangent2
 
     # this computes position
-    result.position.x = P0 * pose1.position.x + T0 * pose1.orientation.x + P1 * pose2.position.x + T1 * pose2.orientation.x
-    result.position.y = P0 * pose1.position.y + T0 * pose1.orientation.y + P1 * pose2.position.y + T1 * pose2.orientation.y
-    result.position.z = P0 * pose1.position.z + T0 * pose1.orientation.z + P1 * pose2.position.z + T1 * pose2.orientation.z
-
-    # this computes orientation in axis angle
-    result.orientation.x = T0 * pose1.orientation.x + T1 * pose2.orientation.x
-    result.orientation.y = T0 * pose1.orientation.y + T1 * pose2.orientation.y
-    result.orientation.z = T0 * pose1.orientation.z + T1 * pose2.orientation.z
-    result.orientation.w = T0 * pose1.orientation.w + T1 * pose2.orientation.w
+    result.x = P0 * position1.x + T0 * tangent1.x + P1 * position2.x + T1 * tangent2.x
+    result.y = P0 * position1.y + T0 * tangent1.y + P1 * position2.y + T1 * tangent2.y
+    result.z = P0 * position1.z + T0 * tangent1.z + P1 * position2.z + T1 * tangent2.z
 
     return result
 
