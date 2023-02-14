@@ -15,9 +15,7 @@ def main():
     ]
 
     spline = spline_path(waypts, 50)
-    print(spline)
     splineArr = np.array(spline)
-    print(splineArr.shape)
 
     # Creating an empty figure
     # or plot
@@ -34,13 +32,13 @@ def main():
     plt.show()
     
 
-def spline_path(points: list, samples: int) -> list:
+def spline_path(points: list, numSamples: int) -> list:
     # dont have to check for colinearity at all
     # the spline will lerp on its own if needed
 
     # accumulate radial linear dist of path
     distances = []
-    for i in range(len(points)):
+    for i in range(1, len(points)):
         distances.append(radial_dist(points[i-1], points[i]))
     totalDistance = np.sum(distances)
 
@@ -84,9 +82,9 @@ def spline_path(points: list, samples: int) -> list:
         a = a / np.linalg.norm(a)
 
         # calculate raidal distance dk from pt k-1 to pt k
-        dk = distances[i]
+        dk = distances[i-1]
         # calculate radial distance dk+1 from pt k to pt k+1
-        dk1 = distances[i+1]
+        dk1 = distances[i]
 
         # assign tangent at pk according to A * dk / dk+1 + p * dk+1 / dk 
         tangentK = a * dk / dk1 + p * dk1 / dk
@@ -95,21 +93,21 @@ def spline_path(points: list, samples: int) -> list:
         # save the tangent to the list of tangents
         tangents.insert(-1, np.array([tangentK[0], tangentK[1], tangentK[2]]))
 
-    samplePts = []
+    sampledPts = []
         
     # re-iterate to generate curve from 1 to n-1
     for i in range(1, len(points)):
         # calculate num samples for this portion based on pct of total distance between pts
-        numSamples = int(distances[i] / totalDistance * samples)
+        locSamples = round(distances[i-1] / totalDistance * numSamples)
 
         # generate the sample indicies
-        locSamples = np.linspace(0.0, 1.0, numSamples)
+        locSamplePts = np.linspace(0.0, 1.0, locSamples)
 
         # sample the spline and save
-        for sample in locSamples:
-            samplePts.append(spline_interp(points[i-1], tangents[i-1], points[i], tangents[i], sample))
+        for samplePt in locSamplePts:
+            sampledPts.append(spline_interp(points[i-1], tangents[i-1], points[i], tangents[i], samplePt))
     
-    return samplePts
+    return sampledPts
 
 
 
@@ -133,7 +131,7 @@ def spline_interp(position1: np.ndarray, tangent1: np.ndarray,
     result = P0 * position1 + T0 * tangent1 + P1 * position2 + T1 * tangent2
     # for some reason this becomes a tuple? dont know why
 
-    return result[0]
+    return result
 
 if __name__ == '__main__':
     main()
