@@ -15,7 +15,8 @@ def main():
         np.array([-1.0, 2.0, 1.0])
     ]
 
-    spline = spline_path(waypts, 50)
+    # spline = spline_path_sampled(waypts, 50)
+    spline = spline_path_spaced(waypts, 5)
     splineArr = np.array(spline)
 
     # Creating an empty figure
@@ -24,26 +25,44 @@ def main():
     ax = plt.axes(projection="3d")
 
 
-    # ax.scatter(splineArr[:, 0], splineArr[:, 1], splineArr[:, 2])
-    ax.plot3D(splineArr[:, 0], splineArr[:, 1], splineArr[:, 2], 'red')
+    ax.scatter(splineArr[:, 0], splineArr[:, 1], splineArr[:, 2])
+    # ax.plot3D(splineArr[:, 0], splineArr[:, 1], splineArr[:, 2], 'red')
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.set_zlabel("z")
  
     # Showing the above plot
     plt.show()
-    
 
-def spline_path(points: list, numSamples: int) -> list:
-    # dont have to check for colinearity at all
-    # the spline will lerp on its own if needed
-
+# spline path but given the number of samples to make along the curve
+def spline_path_sampled(points: list, numSamples: int) -> list:
     # accumulate radial linear dist of path
     distances = []
     for i in range(1, len(points)):
         distances.append(radial_dist(points[i-1], points[i]))
     totalDistance = np.sum(distances)
 
+    print("one")
+
+    return spline_path_gen(points, numSamples, distances, totalDistance)
+
+# spline path but given the max sampling ratio in samples / m travelled
+# samples may be closer together than max sampling ratio
+def spline_path_spaced(points: list, samples_per_m: int) -> list:
+    # accumulate radial linear dist of path
+    distances = []
+    for i in range(1, len(points)):
+        distances.append(radial_dist(points[i-1], points[i]))
+    totalDistance = np.sum(distances)
+
+    numSamples = int(totalDistance * samples_per_m)
+
+    return spline_path_gen(points, numSamples, distances, totalDistance)
+    
+
+def spline_path_gen(points: list, numSamples: int, distances: list, totalDistance: float) -> list:
+    # dont have to check for colinearity at all
+    # the spline will lerp on its own if needed
     tangents = []
 
     # assign the pt 0 tangent to be the vector between pt 0 and pt 1
