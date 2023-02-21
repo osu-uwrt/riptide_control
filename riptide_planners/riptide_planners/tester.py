@@ -42,6 +42,10 @@ class PlannerNode(Node):
                     PoseStamped(
                         header = Header(frame_id=""),
                         pose=Pose(position=Point(x = 0.0))
+                    ),
+                    PoseStamped(
+                        header = Header(frame_id=""),
+                        pose=Pose(position=Point(y = 1.0))
                     )
             ]
 
@@ -84,6 +88,9 @@ class PlannerNode(Node):
                 ax.set_xlabel("x")
                 ax.set_ylabel("y")
                 ax.set_zlabel("z")
+
+                # set the aspect ratio -- has to be after data plotting to work properly
+                ax.set_aspect('equal')
             
                 # Showing the above plot
                 plt.show()
