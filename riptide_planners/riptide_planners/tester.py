@@ -2,9 +2,11 @@
 
 import matplotlib.pyplot as plt
 import numpy as np
+import transforms3d.euler
 
 import rclpy
 from rclpy.node import Node
+from rclpy.time import Time, Duration
 from riptide_msgs2.srv import PlanPath
 from geometry_msgs.msg import PoseStamped, Pose, Point
 from std_msgs.msg import Header
@@ -58,7 +60,7 @@ class PlannerNode(Node):
             recived = False
             while not recived:
                 rclpy.spin_once(self, timeout_sec=0.5)
-                print("checking")
+                # print("checking")
                 recived = future.done()
 
                 if not rclpy.ok():
@@ -79,18 +81,46 @@ class PlannerNode(Node):
 
                 # Creating an empty figure and setup the 3d plot axes
                 fig = plt.figure()
-                ax = plt.axes(projection="3d")
+                ax = fig.add_subplot(1, 2, 1, projection="3d")
 
                 # plot the resulting curve in either a line or a scatter 
                 # (depends on what info you want)
                 ax.scatter(splineArr[:, 0], splineArr[:, 1], splineArr[:, 2])
-                # ax.plot3D(splineArr[:, 0], splineArr[:, 1], splineArr[:, 2], 'red')
-                ax.set_xlabel("x")
-                ax.set_ylabel("y")
-                ax.set_zlabel("z")
+
+                ax.set_xlabel("x (m)")
+                ax.set_ylabel("y (m)")
+                ax.set_zlabel("z (m)")
 
                 # set the aspect ratio -- has to be after data plotting to work properly
                 ax.set_aspect('equal')
+
+                ax.set_title("Planned Path")
+
+                print(result.traj_points[0].header, result.traj_points[-1].header)
+
+                # get the timing info for the rest
+                start_stamp = Time.from_msg(result.traj_points[0].header.stamp)
+                times = [(Time.from_msg(point.header.stamp) - start_stamp).nanoseconds * 1.0e-9 for point in result.traj_points]
+
+                # now do the orientation
+                orientRaw = [transforms3d.euler.quat2euler((
+                        point.pose.orientation.w, point.pose.orientation.x, 
+                        point.pose.orientation.y, point.pose.orientation.z, 
+                    )) for point in result.traj_points ]
+
+                orients = np.array(orientRaw)
+
+                ax = fig.add_subplot(1, 2, 2)
+
+                ax.grid()
+
+                ax.scatter(times, orients[:, 0])
+                ax.scatter(times, orients[:, 1])
+                ax.scatter(times, orients[:, 2])
+
+                ax.legend(["roll", "pitch", "yaw"])
+                ax.set_xlabel("time (s)")
+                ax.set_ylabel("rotation (radians)")
             
                 # Showing the above plot
                 plt.show()

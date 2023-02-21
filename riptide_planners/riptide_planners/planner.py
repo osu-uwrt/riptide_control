@@ -6,9 +6,11 @@ import matplotlib.pyplot as plt
 # now rclpy and messages
 import rclpy
 from rclpy.node import Node
+from rclpy.time import Duration
 from riptide_msgs2.srv import PlanPath
 from riptide_msgs2.msg import TrajPoint
-from geometry_msgs.msg import PoseStamped, Pose, Quaternion, Point 
+from geometry_msgs.msg import Pose, Quaternion, Point 
+from std_msgs.msg import Header
 from tf2_geometry_msgs import do_transform_pose_stamped
 
 # also need TF to support common frame
@@ -91,10 +93,13 @@ class PlannerNode(Node):
 
         self.get_logger().info("path planned, timing trajectory")
 
+        now = self.get_clock().now()
+
         # convert back to stamped pose
         fullPath = [
             TrajPoint(pose=Pose(position=Point(x=position_path[i][0], y=position_path[i][1], z=position_path[i][2]), 
-            orientation=Quaternion(w=orient_path[i][0], x=orient_path[i][1], y=orient_path[i][2], z=orient_path[i][3])))
+            orientation=Quaternion(w=orient_path[i][0], x=orient_path[i][1], y=orient_path[i][2], z=orient_path[i][3])),
+            header=Header(stamp=(now + Duration(nanoseconds=0.01 * i*1e9)).to_msg()))
             for i in range(len(position_path))]
 
         self.get_logger().info("Trajectrory complete")
