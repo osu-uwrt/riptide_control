@@ -1,39 +1,112 @@
 #!/bin/python3
 
-from math import sqrt
 import numpy as np
 import matplotlib.pyplot as plt
 
+# now rclpy and messages
+import rclpy
+from rclpy.node import Node
+from riptide_msgs2.srv import PlanPath
+from riptide_msgs2.msg import TrajPoint
+from geometry_msgs.msg import PoseStamped, Pose, Quaternion, Point 
+from tf2_geometry_msgs import do_transform_pose_stamped
+
+# also need TF to support common frame
+from tf2_ros import TransformException, TransformStamped
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
+
 def main():
+    rclpy.init()
 
-    # list of waypoints for the generator to make
-    waypts = [
-        np.array([0.0, 0.0, 0.0]),
-        np.array([1.0, 0.0, 1.0]),
-        np.array([1.0, 1.0, 2.0]),
-        np.array([1.0, 1.0, 3.0]),
-        np.array([1.0, 4.0, 3.0]),
-        np.array([-1.0, 2.0, 1.0])
-    ]
+    node = PlannerNode()
 
-    # spline = spline_path_sampled(waypts, 50)
-    spline = spline_path_spaced(waypts, 5)
-    splineArr = np.array(spline)
+    rclpy.spin(node)
 
-    # Creating an empty figure and setup the 3d plot axes
-    fig = plt.figure()
-    ax = plt.axes(projection="3d")
+    rclpy.shutdown()
 
-    # plot the resulting curve in either a line or a scatter 
-    # (depends on what info you want)
-    ax.scatter(splineArr[:, 0], splineArr[:, 1], splineArr[:, 2])
-    # ax.plot3D(splineArr[:, 0], splineArr[:, 1], splineArr[:, 2], 'red')
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
-    ax.set_zlabel("z")
- 
-    # Showing the above plot
-    plt.show()
+
+
+class PlannerNode(Node):
+    def __init__(self):
+        super().__init__('riptide_planner')
+
+        # create the TF listener
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        # create the service server
+        self.service = self.create_service(PlanPath, "plan_path", self.handleRequest)
+
+        # parameters
+        self.common_frame = ""
+        self.interp_density = 5
+
+        self.get_logger().info("Started riptide_planner")
+
+    def handleRequest(self, request: PlanPath.Request, response: PlanPath.Response):
+        points = []
+        orients = []
+
+        # handle empty request
+        if len(request.path_points) < 2:
+            response.error_code = PlanPath.Response.BAD_WYPTS
+            response.error_msg = "Waypoints list is empty"
+
+            self.get_logger().error("Recieved request with too few waypoints")
+
+            return response
+
+        self.get_logger().info("Processing path plan")
+
+        # run the tf lookup back to a common frame
+        for point in request.path_points:
+            # Look up for the transformation between target_frame and turtle2 frames
+            # and send velocity commands for turtle2 to reach target_frame
+            tf = TransformStamped()
+            try:
+                tf = self.tf_buffer.lookup_transform(
+                    self.common_frame,
+                    point.header.frame_id,
+                    self.get_clock().now())
+            except TransformException as ex:
+                self.get_logger().error(
+                    f'Could not transform {self.common_frame} to {point.header.frame_id}: {ex}')
+
+                response.error_code = PlanPath.Response.MISSING_FRAME_ID
+                response.error_msg = f'Could not transform "{self.common_frame}" to "{point.header.frame_id}": {ex}'
+                return response
+
+            tfPoint = do_transform_pose_stamped(point, tf)
+
+            # put it on the list
+            points.append(np.array([tfPoint.pose.position.x, tfPoint.pose.position.y, tfPoint.pose.position.z]))
+            orients.append(np.array([tfPoint.pose.orientation.w, tfPoint.pose.orientation.x, tfPoint.pose.orientation.y, tfPoint.pose.orientation.z]))
+
+        # now interp the path
+        position_path = spline_path_spaced(points, self.interp_density)
+
+        # interp the orientation TODO
+        orient_path = np.zeros((len(position_path), 4))
+
+        self.get_logger().info("path planned, timing trajectory")
+
+        # convert back to stamped pose
+        fullPath = [
+            TrajPoint(pose=Pose(position=Point(x=position_path[i][0], y=position_path[i][1], z=position_path[i][2]), 
+            orientation=Quaternion(w=orient_path[i][0], x=orient_path[i][1], y=orient_path[i][2], z=orient_path[i][3])))
+            for i in range(len(position_path))]
+
+        self.get_logger().info("Trajectrory complete")
+
+        # time the trajectory
+        response.traj_points = fullPath
+        response.error_code = PlanPath.Response.NO_ERROR
+        response.error_msg = ""
+
+        # send the result
+        return response
+            
 
 # spline path but given the number of samples to make along the curve
 def spline_path_sampled(points: list, numSamples: int) -> list:

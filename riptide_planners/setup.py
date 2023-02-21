@@ -20,7 +20,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'planner = riptide_planners.planner:main'
+            'planner = riptide_planners.planner:main',
+            'tester = riptide_planners.tester:main'
         ],
     },
 )
