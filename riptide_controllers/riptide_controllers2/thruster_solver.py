@@ -17,14 +17,14 @@ import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
 from rclpy.time import Time
-from rclpy.qos import qos_profile_system_default, qos_profile_sensor_data# can replace this with others
+from rclpy.qos import qos_profile_system_default, qos_profile_sensor_data # can replace this with others
 
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 
 from geometry_msgs.msg import Twist
-from riptide_msgs2.msg import PwmStamped, FirmwareState
+from riptide_msgs2.msg import PwmStamped, FirmwareState, DshotCommand
 from std_msgs.msg import Float32MultiArray
 
 import numpy as np
@@ -47,7 +47,7 @@ class ThrusterSolverNode(Node):
         self.create_subscription(Twist, "controller/body_force", self.force_cb, qos_profile_system_default)
 
         self.thruster_pub = self.create_publisher(Float32MultiArray, "thruster_forces", qos_profile_system_default)
-        self.pwm_pub = self.create_publisher(PwmStamped ,"command/pwm", qos_profile_system_default)
+        self.dshot_pub = self.create_publisher(DshotCommand ,"command/dshot", qos_profile_system_default)
         self.enabledSub = self.create_subscription(FirmwareState, "state/firmware", self.firmware_cb, qos_profile_sensor_data)
 
         self.declare_parameter("robot", "")
@@ -105,53 +105,20 @@ class ThrusterSolverNode(Node):
         
     def firmware_cb(self, msg: FirmwareState):
         self.enabled = msg.kill_switches_asserting_kill == 0 and msg.kill_switches_timed_out == 0
-
-    def publish_pwm(self, forces):
-        pwm_values = []
-
-        for i in range(self.thruster_coeffs.shape[0]):
-            pwm = NEUTRAL_PWM
-               
-            # robot is killed or no force is needed
-            if(not self.enabled or abs(forces[i]) < self.pwm_file["MIN_THRUST"]):
-                pwm = NEUTRAL_PWM
-
-            elif (forces[i] > 0 and forces[i] <= self.pwm_file["STARTUP_THRUST"]):
-                if self.thruster_types[i] == 0:
-                    pwm = (int)(self.pwm_file["SU_THRUST"]["POS_SLOPE"] * forces[i] + self.pwm_file["SU_THRUST"]["POS_YINT"])
-                else:
-                    pwm = (int)(-self.pwm_file["SU_THRUST"]["POS_SLOPE"] * forces[i] + self.pwm_file["SU_THRUST"]["NEG_YINT"])
-
-            elif (forces[i] > 0 and forces[i] > self.pwm_file["STARTUP_THRUST"]):
-                if self.thruster_types[i] == 0:
-                    pwm = (int)(self.pwm_file["THRUST"]["POS_SLOPE"] * forces[i] + self.pwm_file["THRUST"]["POS_YINT"])
-                else:
-                    pwm = (int)(-self.pwm_file["THRUST"]["POS_SLOPE"] * forces[i] + self.pwm_file["THRUST"]["NEG_YINT"])
-
-            elif (forces[i] < 0 and forces[i] >= -self.pwm_file["STARTUP_THRUST"]):
-                if self.thruster_types[i] == 0:
-                    pwm = (int)(self.pwm_file["SU_THRUST"]["NEG_SLOPE"] * forces[i] + self.pwm_file["SU_THRUST"]["NEG_YINT"])
-                else:
-                    pwm = (int)(-self.pwm_file["SU_THRUST"]["NEG_SLOPE"] * forces[i] + self.pwm_file["SU_THRUST"]["POS_YINT"])
-
-            elif (forces[i] < 0 and forces[i] < -self.pwm_file["STARTUP_THRUST"]):
-                if self.thruster_types[i] == 0:
-                    pwm = (int)(self.pwm_file["THRUST"]["NEG_SLOPE"] * forces[i] + self.pwm_file["THRUST"]["NEG_YINT"])
-                else:
-                    pwm = (int)(-self.pwm_file["THRUST"]["NEG_SLOPE"] * forces[i] + self.pwm_file["THRUST"]["POS_YINT"])
-
-            else:
-                pwm = NEUTRAL_PWM
-
-            pwm_values.append(pwm)
-
-        # Make the PWM message
-        msg = PwmStamped()
-
-        msg.pwm = pwm_values
-        msg.header.stamp = self.get_clock().now().to_msg()
-
-        self.pwm_pub.publish(msg)
+    
+    def force_to_dshot(self, force):
+        #TODO: IMPLEMENT WHEN THRUSTER ARE FIGURED OUT
+        
+        return 0
+    
+    def publish_dshot(self, forces):
+        if len(forces) != 8:
+            self.get_logger().error(f"publish_dshot() requires an array with 8 forces, but instead got an array with {len(forces)}")
+            return
+        
+        dshotcmd = DshotCommand()
+        dshotcmd.values = [self.force_to_dshot(force) for force in forces]
+        self.dshot_pub.publish(dshotcmd)
 
 
     # Timer callback which disables thrusters that are out of the water
@@ -226,8 +193,7 @@ class ThrusterSolverNode(Node):
         msg = Float32MultiArray()
         msg.data = data      
 
-        self.publish_pwm(res.x)
-
+        self.publish_dshot(res.x)
         self.thruster_pub.publish(msg)
 
 def main(args=None):
