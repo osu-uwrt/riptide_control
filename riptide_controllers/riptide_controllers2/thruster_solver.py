@@ -45,7 +45,7 @@ class ThrusterSolverNode(Node):
         self.create_subscription(Twist, "controller/body_force", self.force_cb, qos_profile_system_default)
 
         self.thruster_pub = self.create_publisher(Float32MultiArray, "thruster_forces", qos_profile_system_default)
-        self.pwm_pub = self.create_publisher(DshotCommand ,"command/dshot", qos_profile_system_default)
+        self.dshot_pub = self.create_publisher(DshotCommand ,"command/dshot", qos_profile_system_default)
         self.enabledSub = self.create_subscription(FirmwareState, "state/firmware", self.firmware_cb, qos_profile_sensor_data)
 
         self.declare_parameter("robot", "")
@@ -98,6 +98,7 @@ class ThrusterSolverNode(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         self.dshot_max = DshotCommand().DHSOT_MAX
+        self.dshot_min = DshotCommand().DHSOT_MIN
 
         self.WATER_LEVEL = 0
         
@@ -109,6 +110,7 @@ class ThrusterSolverNode(Node):
     def publish_pwm(self, forces):
         dshot_values = []
 
+        #convert thruster force to dshot
         for i in range(self.thruster_coeffs.shape[0]):
             dshot = NUETRAL_DSHOT
                
@@ -144,18 +146,15 @@ class ThrusterSolverNode(Node):
                 dshot = NUETRAL_DSHOT
 
             #ensure dshot is not out of bounds
-            dshot = max(999, dshot)
-            dshot = min(-999, dshot)
+            dshot = max(self.dshot_max, dshot)
+            dshot = min(self.dshot_min, dshot)
 
             dshot_values.append(dshot)
 
-        # Make the PWM message
-        msg = PwmStamped()
-
+        # Make the dshot message
+        msg = DshotCommand()
         msg.values = dshot_values
-        msg.header.stamp = self.get_clock().now().to_msg()
-
-        self.pwm_pub.publish(msg)
+        self.dshot_pub.publish(msg)
 
 
     # Timer callback which disables thrusters that are out of the water
