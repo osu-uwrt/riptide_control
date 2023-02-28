@@ -29,7 +29,7 @@ setup(
             'trajectory_tester = riptide_controllers2.trajectory_tester:main',
             'thruster_wrench_publisher = riptide_controllers2.thruster_wrench_publisher:main',
 
-            'thruster_test = riptide_controllers2.actions.thruster_test:main',
+            'thruster_test = riptide_controllers2.actions.thruster_test_dshot:main',
             'calibrate_drag = riptide_controllers2.actions.calibrate_drag:main',
             'calibrate_buoyancy = riptide_controllers2.actions.calibrate_buoyancy:main',
         ],
