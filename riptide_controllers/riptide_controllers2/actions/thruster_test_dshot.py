@@ -39,7 +39,7 @@ class ThrusterTestActionServer(Node):
             self.num_thrusters = len(self.vehicle_file["thrusters"])
 
         #get dshot max value
-        self.Dshot_max = DshotCommand().DHSOT_MAX
+        self.Dshot_max = DshotCommand().DSHOT_MAX
 
         self.running = False
 

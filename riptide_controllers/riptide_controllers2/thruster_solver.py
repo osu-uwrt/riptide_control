@@ -96,7 +96,7 @@ class ThrusterSolverNode(Node):
         
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
-
+        
         self.dshot_max = DshotCommand.DSHOT_MAX
         self.dshot_min = DshotCommand.DSHOT_MIN
 
@@ -146,8 +146,8 @@ class ThrusterSolverNode(Node):
                 dshot = NUETRAL_DSHOT
 
             #ensure dshot is not out of bounds
-            dshot = max(self.dshot_max, dshot)
-            dshot = min(self.dshot_min, dshot)
+            dshot = min(self.dshot_max, dshot)
+            dshot = max(self.dshot_min, dshot)
 
             dshot_values.append(dshot)
 
