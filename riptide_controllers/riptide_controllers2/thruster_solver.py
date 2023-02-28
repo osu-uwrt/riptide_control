@@ -96,9 +96,9 @@ class ThrusterSolverNode(Node):
         
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
-
-        self.dshot_max = DshotCommand().DSHOT_MAX
-        self.dshot_min = DshotCommand().DSHOT_MIN
+        
+        self.dshot_max = DshotCommand.DSHOT_MAX
+        self.dshot_min = DshotCommand.DSHOT_MIN
 
         self.WATER_LEVEL = 0
         

@@ -1,9 +1,12 @@
+import os
+
 import launch
 import launch.actions
-from ament_index_python.packages import get_package_share_directory
 import launch_ros.actions
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-import os
+from ament_index_python.packages import get_package_share_directory
+from launch.substitutions import LaunchConfiguration as LC
+from launch.substitutions import PathJoinSubstitution
+
 
 def generate_launch_description():
     # Read in the vehicle's namespace through the command line or use the default value one is not provided
@@ -12,7 +15,7 @@ def generate_launch_description():
     config = PathJoinSubstitution([
         get_package_share_directory('riptide_descriptions2'),
         'config',
-        LaunchConfiguration("robot_yaml")
+        LC("robot_yaml")
     ])
 
     return launch.LaunchDescription([
@@ -24,8 +27,12 @@ def generate_launch_description():
 
         launch.actions.DeclareLaunchArgument(
             "robot_yaml", 
-            default_value=[LaunchConfiguration("robot"), '.yaml'],
+            default_value=[LC("robot"), '.yaml'],
             description="Name of the vehicle",
+        ),
+
+        launch_ros.actions.PushRosNamespace(
+            LC("robot"),
         ),
 
         # create the nodes    
