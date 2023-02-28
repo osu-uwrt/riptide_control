@@ -146,8 +146,8 @@ class ThrusterSolverNode(Node):
                 dshot = NUETRAL_DSHOT
 
             #ensure dshot is not out of bounds
-            dshot = max(self.dshot_max, dshot)
-            dshot = min(self.dshot_min, dshot)
+            dshot = min(self.dshot_max, dshot)
+            dshot = max(self.dshot_min, dshot)
 
             dshot_values.append(dshot)
 
