@@ -1,9 +1,12 @@
 import launch
 import launch.actions
-from ament_index_python.packages import get_package_share_directory
 import launch_ros.actions
+from ament_index_python.packages import get_package_share_directory
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import TextSubstitution, LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration as LC
+from launch.substitutions import PathJoinSubstitution, TextSubstitution
+
 
 def generate_launch_description():
 
@@ -25,6 +28,10 @@ def generate_launch_description():
             description="Name of the vehicle",
         ),
         DeclareLaunchArgument('robot_yaml', default_value=[LaunchConfiguration("robot"), '.yaml']),
+
+        launch_ros.actions.PushRosNamespace(
+            LC("robot")
+        ),
 
         launch_ros.actions.Node(
             package="riptide_controllers2",
