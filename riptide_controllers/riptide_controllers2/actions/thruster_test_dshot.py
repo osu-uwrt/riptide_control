@@ -20,7 +20,7 @@ import time
 THRUSTER_NEUTRAL_FORCE = 0.0
 THRUSTER_TEST_FORCE = 1.3333
 
-DSHOT_NEUTRAL_VALUE = 0.0
+DSHOT_NEUTRAL_VALUE = 0
 DSHOT_TEST_FACTOR = 0.05
 
 class ThrusterTestActionServer(Node):
@@ -39,8 +39,7 @@ class ThrusterTestActionServer(Node):
             self.num_thrusters = len(self.vehicle_file["thrusters"])
 
         #get dshot max value
-        self.Dshot_max = DshotCommand().DSHOT_MAX
-
+        self.Dshot_max = DshotCommand.DSHOT_MAX
         self.running = False
 
         self._action_server = ActionServer(
@@ -104,9 +103,9 @@ class ThrusterTestActionServer(Node):
 
                 thruster_forces[i] = THRUSTER_TEST_FORCE
                 if thruster_type == 0:
-                    Dshot[i] = self.Dshot_max * DSHOT_TEST_FACTOR
+                    Dshot[i] = int(self.Dshot_max * DSHOT_TEST_FACTOR)
                 else:
-                    Dshot[i] = -self.Dshot_max * DSHOT_TEST_FACTOR
+                    Dshot[i] = -int(self.Dshot_max * DSHOT_TEST_FACTOR)
 
                 for _ in range(300):
                     self.publish_dshot(Dshot)
