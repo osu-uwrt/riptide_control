@@ -26,6 +26,7 @@ from tf2_ros.transform_listener import TransformListener
 from geometry_msgs.msg import Twist
 from riptide_msgs2.msg import DshotCommand, FirmwareState
 from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Bool
 
 import numpy as np
 import yaml
@@ -45,8 +46,8 @@ class ThrusterSolverNode(Node):
         self.create_subscription(Twist, "controller/body_force", self.force_cb, qos_profile_system_default)
 
         self.thruster_pub = self.create_publisher(Float32MultiArray, "thruster_forces", qos_profile_system_default)
-        self.dshot_pub = self.create_publisher(DshotCommand ,"command/dshot", qos_profile_system_default)
-        self.enabledSub = self.create_subscription(FirmwareState, "state/firmware", self.firmware_cb, qos_profile_sensor_data)
+        self.dshot_pub = self.create_publisher(DshotCommand ,"command/dshot", qos_profile_sensor_data)
+        self.enabledSub = self.create_subscription(Bool, "state/kill", self.kill_cb, qos_profile_sensor_data)
 
         self.declare_parameter("robot", "")
         self.tf_namespace = self.get_parameter("robot").value
@@ -104,8 +105,9 @@ class ThrusterSolverNode(Node):
         
         self.enabled = False
         
-    def firmware_cb(self, msg: FirmwareState):
-        self.enabled = msg.kill_switches_asserting_kill == 0 and msg.kill_switches_timed_out == 0
+    def kill_cb(self, msg: Bool):
+        self.enabled = not msg.data
+        
 
     def publish_pwm(self, forces):
         dshot_values = []

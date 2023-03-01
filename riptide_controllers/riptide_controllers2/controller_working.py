@@ -92,7 +92,7 @@ class ControllerNode(Node):
         self.subs.append(self.create_subscription(ControllerCommand, "controller/angular", self.setAngular, qos_profile_system_default))
         
         # state information
-        self.subs.append(self.create_subscription(RobotState, "state/robot", self.switch_cb, qos_profile_sensor_data))
+        self.subs.append(self.create_subscription(Bool, "state/kill", self.switch_cb, qos_profile_sensor_data))
 
         # declare the configuration data
         self.declare_parameters(
@@ -276,6 +276,8 @@ class ControllerNode(Node):
 
         isSteady.data = self.linearController.steady and self.angularController.steady
 
+        self.get_logger().debug(f"linear control mode: {self.linearController.controlMode}, angular control mode: {self.angularController.controlMode}")
+
         if(self.linearController.controlMode != ControlMode.DISABLED or self.angularController.controlMode != ControlMode.DISABLED):
             netForce, netTorque = self.accelerationCalculator.accelToNetForce(odomMsg, np.array(linearDesiredState.effort), np.array(angularDesiredState.effort))
             forceTwist.linear = vect3_from_np(netForce)
@@ -296,13 +298,15 @@ class ControllerNode(Node):
         else:
             self.angularController.setTargetPosition(msg.setpoint_vect, ControlMode(msg.mode))
 
-    def switch_cb(self, msg : RobotState):
-        if not msg.kill_switch_inserted and (self.angularController.controlMode != ControlMode.DISABLED or 
+    def switch_cb(self, msg : Bool):
+        if msg.data:
+            if (self.angularController.controlMode != ControlMode.DISABLED or 
                 self.linearController.controlMode != ControlMode.DISABLED):
-            self.get_logger().warning('Controller output disabled from kill switch assert')
+                
+                self.get_logger().warning('Controller output disabled from kill switch assert')
         
-        self.angularController.setTargetPosition(Vector3(), ControlMode.DISABLED)
-        self.linearController.setTargetPosition(Vector3(), ControlMode.DISABLED)
+            self.angularController.setTargetPosition(Vector3(), ControlMode.DISABLED)
+            self.linearController.setTargetPosition(Vector3(), ControlMode.DISABLED)
         
 
 def main(args=None):
