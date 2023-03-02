@@ -1,7 +1,7 @@
 #!/bin/python3
 
 import numpy as np
-import matplotlib.pyplot as plt
+# from transforms3d
 
 # now rclpy and messages
 import rclpy
@@ -90,6 +90,8 @@ class PlannerNode(Node):
 
         # interp the orientation TODO
         orient_path = np.zeros((len(position_path), 4))
+        # for i in range(len(orients)):
+
 
         self.get_logger().info("path planned, timing trajectory")
 
