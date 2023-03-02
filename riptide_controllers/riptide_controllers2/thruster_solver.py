@@ -17,7 +17,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
 from rclpy.time import Time
-from rclpy.qos import qos_profile_system_default, qos_profile_sensor_data# can replace this with others
+from rclpy.qos import qos_profile_system_default, qos_profile_sensor_data # can replace this with others
 
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
@@ -104,12 +104,12 @@ class ThrusterSolverNode(Node):
         self.WATER_LEVEL = 0
         
         self.enabled = False
-        
+
     def kill_cb(self, msg: Bool):
         self.enabled = not msg.data
         
 
-    def publish_pwm(self, forces):
+    def publish_dshot(self, forces):
         dshot_values = []
 
         #convert thruster force to dshot
@@ -231,8 +231,7 @@ class ThrusterSolverNode(Node):
         msg = Float32MultiArray()
         msg.data = data      
 
-        self.publish_pwm(res.x)
-
+        self.publish_dshot(res.x)
         self.thruster_pub.publish(msg)
 
 def main(args=None):
