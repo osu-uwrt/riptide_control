@@ -24,8 +24,9 @@ from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 
 from geometry_msgs.msg import Twist
-from riptide_msgs2.msg import PwmStamped, FirmwareState, DshotCommand
+from riptide_msgs2.msg import DshotCommand, FirmwareState
 from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Bool
 
 import numpy as np
 import yaml
@@ -35,9 +36,7 @@ from scipy.optimize import minimize
 from riptide_controllers2.Controllers import msgToNumpy
 
 
-NEUTRAL_PWM = 1500
-MIN_PWM = 1230
-MAX_PWM = 1770
+NUETRAL_DSHOT = 0
 
 class ThrusterSolverNode(Node):
 
@@ -47,8 +46,8 @@ class ThrusterSolverNode(Node):
         self.create_subscription(Twist, "controller/body_force", self.force_cb, qos_profile_system_default)
 
         self.thruster_pub = self.create_publisher(Float32MultiArray, "thruster_forces", qos_profile_system_default)
-        self.dshot_pub = self.create_publisher(DshotCommand ,"command/dshot", qos_profile_system_default)
-        self.enabledSub = self.create_subscription(FirmwareState, "state/firmware", self.firmware_cb, qos_profile_sensor_data)
+        self.dshot_pub = self.create_publisher(DshotCommand ,"command/dshot", qos_profile_sensor_data)
+        self.enabledSub = self.create_subscription(Bool, "state/kill", self.kill_cb, qos_profile_sensor_data)
 
         self.declare_parameter("robot", "")
         self.tf_namespace = self.get_parameter("robot").value
@@ -68,7 +67,7 @@ class ThrusterSolverNode(Node):
         self.thruster_types = np.zeros(len(thruster_info))
         com = np.array(config_file["com"])
         self.max_force = config_file["thruster"]["max_force"]
-        self.pwm_file = config_file["thruster"]
+        self.dshot_file = config_file["thruster"]
 
         for i, thruster in enumerate(thruster_info):
             pose = np.array(thruster["pose"])
@@ -98,27 +97,66 @@ class ThrusterSolverNode(Node):
         
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        
+        self.dshot_max = DshotCommand.DSHOT_MAX
+        self.dshot_min = DshotCommand.DSHOT_MIN
 
         self.WATER_LEVEL = 0
         
         self.enabled = False
+
+    def kill_cb(self, msg: Bool):
+        self.enabled = not msg.data
         
-    def firmware_cb(self, msg: FirmwareState):
-        self.enabled = msg.kill_switches_asserting_kill == 0 and msg.kill_switches_timed_out == 0
-    
-    def force_to_dshot(self, force):
-        #TODO: IMPLEMENT WHEN THRUSTER ARE FIGURED OUT
-        
-        return 0
-    
+
     def publish_dshot(self, forces):
-        if len(forces) != 8:
-            self.get_logger().error(f"publish_dshot() requires an array with 8 forces, but instead got an array with {len(forces)}")
-            return
-        
-        dshotcmd = DshotCommand()
-        dshotcmd.values = [self.force_to_dshot(force) for force in forces]
-        self.dshot_pub.publish(dshotcmd)
+        dshot_values = []
+
+        #convert thruster force to dshot
+        for i in range(self.thruster_coeffs.shape[0]):
+            dshot = NUETRAL_DSHOT
+               
+            # robot is killed or no force is needed
+            if(not self.enabled or abs(forces[i]) < self.dshot_file["MIN_THRUST"]):
+                dshot = NUETRAL_DSHOT
+
+            elif (forces[i] > 0 and forces[i] <= self.dshot_file["STARTUP_THRUST"]):
+                if self.thruster_types[i] == 0:
+                    dshot = (int)(self.dshot_file["SU_THRUST"]["POS_SLOPE"] * forces[i] + self.dshot_file["SU_THRUST"]["POS_YINT"])
+                else:
+                    dshot = (int)(-self.dshot_file["SU_THRUST"]["POS_SLOPE"] * forces[i] + self.dshot_file["SU_THRUST"]["NEG_YINT"])
+
+            elif (forces[i] > 0 and forces[i] > self.dshot_file["STARTUP_THRUST"]):
+                if self.thruster_types[i] == 0:
+                    dshot = (int)(self.dshot_file["THRUST"]["POS_SLOPE"] * forces[i] + self.dshot_file["THRUST"]["POS_YINT"])
+                else:
+                    dshot = (int)(-self.dshot_file["THRUST"]["POS_SLOPE"] * forces[i] + self.dshot_file["THRUST"]["NEG_YINT"])
+
+            elif (forces[i] < 0 and forces[i] >= -self.dshot_file["STARTUP_THRUST"]):
+                if self.thruster_types[i] == 0:
+                    dshot = (int)(self.dshot_file["SU_THRUST"]["NEG_SLOPE"] * forces[i] + self.dshot_file["SU_THRUST"]["NEG_YINT"])
+                else:
+                    dshot = (int)(-self.dshot_file["SU_THRUST"]["NEG_SLOPE"] * forces[i] + self.dshot_file["SU_THRUST"]["POS_YINT"])
+
+            elif (forces[i] < 0 and forces[i] < -self.dshot_file["STARTUP_THRUST"]):
+                if self.thruster_types[i] == 0:
+                    dshot = (int)(self.dshot_file["THRUST"]["NEG_SLOPE"] * forces[i] + self.dshot_file["THRUST"]["NEG_YINT"])
+                else:
+                    dshot = (int)(-self.dshot_file["THRUST"]["NEG_SLOPE"] * forces[i] + self.dshot_file["THRUST"]["POS_YINT"])
+
+            else:
+                dshot = NUETRAL_DSHOT
+
+            #ensure dshot is not out of bounds
+            dshot = min(self.dshot_max, dshot)
+            dshot = max(self.dshot_min, dshot)
+
+            dshot_values.append(dshot)
+
+        # Make the dshot message
+        msg = DshotCommand()
+        msg.values = dshot_values
+        self.dshot_pub.publish(msg)
 
 
     # Timer callback which disables thrusters that are out of the water
@@ -185,7 +223,7 @@ class ThrusterSolverNode(Node):
 
         data = []
         for val in res.x :
-            if abs(val) < self.pwm_file["MIN_THRUST"]:
+            if abs(val) < self.dshot_file["MIN_THRUST"]:
                 val = 0
             
             data.append(float(val))
