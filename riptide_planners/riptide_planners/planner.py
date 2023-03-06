@@ -1,7 +1,7 @@
 #!/bin/python3
 
 import numpy as np
-# from transforms3d
+from transforms3d import quaternions as quat
 
 # now rclpy and messages
 import rclpy
@@ -86,11 +86,22 @@ class PlannerNode(Node):
             orients.append(np.array([tfPoint.pose.orientation.w, tfPoint.pose.orientation.x, tfPoint.pose.orientation.y, tfPoint.pose.orientation.z]))
 
         # now interp the path
-        position_path = spline_path_spaced(points, self.interp_density)
+        position_path, points_per_seg = spline_path_spaced(points, self.interp_density)
 
-        # interp the orientation TODO
-        orient_path = np.zeros((len(position_path), 4))
-        # for i in range(len(orients)):
+        for i in range(1, len(orients)):
+            sample_pts = points_per_seg[i]
+            
+            # start and end orientation for lerp
+            start = orients[i-1]
+            end = orients[i]
+
+            # run the lerp for each point in between
+            for sampleIdx in range(sample_pts):
+                point = sampleIdx / sample_pts
+
+                # quaternion slerp from here https://en.wikipedia.org/wiki/Slerp
+                lerped_quat = quat.qmult(quat.qpow(quat.qmult(end, quat.qinverse(start)), point), start)
+                orients.append(lerped_quat)
 
 
         self.get_logger().info("path planned, timing trajectory")
@@ -100,7 +111,7 @@ class PlannerNode(Node):
         # convert back to stamped pose
         fullPath = [
             TrajPoint(pose=Pose(position=Point(x=position_path[i][0], y=position_path[i][1], z=position_path[i][2]), 
-            orientation=Quaternion(w=orient_path[i][0], x=orient_path[i][1], y=orient_path[i][2], z=orient_path[i][3])),
+            orientation=Quaternion(w=orients[i][0], x=orients[i][1], y=orients[i][2], z=orients[i][3])),
             header=Header(stamp=(now + Duration(nanoseconds=0.01 * i*1e9)).to_msg()))
             for i in range(len(position_path))]
 
@@ -142,7 +153,7 @@ def spline_path_spaced(points: list, samples_per_m: int) -> list:
     return spline_path_gen(points, numSamples, distances, totalDistance)
     
 
-def spline_path_gen(points: list, numSamples: int, distances: list, totalDistance: float) -> list:
+def spline_path_gen(points: list, numSamples: int, distances: list, totalDistance: float) -> tuple:
     # dont have to check for colinearity at all
     # the spline will lerp on its own if needed
     tangents = []
@@ -197,20 +208,21 @@ def spline_path_gen(points: list, numSamples: int, distances: list, totalDistanc
         tangents.insert(-1, np.array([tangentK[0], tangentK[1], tangentK[2]]))
 
     sampledPts = []
+    samplesPerSeg = len(points)*[None] # need to pre-init this
         
     # re-iterate to generate curve from 1 to n-1
     for i in range(1, len(points)):
         # calculate num samples for this portion based on pct of total distance between pts
-        locSamples = round(distances[i-1] / totalDistance * numSamples)
+        samplesPerSeg[i] = round(distances[i-1] / totalDistance * numSamples)
 
         # generate the sample indicies
-        locSamplePts = np.linspace(0.0, 1.0, locSamples)
+        locSamplePts = np.linspace(0.0, 1.0, samplesPerSeg[i])
 
         # sample the spline and save
         for samplePt in locSamplePts:
             sampledPts.append(spline_interp(points[i-1], tangents[i-1], points[i], tangents[i], samplePt))
     
-    return sampledPts
+    return (sampledPts, samplesPerSeg)
 
 
 # helper function for getting radial distance (l2 norm) between 2 vectors
