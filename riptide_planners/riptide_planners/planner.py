@@ -96,13 +96,9 @@ class PlannerNode(Node):
             start = orients[i-1]
             end = orients[i]
 
-            print(sample_pts, start, end)
-
             # run the lerp for each point in between
             for sampleIdx in range(sample_pts):
                 point = sampleIdx / sample_pts
-
-                print(point)
 
                 # quaternion slerp from here https://en.wikipedia.org/wiki/Slerp
                 lerped_quat = quat.qmult(quat.qpow(quat.qmult(end, quat.qinverse(start)), point), start)
@@ -110,8 +106,6 @@ class PlannerNode(Node):
 
 
         self.get_logger().info("path planned, timing trajectory")
-
-        print(len(orients_path), len(position_path))
 
         now = self.get_clock().now()
 
