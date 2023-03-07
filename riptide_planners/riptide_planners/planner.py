@@ -128,15 +128,8 @@ class PlannerNode(Node):
         # begin the two pass timing algorthim
         # the forward pass is designed to ramp up to max velocities
         # the backward pass is designed to obey constraints and ramp down
-        time_elapsed = 0.0
-
         lin_vel = 0.0
         lin_vel_prev = 0.0
-
-        plan_start = self.get_clock().now()
-
-        # assign for the first point
-        fullPath[0].header.stamp = plan_start.to_msg()
 
         # begin the forward pass
         self.get_logger().info("Beginning trajectory forward pass")
@@ -151,27 +144,6 @@ class PlannerNode(Node):
 
             # TODO scale the unit vector in the twist by the magnitude
             fullPath[i].lin_veloc.linear.x = lin_vel
-
-            # compute the time difference caused by this motion
-            time_delta = (2 / (lin_vel + lin_vel_prev)) * distance
-            time_elapsed += time_delta
-
-            # set the time point
-            elapsed_sec = int(time_elapsed)
-            elapsed_nanos = int((time_elapsed - elapsed_sec)*1e9)
-            real_time = (plan_start+Duration(seconds=elapsed_sec, nanoseconds=elapsed_nanos)).to_msg()
-            fullPath[i].header.stamp = real_time
-            
-            # make sure that the trajectory isnt taking too much time
-            if time_elapsed > self.traj_max_exec_time:
-                self.get_logger().warning(f"Trajectory duration too long. Excceded limit of {self.traj_max_exec_time}s while still planning")
-
-                response.traj_points = []
-                response.error_code = PlanPath.Response.BAD_WYPTS
-                response.error_msg = f"Trajectory duration exceeds max allowable set at {self.traj_max_exec_time}s"
-
-                # send the result
-                return response
             
             # update the predecessor velocity
             lin_vel_prev = lin_vel
@@ -202,18 +174,37 @@ class PlannerNode(Node):
                 # TODO scale the unit vector in the twist by the magnitude
                 fullPath[i].lin_veloc.linear.x = lin_vel
 
-                # compute the time difference caused by this motion
-                time_delta = (2 / (fullPath[i].lin_veloc.linear.x + fullPath[i-1].lin_veloc.linear.x)) * distance
-                time_elapsed += time_delta
+        # run the timing pass
+        time_elapsed = 0.0
+        plan_start = self.get_clock().now()
 
-                # print(time_elapsed)
+        # assign for the first point
+        fullPath[0].header.stamp = plan_start.to_msg()
 
-                # set the time point
-                elapsed_sec = int(time_elapsed)
-                elapsed_nanos = int((time_elapsed - elapsed_sec)*1e9)
-                real_time = (plan_start+Duration(seconds=elapsed_sec, nanoseconds=elapsed_nanos)).to_msg()
-                fullPath[i].header.stamp = real_time
+        for i in range(1, len(fullPath)):
+            # compute cartesian distance
+            distance = point_dist(fullPath[i], fullPath[i-1])
 
+            # compute the time difference caused by this motion
+            time_delta = (2 / (fullPath[i].lin_veloc.linear.x  + fullPath[i-1].lin_veloc.linear.x)) * distance
+            time_elapsed += time_delta
+
+            # set the time point
+            elapsed_sec = int(time_elapsed)
+            elapsed_nanos = int((time_elapsed - elapsed_sec)*1e9)
+            real_time = (plan_start+Duration(seconds=elapsed_sec, nanoseconds=elapsed_nanos)).to_msg()
+            fullPath[i].header.stamp = real_time
+            
+            # make sure that the trajectory isnt taking too much time
+            if time_elapsed > self.traj_max_exec_time:
+                self.get_logger().warning(f"Trajectory duration too long. Excceded limit of {self.traj_max_exec_time}s while still planning")
+
+                response.traj_points = []
+                response.error_code = PlanPath.Response.BAD_WYPTS
+                response.error_msg = f"Trajectory duration exceeds max allowable set at {self.traj_max_exec_time}s"
+
+                # send the result
+                return response
 
 
         self.get_logger().info("Trajectory complete")
