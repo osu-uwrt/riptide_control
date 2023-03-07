@@ -154,7 +154,6 @@ class PlannerNode(Node):
         for i in range(0, len(fullPath))[::-1]:
             # set the final point to zero velocity
             if i == len(fullPath) - 1:
-                print(i, 0)
                 fullPath[i].lin_veloc.linear.x = 0.0
                 continue
 
@@ -165,8 +164,6 @@ class PlannerNode(Node):
             lin_vel = math.sqrt(fullPath[i+1].lin_veloc.linear.x ** 2 + 2 * self.max_lin_accel * distance)
             if lin_vel < fullPath[i].lin_veloc.linear.x:
                 # this means we need to retime as this point has been adjusted down
-
-                print(f"adjusting {i} to vel {lin_vel}")
 
                 if lin_vel > self.max_lin_vel: 
                     lin_vel = self.max_lin_vel
