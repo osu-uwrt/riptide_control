@@ -89,7 +89,7 @@ class PlannerNode(Node):
 
                 # Creating an empty figure and setup the 3d plot axes
                 fig = plt.figure()
-                ax = fig.add_subplot(1, 2, 1, projection="3d")
+                ax = fig.add_subplot(1, 3, 1, projection="3d")
 
                 # plot the resulting curve in either a line or a scatter 
                 # (depends on what info you want)
@@ -120,19 +120,31 @@ class PlannerNode(Node):
 
                 orients = np.array(orientRaw)
 
-                print(orients.shape)
-
-                ax = fig.add_subplot(1, 2, 2)
-
+                # plot the orientation
+                ax = fig.add_subplot(1, 3, 2)
                 ax.grid()
-
                 ax.scatter(times, orients[:, 0])
                 ax.scatter(times, orients[:, 1])
                 ax.scatter(times, orients[:, 2])
-
                 ax.legend(["roll", "pitch", "yaw"])
                 ax.set_xlabel("time (s)")
                 ax.set_ylabel("rotation (radians)")
+
+                velRaw = [[
+                        point.lin_veloc.linear.x, point.lin_veloc.linear.y, point.lin_veloc.linear.z, 
+                    ] for point in result.traj_points ]
+                
+                vels = np.array(velRaw)
+
+                # plot the velocity
+                ax = fig.add_subplot(1, 3, 3)
+                ax.grid()
+                ax.scatter(times, vels[:, 0])
+                ax.scatter(times, vels[:, 1])
+                ax.scatter(times, vels[:, 2])
+                ax.legend(["vx", "vy", "vz"])
+                ax.set_xlabel("time (s)")
+                ax.set_ylabel("velocity (m/s)")
             
                 # Showing the above plot
                 plt.show()

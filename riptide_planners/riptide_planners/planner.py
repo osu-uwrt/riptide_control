@@ -2,11 +2,12 @@
 
 import numpy as np
 from transforms3d import quaternions as quat
+import math
 
 # now rclpy and messages
 import rclpy
 from rclpy.node import Node
-from rclpy.time import Duration
+from rclpy.time import Duration, Time
 from riptide_msgs2.srv import PlanPath
 from riptide_msgs2.msg import TrajPoint
 from geometry_msgs.msg import Pose, Quaternion, Point 
@@ -42,7 +43,12 @@ class PlannerNode(Node):
 
         # parameters
         self.common_frame = ""
-        self.interp_density = 5
+        self.interp_density = 15
+        self.max_lin_accel = 1.0
+        self.max_lin_vel = 1.0
+        self.max_ang_accel = 1.0
+        self.max_ang_vel = 1.0
+        self.traj_max_exec_time = 50.0
 
         self.get_logger().info("Started riptide_planner")
 
@@ -105,16 +111,80 @@ class PlannerNode(Node):
                 orients_path.append(lerped_quat)
 
 
-        self.get_logger().info("path planned, timing trajectory")
+        self.get_logger().info("path planned, generating trajectory")
 
-        now = self.get_clock().now()
-
-        # convert back to stamped pose
+        # convert path to trajectory points
         fullPath = [
-            TrajPoint(pose=Pose(position=Point(x=position_path[i][0], y=position_path[i][1], z=position_path[i][2]), 
-            orientation=Quaternion(w=orients_path[i][0], x=orients_path[i][1], y=orients_path[i][2], z=orients_path[i][3])),
-            header=Header(stamp=(now + Duration(nanoseconds=0.01 * i*1e9)).to_msg()))
-            for i in range(len(position_path))]
+            TrajPoint(
+                pose=Pose(
+                    position=Point(x=position_path[i][0], y=position_path[i][1], z=position_path[i][2]), 
+                    orientation=Quaternion(w=orients_path[i][0], x=orients_path[i][1], y=orients_path[i][2], z=orients_path[i][3])
+                ),
+                header=Header(
+                    frame_id=self.common_frame
+                )
+            ) for i in range(len(position_path))]
+
+        # begin the two pass timing algorthim
+        # the forward pass is designed to ramp up to max velocities
+        # the backward pass is designed to obey constraints and ramp down
+        time_elapsed = 0.0
+
+        lin_vel = 0.0
+        lin_vel_prev = 0.0
+
+        plan_start = self.get_clock().now()
+
+        # assign for the first point
+        fullPath[0].header.stamp = plan_start.to_msg()
+
+        # begin the forward pass
+        self.get_logger().info("Beginning trajectory forward pass")
+        for i in range(1, len(fullPath)):
+            # compute cartesian distance
+            distance = point_dist(fullPath[i], fullPath[i-1])
+
+            # compute the point velocity magnitude and clamp to below max vel
+            lin_vel = math.sqrt(lin_vel_prev ** 2 + 2 * self.max_lin_accel * distance)
+            if lin_vel > self.max_lin_vel: 
+                lin_vel = self.max_lin_vel
+
+            # TODO scale the unit vector in the twist by the magnitude
+            fullPath[i].lin_veloc.linear.x = lin_vel
+
+            # compute the time difference caused by this motion
+            time_delta = (2 / (lin_vel + lin_vel_prev)) * distance
+            time_elapsed += time_delta
+
+            print(time_elapsed)
+
+            # set the time point
+            elapsed_sec = int(time_elapsed)
+            elapsed_nanos = int((time_elapsed - elapsed_sec)*1e9)
+            real_time = (plan_start+Duration(seconds=elapsed_sec, nanoseconds=elapsed_nanos)).to_msg()
+            fullPath[i].header.stamp = real_time
+
+            print(real_time)
+            
+            # make sure that the trajectory isnt taking too much time
+            if time_elapsed > self.traj_max_exec_time:
+                self.get_logger().warning(f"Trajectory duration too long. Excceded limit of {self.traj_max_exec_time}s while still planning")
+
+                response.traj_points = []
+                response.error_code = PlanPath.Response.BAD_WYPTS
+                response.error_msg = f"Trajectory duration exceeds max allowable set at {self.traj_max_exec_time}s"
+
+                # send the result
+                return response
+            
+            # update the predecessor velocity
+            lin_vel_prev = lin_vel
+
+        # now run the backward pass
+        self.get_logger().info("Beginning trajectory backward pass")
+        for i in range(len(fullPath)-1)[::-1]:
+            pass
+
 
         self.get_logger().info("Trajectrory complete")
 
@@ -229,6 +299,13 @@ def spline_path_gen(points: list, numSamples: int, distances: list, totalDistanc
 # helper function for getting radial distance (l2 norm) between 2 vectors
 def radial_dist(point1: np.ndarray, point2: np.ndarray) -> float:
     return np.linalg.norm(point1 - point2)
+
+def point_dist(point1: TrajPoint, point2: TrajPoint) -> float:
+    return radial_dist(
+        np.array([point1.pose.position.x, point1.pose.position.y, point1.pose.position.z]),
+        np.array([point2.pose.position.x, point2.pose.position.y, point2.pose.position.z])
+    )
+
 
 # cubic hermite interpolation function. Can extend to any dimensional order
 # tested with 2d and 3d cases first but should extend to higher dimensionality
