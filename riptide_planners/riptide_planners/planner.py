@@ -156,15 +156,11 @@ class PlannerNode(Node):
             time_delta = (2 / (lin_vel + lin_vel_prev)) * distance
             time_elapsed += time_delta
 
-            print(time_elapsed)
-
             # set the time point
             elapsed_sec = int(time_elapsed)
             elapsed_nanos = int((time_elapsed - elapsed_sec)*1e9)
             real_time = (plan_start+Duration(seconds=elapsed_sec, nanoseconds=elapsed_nanos)).to_msg()
             fullPath[i].header.stamp = real_time
-
-            print(real_time)
             
             # make sure that the trajectory isnt taking too much time
             if time_elapsed > self.traj_max_exec_time:
@@ -179,14 +175,48 @@ class PlannerNode(Node):
             
             # update the predecessor velocity
             lin_vel_prev = lin_vel
+        
 
         # now run the backward pass
         self.get_logger().info("Beginning trajectory backward pass")
-        for i in range(len(fullPath)-1)[::-1]:
-            pass
+        for i in range(0, len(fullPath))[::-1]:
+            # set the final point to zero velocity
+            if i == len(fullPath) - 1:
+                print(i, 0)
+                fullPath[i].lin_veloc.linear.x = 0.0
+                continue
+
+            # compute cartesian distance
+            distance = point_dist(fullPath[i], fullPath[i-1])
+
+            # compute the point velocity magnitude and clamp to below max vel
+            lin_vel = math.sqrt(fullPath[i+1].lin_veloc.linear.x ** 2 + 2 * self.max_lin_accel * distance)
+            if lin_vel < fullPath[i].lin_veloc.linear.x:
+                # this means we need to retime as this point has been adjusted down
+
+                print(f"adjusting {i} to vel {lin_vel}")
+
+                if lin_vel > self.max_lin_vel: 
+                    lin_vel = self.max_lin_vel
+
+                # TODO scale the unit vector in the twist by the magnitude
+                fullPath[i].lin_veloc.linear.x = lin_vel
+
+                # compute the time difference caused by this motion
+                time_delta = (2 / (fullPath[i].lin_veloc.linear.x + fullPath[i-1].lin_veloc.linear.x)) * distance
+                time_elapsed += time_delta
+
+                # print(time_elapsed)
+
+                # set the time point
+                elapsed_sec = int(time_elapsed)
+                elapsed_nanos = int((time_elapsed - elapsed_sec)*1e9)
+                real_time = (plan_start+Duration(seconds=elapsed_sec, nanoseconds=elapsed_nanos)).to_msg()
+                fullPath[i].header.stamp = real_time
 
 
-        self.get_logger().info("Trajectrory complete")
+
+        self.get_logger().info("Trajectory complete")
 
         # time the trajectory
         response.traj_points = fullPath

@@ -140,9 +140,9 @@ class PlannerNode(Node):
                 ax = fig.add_subplot(1, 3, 3)
                 ax.grid()
                 ax.scatter(times, vels[:, 0])
-                ax.scatter(times, vels[:, 1])
-                ax.scatter(times, vels[:, 2])
-                ax.legend(["vx", "vy", "vz"])
+                # ax.scatter(times, vels[:, 1])
+                # ax.scatter(times, vels[:, 2])
+                # ax.legend(["vx", "vy", "vz"])
                 ax.set_xlabel("time (s)")
                 ax.set_ylabel("velocity (m/s)")
             
