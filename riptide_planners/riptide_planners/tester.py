@@ -85,8 +85,6 @@ class PlannerNode(Node):
                 pathPts = [[point.pose.position.x, point.pose.position.y, point.pose.position.z] for point in result.traj_points]
                 splineArr = np.array(pathPts)
 
-                print(splineArr.shape, len(result.traj_points))
-
                 # Creating an empty figure and setup the 3d plot axes
                 fig = plt.figure()
                 ax = fig.add_subplot(1, 3, 1, projection="3d")
@@ -96,17 +94,11 @@ class PlannerNode(Node):
                 ax.scatter(splineArr[1:-1, 0], splineArr[1:-1, 1], splineArr[1:-1, 2], "b")
                 ax.scatter(splineArr[0, 0], splineArr[0, 1], splineArr[0, 2], "g")
                 ax.scatter(splineArr[-1, 0], splineArr[-1, 1], splineArr[-1, 2], "r")
-
                 ax.set_xlabel("x (m)")
                 ax.set_ylabel("y (m)")
                 ax.set_zlabel("z (m)")
-
-                # set the aspect ratio -- has to be after data plotting to work properly
-                ax.set_aspect('equal')
-
+                ax.set_aspect('equal') # set the aspect ratio -- has to be after data plotting to work properly
                 ax.set_title("Planned Path")
-
-                print(result.traj_points[0].header, result.traj_points[-1].header)
 
                 # get the timing info for the rest
                 start_stamp = Time.from_msg(result.traj_points[0].header.stamp)
@@ -140,9 +132,9 @@ class PlannerNode(Node):
                 ax = fig.add_subplot(1, 3, 3)
                 ax.grid()
                 ax.scatter(times, vels[:, 0])
-                # ax.scatter(times, vels[:, 1])
-                # ax.scatter(times, vels[:, 2])
-                # ax.legend(["vx", "vy", "vz"])
+                ax.scatter(times, vels[:, 1])
+                ax.scatter(times, vels[:, 2])
+                ax.legend(["vx", "vy", "vz"])
                 ax.set_xlabel("time (s)")
                 ax.set_ylabel("velocity (m/s)")
             
