@@ -87,6 +87,7 @@ class PlannerNode(Node):
 
         # now interp the path
         position_path, points_per_seg = spline_path_spaced(points, self.interp_density)
+        orients_path = []
 
         for i in range(1, len(orients)):
             sample_pts = points_per_seg[i]
@@ -95,23 +96,29 @@ class PlannerNode(Node):
             start = orients[i-1]
             end = orients[i]
 
+            print(sample_pts, start, end)
+
             # run the lerp for each point in between
             for sampleIdx in range(sample_pts):
                 point = sampleIdx / sample_pts
 
+                print(point)
+
                 # quaternion slerp from here https://en.wikipedia.org/wiki/Slerp
                 lerped_quat = quat.qmult(quat.qpow(quat.qmult(end, quat.qinverse(start)), point), start)
-                orients.append(lerped_quat)
+                orients_path.append(lerped_quat)
 
 
         self.get_logger().info("path planned, timing trajectory")
+
+        print(len(orients_path), len(position_path))
 
         now = self.get_clock().now()
 
         # convert back to stamped pose
         fullPath = [
             TrajPoint(pose=Pose(position=Point(x=position_path[i][0], y=position_path[i][1], z=position_path[i][2]), 
-            orientation=Quaternion(w=orients[i][0], x=orients[i][1], y=orients[i][2], z=orients[i][3])),
+            orientation=Quaternion(w=orients_path[i][0], x=orients_path[i][1], y=orients_path[i][2], z=orients_path[i][3])),
             header=Header(stamp=(now + Duration(nanoseconds=0.01 * i*1e9)).to_msg()))
             for i in range(len(position_path))]
 
