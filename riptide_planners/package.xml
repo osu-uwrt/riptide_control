@@ -3,9 +3,15 @@
 <package format="3">
   <name>riptide_planners</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>A 6DOF path planner for underwater vehicles</description>
   <maintainer email="tucker.737@osu.edu">Cole Tucker</maintainer>
   <license>Apache 2.0</license>
+
+  <exec_depend>numpy</exec_depend>
+  <exec_depend>riptide_msgs2</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>transforms3d</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

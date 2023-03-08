@@ -171,6 +171,11 @@ class PlannerNode(Node):
                 # TODO scale the unit vector in the twist by the magnitude
                 fullPath[i].lin_veloc.linear.x = lin_vel
 
+        # now we can do the orientation pass
+        # this is designed to test if the orientation change is within bounds
+        for i in range(1, len(fullPath)):
+            pass
+
         # run the timing pass
         time_elapsed = 0.0
         plan_start = self.get_clock().now()
