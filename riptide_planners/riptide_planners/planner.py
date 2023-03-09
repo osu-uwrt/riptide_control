@@ -10,7 +10,7 @@ from rclpy.node import Node
 from rclpy.time import Duration, Time
 from riptide_msgs2.srv import PlanPath
 from riptide_msgs2.msg import TrajPoint
-from geometry_msgs.msg import Pose, Quaternion, Point 
+from geometry_msgs.msg import Pose, Quaternion, Point, Twist, Vector3
 from std_msgs.msg import Header
 from tf2_geometry_msgs import do_transform_pose_stamped
 
@@ -53,8 +53,7 @@ class PlannerNode(Node):
         self.get_logger().info("Started riptide_planner")
 
     def handleRequest(self, request: PlanPath.Request, response: PlanPath.Response):
-        points = []
-        orients = []
+        poses = []
 
         # handle empty request
         if len(request.path_points) < 2:
@@ -88,131 +87,129 @@ class PlannerNode(Node):
             tfPoint = do_transform_pose_stamped(point, tf)
 
             # put it on the list
-            points.append(np.array([tfPoint.pose.position.x, tfPoint.pose.position.y, tfPoint.pose.position.z]))
-            orients.append(np.array([tfPoint.pose.orientation.w, tfPoint.pose.orientation.x, tfPoint.pose.orientation.y, tfPoint.pose.orientation.z]))
+            poses.append(np.array([tfPoint.pose.position.x, tfPoint.pose.position.y, tfPoint.pose.position.z,
+                                    tfPoint.pose.orientation.w, tfPoint.pose.orientation.x,
+                                    tfPoint.pose.orientation.y, tfPoint.pose.orientation.z]))
 
-        # now interp the path
-        position_path, points_per_seg = spline_path_spaced(points, self.interp_density)
-        orients_path = []
+        
+        pathTime = approx_time_traj(poses, self.max_lin_vel, self.max_lin_accel)
 
-        for i in range(1, len(orients)):
-            sample_pts = points_per_seg[i]
-            
-            # start and end orientation for lerp
-            start = orients[i-1]
-            end = orients[i]
+        
+        
 
-            # run the lerp for each point in between
-            for sampleIdx in range(sample_pts):
-                point = sampleIdx / sample_pts
-
-                # quaternion slerp from here https://en.wikipedia.org/wiki/Slerp
-                lerped_quat = quat.qmult(quat.qpow(quat.qmult(end, quat.qinverse(start)), point), start)
-                orients_path.append(lerped_quat)
+        # quaternion slerp from here https://en.wikipedia.org/wiki/Slerp
+        # lerped_quat = quat.qmult(quat.qpow(quat.qmult(end, quat.qinverse(start)), point), start)
+        # orients_path.append(lerped_quat)
 
 
         self.get_logger().info("path planned, generating trajectory")
 
         # convert path to trajectory points
-        fullPath = [
-            TrajPoint(
-                pose=Pose(
-                    position=Point(x=position_path[i][0], y=position_path[i][1], z=position_path[i][2]), 
-                    orientation=Quaternion(w=orients_path[i][0], x=orients_path[i][1], y=orients_path[i][2], z=orients_path[i][3])
-                ),
-                header=Header(
-                    frame_id=self.common_frame
-                )
-            ) for i in range(len(position_path))]
+        # fullPath = [
+        #     TrajPoint(
+        #         pose=Pose(
+        #             # position=Point(x=position_path[i][0], y=position_path[i][1], z=position_path[i][2]), 
+        #             # orientation=Quaternion(w=orients_path[i][0], x=orients_path[i][1], y=orients_path[i][2], z=orients_path[i][3])
+        #         ),
+        #         header=Header(
+        #             frame_id=self.common_frame,
+        #             stamp=rosTimes[i]
+        #         ),
+        #         lin_veloc=Twist(
+        #             linear=Vector3(
+        #                 x=cleanVels[i]
+        #             )
+        #         )
+        #     ) for i in range(len(cleanVels))]
 
-        # begin the two pass timing algorthim
-        # the forward pass is designed to ramp up to max velocities
-        # the backward pass is designed to obey constraints and ramp down
-        lin_vel = 0.0
-        lin_vel_prev = 0.0
+        # # begin the two pass timing algorthim
+        # # the forward pass is designed to ramp up to max velocities
+        # # the backward pass is designed to obey constraints and ramp down
+        # lin_vel = 0.0
+        # lin_vel_prev = 0.0
 
-        # begin the forward pass
-        self.get_logger().info("Beginning trajectory forward pass")
-        for i in range(1, len(fullPath)):
-            # compute cartesian distance
-            distance = point_dist(fullPath[i], fullPath[i-1])
+        # # begin the forward pass
+        # self.get_logger().info("Beginning trajectory forward pass")
+        # for i in range(1, len(fullPath)):
+        #     # compute cartesian distance
+        #     distance = point_dist(fullPath[i], fullPath[i-1])
 
-            # compute the point velocity magnitude and clamp to below max vel
-            lin_vel = math.sqrt(lin_vel_prev ** 2 + 2 * self.max_lin_accel * distance)
-            if lin_vel > self.max_lin_vel: 
-                lin_vel = self.max_lin_vel
+        #     # compute the point velocity magnitude and clamp to below max vel
+        #     lin_vel = math.sqrt(lin_vel_prev ** 2 + 2 * self.max_lin_accel * distance)
+        #     if lin_vel > self.max_lin_vel: 
+        #         lin_vel = self.max_lin_vel
 
-            # TODO scale the unit vector in the twist by the magnitude
-            fullPath[i].lin_veloc.linear.x = lin_vel
+        #     # TODO scale the unit vector in the twist by the magnitude
+        #     fullPath[i].lin_veloc.linear.x = lin_vel
             
-            # update the predecessor velocity
-            lin_vel_prev = lin_vel
+        #     # update the predecessor velocity
+        #     lin_vel_prev = lin_vel
         
 
-        # now run the backward pass
-        self.get_logger().info("Beginning trajectory backward pass")
-        for i in range(0, len(fullPath))[::-1]:
-            # set the final point to zero velocity
-            if i == len(fullPath) - 1:
-                fullPath[i].lin_veloc.linear.x = 0.0
-                continue
+        # # now run the backward pass
+        # self.get_logger().info("Beginning trajectory backward pass")
+        # for i in range(0, len(fullPath))[::-1]:
+        #     # set the final point to zero velocity
+        #     if i == len(fullPath) - 1:
+        #         fullPath[i].lin_veloc.linear.x = 0.0
+        #         continue
 
-            # compute cartesian distance
-            distance = point_dist(fullPath[i], fullPath[i-1])
+        #     # compute cartesian distance
+        #     distance = point_dist(fullPath[i], fullPath[i-1])
 
-            # compute the point velocity magnitude and clamp to below max vel
-            lin_vel = math.sqrt(fullPath[i+1].lin_veloc.linear.x ** 2 + 2 * self.max_lin_accel * distance)
-            if lin_vel < fullPath[i].lin_veloc.linear.x:
-                # this means we need to retime as this point has been adjusted down
+        #     # compute the point velocity magnitude and clamp to below max vel
+        #     lin_vel = math.sqrt(fullPath[i+1].lin_veloc.linear.x ** 2 + 2 * self.max_lin_accel * distance)
+        #     if lin_vel < fullPath[i].lin_veloc.linear.x:
+        #         # this means we need to retime as this point has been adjusted down
 
-                if lin_vel > self.max_lin_vel: 
-                    lin_vel = self.max_lin_vel
+        #         if lin_vel > self.max_lin_vel: 
+        #             lin_vel = self.max_lin_vel
 
-                # TODO scale the unit vector in the twist by the magnitude
-                fullPath[i].lin_veloc.linear.x = lin_vel
+        #         # TODO scale the unit vector in the twist by the magnitude
+        #         fullPath[i].lin_veloc.linear.x = lin_vel
 
-        # now we can do the orientation pass
-        # this is designed to test if the orientation change is within bounds
-        for i in range(1, len(fullPath)):
-            pass
+        # # now we can do the orientation pass
+        # # this is designed to test if the orientation change is within bounds
+        # for i in range(1, len(fullPath)):
+        #     pass
 
-        # run the timing pass
-        time_elapsed = 0.0
-        plan_start = self.get_clock().now()
+        # # run the timing pass
+        # time_elapsed = 0.0
+        # plan_start = self.get_clock().now()
 
-        # assign for the first point
-        fullPath[0].header.stamp = plan_start.to_msg()
+        # # assign for the first point
+        # fullPath[0].header.stamp = plan_start.to_msg()
 
-        for i in range(1, len(fullPath)):
-            # compute cartesian distance
-            distance = point_dist(fullPath[i], fullPath[i-1])
+        # for i in range(1, len(fullPath)):
+        #     # compute cartesian distance
+        #     distance = point_dist(fullPath[i], fullPath[i-1])
 
-            # compute the time difference caused by this motion
-            time_delta = (2 / (fullPath[i].lin_veloc.linear.x  + fullPath[i-1].lin_veloc.linear.x)) * distance
-            time_elapsed += time_delta
+        #     # compute the time difference caused by this motion
+        #     time_delta = (2 / (fullPath[i].lin_veloc.linear.x  + fullPath[i-1].lin_veloc.linear.x)) * distance
+        #     time_elapsed += time_delta
 
-            # set the time point
-            elapsed_sec = int(time_elapsed)
-            elapsed_nanos = int((time_elapsed - elapsed_sec)*1e9)
-            real_time = (plan_start+Duration(seconds=elapsed_sec, nanoseconds=elapsed_nanos)).to_msg()
-            fullPath[i].header.stamp = real_time
+        #     # set the time point
+        #     elapsed_sec = int(time_elapsed)
+        #     elapsed_nanos = int((time_elapsed - elapsed_sec)*1e9)
+        #     real_time = (plan_start+Duration(seconds=elapsed_sec, nanoseconds=elapsed_nanos)).to_msg()
+        #     fullPath[i].header.stamp = real_time
             
-            # make sure that the trajectory isnt taking too much time
-            if time_elapsed > self.traj_max_exec_time:
-                self.get_logger().warning(f"Trajectory duration too long. Excceded limit of {self.traj_max_exec_time}s while still planning")
+        #     # make sure that the trajectory isnt taking too much time
+        #     if time_elapsed > self.traj_max_exec_time:
+        #         self.get_logger().warning(f"Trajectory duration too long. Excceded limit of {self.traj_max_exec_time}s while still planning")
 
-                response.traj_points = []
-                response.error_code = PlanPath.Response.BAD_WYPTS
-                response.error_msg = f"Trajectory duration exceeds max allowable set at {self.traj_max_exec_time}s"
+        #         response.traj_points = []
+        #         response.error_code = PlanPath.Response.BAD_WYPTS
+        #         response.error_msg = f"Trajectory duration exceeds max allowable set at {self.traj_max_exec_time}s"
 
-                # send the result
-                return response
+        #         # send the result
+        #         return response
 
 
         self.get_logger().info("Trajectory complete")
 
         # time the trajectory
-        response.traj_points = fullPath
+        # response.traj_points = fullPath
         response.error_code = PlanPath.Response.NO_ERROR
         response.error_msg = ""
 
@@ -318,6 +315,45 @@ def spline_path_gen(points: list, numSamples: int, distances: list, totalDistanc
     
     return (sampledPts, samplesPerSeg)
 
+# 
+def approx_time_traj(poses: list, max_lin_vel: float, max_lin_accel: float) -> float:
+    # Take the first pass to guess a trapezoidal time requirement
+    distances = [radial_dist(poses[i-1][0:3], poses[i][0:3]) for i in range(1, len(poses))]
+    distance = np.sum(distances) * 1.1
+
+    # re-cut path distance into segments 
+    segments = np.diff(np.linspace(0, distance, 51))
+
+    # take a forward pass
+    vels = [0.0]
+    for i in range(1, len(segments)):
+        currVel = math.sqrt(vels[i-1] ** 2 + 2 * max_lin_accel * segments[i-1])
+        if currVel > max_lin_vel:
+            currVel = max_lin_vel
+
+        vels.append(currVel)
+
+    # take a backward pass
+    cleanVels = np.copy(vels)
+    cleanVels[-1] = 0.0
+    for i in range(len(segments)-1)[:: -1]:
+        currVel = math.sqrt(vels[i+1] ** 2 + 2 * max_lin_accel * segments[i-1])
+
+        if currVel < vels[i]:
+            # this means we need to recalculate as this point has been adjusted down
+            if currVel > max_lin_vel: 
+                currVel = max_lin_vel
+
+            cleanVels[i] = currVel
+                            
+    # take a forward pass for timing
+    elapsedTime = 0.0
+    for i in range(1, len(segments)):
+        timeDelta = (2 / (cleanVels[i]  + cleanVels[i-1])) * segments[i-1]
+        elapsedTime += timeDelta
+
+    return elapsedTime
+
 
 # helper function for getting radial distance (l2 norm) between 2 vectors
 def radial_dist(point1: np.ndarray, point2: np.ndarray) -> float:
@@ -329,6 +365,11 @@ def point_dist(point1: TrajPoint, point2: TrajPoint) -> float:
         np.array([point2.pose.position.x, point2.pose.position.y, point2.pose.position.z])
     )
 
+# derivative of the spline interpolation at a given time point
+# based on https://math.stackexchange.com/questions/2444650/cubic-hermite-spline-derivative
+def spline_interp_deriv(position1: np.ndarray, tangent1: np.ndarray,
+                        position2: np.ndarray, tangent2: np.ndarray, t: float) -> np.ndarray:
+    pass
 
 # cubic hermite interpolation function. Can extend to any dimensional order
 # tested with 2d and 3d cases first but should extend to higher dimensionality
