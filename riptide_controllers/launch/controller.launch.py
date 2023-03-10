@@ -29,12 +29,11 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument('robot_yaml', default_value=[LaunchConfiguration("robot"), '.yaml']),
 
-        launch_ros.actions.PushRosNamespace(
-            LC("robot")
-        ),
-
         launch.actions.GroupAction([
-
+            launch_ros.actions.PushRosNamespace(
+                LC("robot")
+            ),
+            
             launch_ros.actions.Node(
                 package="riptide_controllers2",
                 executable="controller",
