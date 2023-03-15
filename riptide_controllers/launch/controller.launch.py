@@ -34,16 +34,16 @@ def generate_launch_description():
                 LC("robot")
             ),
 
-            # launch_ros.actions.Node(
-            #     package="riptide_controllers2",
-            #     executable="controller",
-            #     name="controller",
-            #     output="screen",
-            #     parameters=[
-            #         {"vehicle_config": config},
-            #         {"robot": robot},
-            #     ]
-            # ),
+            launch_ros.actions.Node(
+                package="riptide_controllers2",
+                executable="controller",
+                name="controller",
+                output="screen",
+                parameters=[
+                    {"vehicle_config": config},
+                    {"robot": robot},
+                ]
+            ),
 
             launch_ros.actions.Node(
                 package="riptide_controllers2",
