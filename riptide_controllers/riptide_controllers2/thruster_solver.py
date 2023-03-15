@@ -24,7 +24,7 @@ from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 
 from geometry_msgs.msg import Twist
-from riptide_msgs2.msg import DshotCommand, FirmwareState
+from riptide_msgs2.msg import DshotCommand
 from std_msgs.msg import Float32MultiArray
 from std_msgs.msg import Bool
 

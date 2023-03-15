@@ -29,22 +29,21 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument('robot_yaml', default_value=[LaunchConfiguration("robot"), '.yaml']),
 
-        launch_ros.actions.PushRosNamespace(
-            LC("robot")
-        ),
-
         launch.actions.GroupAction([
-
-            launch_ros.actions.Node(
-                package="riptide_controllers2",
-                executable="controller",
-                name="controller",
-                output="screen",
-                parameters=[
-                    {"vehicle_config": config},
-                    {"robot": robot},
-                ]
+            launch_ros.actions.PushRosNamespace(
+                LC("robot")
             ),
+
+            # launch_ros.actions.Node(
+            #     package="riptide_controllers2",
+            #     executable="controller",
+            #     name="controller",
+            #     output="screen",
+            #     parameters=[
+            #         {"vehicle_config": config},
+            #         {"robot": robot},
+            #     ]
+            # ),
 
             launch_ros.actions.Node(
                 package="riptide_controllers2",
@@ -55,5 +54,5 @@ def generate_launch_description():
                     {"vehicle_config": config},
                     {"robot": robot},
                 ]
-        ),], scoped="true")
+        ),], scoped=True)
     ])
