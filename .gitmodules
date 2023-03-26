@@ -1,0 +1,3 @@
+[submodule "riptide_alloc_controller/riptide_controller_simulink"]
+	path = riptide_alloc_controller/riptide_controller_simulink
+	url = git@github.com:osu-uwrt/riptide_controller_simulink.git
