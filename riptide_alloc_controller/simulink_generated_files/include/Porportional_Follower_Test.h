@@ -7,9 +7,9 @@
  *
  * Code generated for Simulink model 'Porportional_Follower_Test'.
  *
- * Model version                  : 1.6
+ * Model version                  : 1.7
  * Simulink Coder version         : 9.8 (R2022b) 13-May-2022
- * C/C++ source code generated on : Mon Mar 27 19:02:21 2023
+ * C/C++ source code generated on : Mon Apr  3 12:52:26 2023
  *
  * Target selection: ert_shrlib.tlc
  * Embedded hardware selection: Intel->x86-64 (Windows64)
@@ -39,28 +39,6 @@
 #define rtmSetErrorStatus(rtm, val)    ((rtm)->errorStatus = (val))
 #endif
 
-#ifndef rtmGetT
-#define rtmGetT(rtm)                   (rtmGetTPtr((rtm))[0])
-#endif
-
-#ifndef rtmGetTPtr
-#define rtmGetTPtr(rtm)                ((rtm)->Timing.t)
-#endif
-
-/* Block signals (default storage) */
-typedef struct {
-  real_T Clock;                        /* '<S2>/Clock' */
-  real_T Add;                          /* '<S1>/Add' */
-  real_T Add1;                         /* '<S1>/Add1' */
-} B_Porportional_Follower_Test_T;
-
-/* Block states (default storage) for system '<Root>' */
-typedef struct {
-  real_T PreviousSignalValue_PreviousInp;/* '<S1>/Previous Signal Value' */
-  real_T Memory2_PreviousInput;        /* '<S2>/Memory2' */
-  real_T PreviousVelocity_PreviousInput;/* '<S1>/Previous Velocity' */
-} DW_Porportional_Follower_Test_T;
-
 /* External inputs (root inport signals with default storage) */
 typedef struct {
   real_T Signal;                       /* '<Root>/Signal' */
@@ -73,29 +51,8 @@ typedef struct {
 
 /* Real-time Model Data Structure */
 struct tag_RTM_Porportional_Follower_T {
-  const char_T *errorStatus;
-  RTWSolverInfo solverInfo;
-
-  /*
-   * Timing:
-   * The following substructure contains information regarding
-   * the timing information for the model.
-   */
-  struct {
-    uint32_T clockTick0;
-    time_T stepSize0;
-    uint32_T clockTick1;
-    SimTimeStep simTimeStep;
-    time_T *t;
-    time_T tArray[2];
-  } Timing;
+  const char_T * volatile errorStatus;
 };
-
-/* Block signals (default storage) */
-extern B_Porportional_Follower_Test_T Porportional_Follower_Test_B;
-
-/* Block states (default storage) */
-extern DW_Porportional_Follower_Test_T Porportional_Follower_Test_DW;
 
 /* External inputs (root inport signals with default storage) */
 extern ExtU_Porportional_Follower_Te_T Porportional_Follower_Test_U;
@@ -130,7 +87,6 @@ extern RT_MODEL_Porportional_Followe_T *const Porportional_Follower_Test_M;
  *
  * '<Root>' : 'TestController'
  * '<S1>'   : 'TestController/Porportional_Follower_Test'
- * '<S2>'   : 'TestController/Porportional_Follower_Test/Delta Time'
  */
 #endif                            /* RTW_HEADER_Porportional_Follower_Test_h_ */
 

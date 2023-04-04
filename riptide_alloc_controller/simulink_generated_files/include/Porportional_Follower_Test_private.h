@@ -7,9 +7,9 @@
  *
  * Code generated for Simulink model 'Porportional_Follower_Test'.
  *
- * Model version                  : 1.6
+ * Model version                  : 1.7
  * Simulink Coder version         : 9.8 (R2022b) 13-May-2022
- * C/C++ source code generated on : Mon Mar 27 19:02:21 2023
+ * C/C++ source code generated on : Mon Apr  3 12:52:26 2023
  *
  * Target selection: ert_shrlib.tlc
  * Embedded hardware selection: Intel->x86-64 (Windows64)
@@ -23,19 +23,6 @@
 #define RTW_HEADER_Porportional_Follower_Test_private_h_
 #include "rtwtypes.h"
 #include "Porportional_Follower_Test_types.h"
-
-/* Private macros used by the generated code to access rtModel */
-#ifndef rtmIsMajorTimeStep
-#define rtmIsMajorTimeStep(rtm)        (((rtm)->Timing.simTimeStep) == MAJOR_TIME_STEP)
-#endif
-
-#ifndef rtmIsMinorTimeStep
-#define rtmIsMinorTimeStep(rtm)        (((rtm)->Timing.simTimeStep) == MINOR_TIME_STEP)
-#endif
-
-#ifndef rtmSetTPtr
-#define rtmSetTPtr(rtm, val)           ((rtm)->Timing.t = (val))
-#endif
 #endif                    /* RTW_HEADER_Porportional_Follower_Test_private_h_ */
 
 /*

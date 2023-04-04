@@ -37,7 +37,7 @@ else()
   set(SIMULINK_LIB ${SIMULINK_INSTALL_DIR}/bin/x86/${SIMULINK_SO_NAME})
 endif()
 
-set(SIMULINK_INCLUDE ${${SIMULINK_INSTALL_DIR}/include})
+set(SIMULINK_INCLUDE ${SIMULINK_INSTALL_DIR}/include)
 
 set_target_properties(simulink_generated_library PROPERTIES
   IMPORTED_LOCATION "${SIMULINK_LIB}"
@@ -66,6 +66,9 @@ ament_target_dependencies(controller
 
 install(TARGETS controller
   DESTINATION lib/${PROJECT_NAME})
+
+install(FILES ${SIMULINK_LIB} 
+  DESTINATION lib)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
