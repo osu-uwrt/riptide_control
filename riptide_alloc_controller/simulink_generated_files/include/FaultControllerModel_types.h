@@ -7,9 +7,9 @@
  *
  * Code generated for Simulink model 'FaultControllerModel'.
  *
- * Model version                  : 1.31
+ * Model version                  : 1.32
  * Simulink Coder version         : 9.8 (R2022b) 13-May-2022
- * C/C++ source code generated on : Sun Apr 16 15:36:33 2023
+ * C/C++ source code generated on : Mon Apr 17 18:11:39 2023
  *
  * Target selection: ert_shrlib.tlc
  * Embedded hardware selection: Intel->x86-64 (Windows64)

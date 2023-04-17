@@ -7,9 +7,9 @@
  *
  * Code generated for Simulink model 'FaultControllerModel'.
  *
- * Model version                  : 1.31
+ * Model version                  : 1.32
  * Simulink Coder version         : 9.8 (R2022b) 13-May-2022
- * C/C++ source code generated on : Sun Apr 16 15:36:33 2023
+ * C/C++ source code generated on : Mon Apr 17 18:11:39 2023
  *
  * Target selection: ert_shrlib.tlc
  * Embedded hardware selection: Intel->x86-64 (Windows64)
@@ -69,8 +69,17 @@ typedef struct {
   real_T LinearDragCoefficients[6];    /* '<Root>/Linear Drag Coefficients' */
   real_T QuadraticDragCoefficients[6];/* '<Root>/Quadratic Drag Coefficients' */
   real_T ThrusterDirections;           /* '<Root>/Thruster Directions' */
-  real_T MiscThrusterforcetoDShotValues[11];
-                              /* '<Root>/Misc Thruster force to DShot Values' */
+  real_T MaxForce;                     /* '<Root>/Max Force' */
+  real_T MinForce;                     /* '<Root>/Min Force' */
+  real_T StartUpForce;                 /* '<Root>/StartUp Force' */
+  real_T StartUpPositiveSlope;         /* '<Root>/StartUp Positive Slope' */
+  real_T StartUpYInt;                  /* '<Root>/StartUp Y Int' */
+  real_T StartUpNegativeSlope;         /* '<Root>/StartUp Negative Slope' */
+  real_T StartUpNegIntercept;          /* '<Root>/StartUp Neg Intercept' */
+  real_T ThrustPositiveSlope;          /* '<Root>/Thrust Positive Slope' */
+  real_T ThrustYInt;                   /* '<Root>/Thrust Y Int' */
+  real_T ThrustNegSlope;               /* '<Root>/Thrust Neg Slope' */
+  real_T ThrustNegYInt;                /* '<Root>/Thrust Neg Y Int' */
 } ExtU_FaultControllerModel_T;
 
 /* External outputs (root outports fed by signals with default storage) */
