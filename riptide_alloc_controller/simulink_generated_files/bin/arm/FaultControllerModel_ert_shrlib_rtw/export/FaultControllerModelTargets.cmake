@@ -16,7 +16,7 @@ set(CMAKE_IMPORT_FILE_VERSION 1)
 set(_targetsDefined)
 set(_targetsNotDefined)
 set(_expectedTargets)
-foreach(_expectedTarget Porportional_Follower_Test::Porportional_Follower_Test)
+foreach(_expectedTarget FaultControllerModel::FaultControllerModel)
   list(APPEND _expectedTargets ${_expectedTarget})
   if(NOT TARGET ${_expectedTarget})
     list(APPEND _targetsNotDefined ${_expectedTarget})
@@ -49,17 +49,17 @@ if(_IMPORT_PREFIX STREQUAL "/")
   set(_IMPORT_PREFIX "")
 endif()
 
-# Create imported target Porportional_Follower_Test::Porportional_Follower_Test
-add_library(Porportional_Follower_Test::Porportional_Follower_Test SHARED IMPORTED)
+# Create imported target FaultControllerModel::FaultControllerModel
+add_library(FaultControllerModel::FaultControllerModel SHARED IMPORTED)
 
-set_target_properties(Porportional_Follower_Test::Porportional_Follower_Test PROPERTIES
+set_target_properties(FaultControllerModel::FaultControllerModel PROPERTIES
   INTERFACE_COMPILE_FEATURES "c_std_99"
-  INTERFACE_INCLUDE_DIRECTORIES "${_IMPORT_PREFIX};${_IMPORT_PREFIX}/Porportional_Follower_Test_ert_shrlib_rtw"
+  INTERFACE_INCLUDE_DIRECTORIES "${_IMPORT_PREFIX};${_IMPORT_PREFIX}/FaultControllerModel_ert_shrlib_rtw"
 )
 
 # Load information for each installed configuration.
 get_filename_component(_DIR "${CMAKE_CURRENT_LIST_FILE}" PATH)
-file(GLOB CONFIG_FILES "${_DIR}/Porportional_Follower_TestTargets-*.cmake")
+file(GLOB CONFIG_FILES "${_DIR}/FaultControllerModelTargets-*.cmake")
 foreach(f ${CONFIG_FILES})
   include(${f})
 endforeach()

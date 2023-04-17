@@ -17,7 +17,7 @@ find_package(yaml_cpp_vendor REQUIRED)
 
 set(SIMULINK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/riptide_controller_simulink)
 set(SIMULINK_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/simulink_generated_files)
-set(SIMULINK_SO_NAME Porportional_Follower_Test.so)
+set(SIMULINK_SO_NAME FaultControllerModel.so)
 
 add_library(simulink_generated_library SHARED IMPORTED)
 
@@ -41,7 +41,6 @@ set(SIMULINK_INCLUDE ${SIMULINK_INSTALL_DIR}/include)
 
 set_target_properties(simulink_generated_library PROPERTIES
   IMPORTED_LOCATION "${SIMULINK_LIB}"
-  INTERFACE_INCLUDE_DIRECTORIES "${SIMULINK_INCLUDE}"
 )
 
 add_executable(controller src/controller.cpp src/allocated_controller.cpp)

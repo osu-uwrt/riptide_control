@@ -3,13 +3,13 @@
  * course requirements at degree granting institutions only.  Not for
  * government, commercial, or other organizational use.
  *
- * File: Porportional_Follower_Test_private.h
+ * File: FaultControllerModel_types.h
  *
- * Code generated for Simulink model 'Porportional_Follower_Test'.
+ * Code generated for Simulink model 'FaultControllerModel'.
  *
- * Model version                  : 1.7
+ * Model version                  : 1.31
  * Simulink Coder version         : 9.8 (R2022b) 13-May-2022
- * C/C++ source code generated on : Mon Apr  3 12:52:26 2023
+ * C/C++ source code generated on : Sun Apr 16 15:36:33 2023
  *
  * Target selection: ert_shrlib.tlc
  * Embedded hardware selection: Intel->x86-64 (Windows64)
@@ -19,11 +19,13 @@
  * Validation result: Not run
  */
 
-#ifndef RTW_HEADER_Porportional_Follower_Test_private_h_
-#define RTW_HEADER_Porportional_Follower_Test_private_h_
-#include "rtwtypes.h"
-#include "Porportional_Follower_Test_types.h"
-#endif                    /* RTW_HEADER_Porportional_Follower_Test_private_h_ */
+#ifndef RTW_HEADER_FaultControllerModel_types_h_
+#define RTW_HEADER_FaultControllerModel_types_h_
+
+/* Forward declaration for rtModel */
+typedef struct tag_RTM_FaultControllerModel_T RT_MODEL_FaultControllerModel_T;
+
+#endif                            /* RTW_HEADER_FaultControllerModel_types_h_ */
 
 /*
  * File trailer for generated code.
