@@ -36,8 +36,8 @@ def generate_launch_description():
 
             launch_ros.actions.Node(
                 package="riptide_controllers2",
-                executable="controller",
-                name="controller",
+                executable="thruster_solver",
+                name="thruster_solver",
                 output="screen",
                 parameters=[
                     {"vehicle_config": config},
