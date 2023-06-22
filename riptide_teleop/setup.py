@@ -25,7 +25,8 @@ setup(
     entry_points={
         'console_scripts': [
             'ps3_teleop = riptide_teleop2.ps3_teleop:main',
-            "keyboard_teleop = riptide_teleop2.keyboard_teleop:main"
+            "keyboard_teleop = riptide_teleop2.keyboard_teleop:main",
+            "xbox_teleop = riptide_teleop2.xbox_teleop:main"
         ],
     },
 )
