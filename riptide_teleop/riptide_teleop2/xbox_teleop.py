@@ -80,6 +80,10 @@ class XBOXTeleop(Node):
         if msg.buttons[BUTTON_X]:
             self.enabled = False
             self.kill_msg.switch_asserting_kill = True
+            cmd = ControllerCommand()
+            cmd.mode = ControllerCommand.DISABLED
+            self.lin_pub.publish(cmd)
+            self.ang_pub.publish(cmd)
             return
 
         # Pause button
