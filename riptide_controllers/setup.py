@@ -32,6 +32,7 @@ setup(
             'thruster_test = riptide_controllers2.actions.thruster_test_dshot:main',
             'calibrate_drag = riptide_controllers2.actions.calibrate_drag:main',
             'calibrate_buoyancy = riptide_controllers2.actions.calibrate_buoyancy:main',
+            'calibrate_thruster = riptide_controllers2.actions.calibrate_thruster:main',
         ],
     },
     py_modules=[
