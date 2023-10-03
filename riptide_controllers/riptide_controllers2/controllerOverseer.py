@@ -8,7 +8,8 @@ import numpy as np
 
 import yaml
 
-from riptide_msgs2.msg import DshotPartialTelemetry
+from riptide_msgs2.msg import DshotPartialTelemetry, KillSwitchReport
+from nav_msgs.msg import Odometry
 from rcl_interfaces.srv import SetParameters
 from rcl_interfaces.msg import Parameter, ParameterValue
 from std_msgs.msg import Int16
@@ -54,6 +55,7 @@ class controllerOverseer(Node):
 
         #default thruster weights and working thrusters
         self.activeThrusters = [True, True, True, True, True, True, True, True]
+        self.submerdgedThrusters = [True, True, True, True, True, True, True, True]
         self.thrusterWeights = [1,1,1,1,1,1,1,1]
 
         # the thruster mode
@@ -67,6 +69,10 @@ class controllerOverseer(Node):
         self.thrusterWeightsClient = self.create_client(SetParameters, "thrusterSolver/set_parameters", qos_profile_services_default)
         #thruster mode
         self.create_subscription(Int16, "thrusterSolver/thrusterState", )
+        #software kill 
+        self.killPub = self.create_publisher(KillSwitchReport, "command/software_kill", qos_profile_system_default)
+        #odometry filtered
+        self.create_subscription(Odometry, "odometry/filtered", self.odometryCB, qos_profile_system_default)
 
     def thrusterTelemetryCB(self, msg: DshotPartialTelemetry):
         #wether or not the thrusterSolverweigths need adjusted
@@ -113,9 +119,58 @@ class controllerOverseer(Node):
             #update the weights
             self.adjustThrusterWeights()
         
+    def odometryCB(self, msg):
+        #check if thrusters are submerged
 
     def adjustThrusterWeights(self):
-        #TODO paramter weight calculation
+        #TODO add weight values into descriptions
+
+        #number of active thrusters 
+        activeThrusterCount = 0
+        submerdgedThrusters = 0
+
+        #shutoff inactive thrusters - disabled or broken
+        for i, isActive in self.activeThrusters:
+            if(isActive):
+                activeThrusterCount += 1
+
+                #play around with weights for thrusters above surface
+                if not (self.submerdgedThrusters[i] == True):
+                    #if thruster is not submerdged
+                    self.thrusterWeights[i] = 4
+                else:
+                    #thruster is active and submerdged
+                    submerdgedThrusters += 1
+                    self.thrusterWeights = 1
+
+            else:
+                #if a thruster is inactive - raise the cost of "using" thruster
+                self.thrusterWeights[i] = 999999
+        
+        if(activeThrusterCount <= 6):
+            #if system is not full actuated, it cannot be optimized, very high rpms / force can be requested
+            #for the safety of the system, this will autodisable robot (probably)
+            #remove if PIA
+
+            self.get_logger().error("System has become underactuated. Only:  " + str(activeThrusterCount) + " thrusters are active. Killing Thrusters!")
+            
+            #add a kill switch report
+            msg = KillSwitchReport()
+            msg.sender_id = self.get_name()
+            msg.kill_switch_id = 3 # this is the debug switch - ask firmware to fix
+            msg.switch_asserting_kill = True
+            msg.switch_needs_update = True
+
+            self.killPub.publish(msg)
+            
+        if(submerdgedThrusters >= 8):
+            #take into account control modes only if all actuators are working
+            
+            if(self.thrusterMode == 2):
+                #apply low downdraft
+                self.thrusterWeights[4] = 3
+                self.thrusterWeights[5] = 3
+                
 
         #declare the weight paramter value
         paramValue = ParameterValue()
