@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 import csv
 import yaml
+import os
 
 import rclpy
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
@@ -15,13 +16,18 @@ from rclpy.qos import qos_profile_system_default, qos_profile_sensor_data
 from riptide_msgs2.action import CalibrateThruster
 from riptide_msgs2.msg import DshotCommand
 
+NUETRAL_DSHOT = 0
+
 
 class CalibrateThrusterAction(Node):
 
     def __init__(self):
         # Create Node
         super().__init__('calibrate_thruster')
+
         self.running = False
+        self.dshot = 0
+        self.thruster_num = 0
 
         self.dshot_pub = self.create_publisher(
             DshotCommand, "command/dshot", qos_profile_sensor_data)
@@ -30,16 +36,17 @@ class CalibrateThrusterAction(Node):
             self,
             CalibrateThruster,
             'calibrate_thruster',
-            self.execute_callback,
+            self.collect_data,
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
             callback_group=ReentrantCallbackGroup())
 
-    def execute_callback(self, goal_handle):
+        # Create timer to keep publishing the dshot command to prevent firmware from timing out
+        self.timer = self.create_timer(0.075, self.publish_dshot_command)
 
+    def collect_data(self, goal_handle):
+        self.thruster_num = goal_handle.request.thruster_num
         feedback_msg = CalibrateThruster.Feedback()
-        dshot_msg = DshotCommand()
-        dshot_values = self.zeros_thruster_len()
 
         self.get_logger().info('Press any key to tare load cell:')
         wait_for_input = input()
@@ -51,23 +58,22 @@ class CalibrateThrusterAction(Node):
         self.get_logger().info('Thruster calibration starting...')
         flag = True
         rows_data = []
-        for i, dshot in enumerate(range(DshotCommand.DSHOT_MIN, DshotCommand.DSHOT_MAX, goal_handle.request.step_size)):
+        for dshot_value in range(DshotCommand.DSHOT_MIN, DshotCommand.DSHOT_MAX, goal_handle.request.step_size):
             # Once egative dshot commands have finished, operator needs to flip thruster before continueing
-            if dshot > 0 and flag:
+            if dshot_value > NUETRAL_DSHOT and flag:
                 flag = False
                 self.get_logger().info('Please flip thruster, press any key once complete:')
                 wait_for_input = input()
 
             # Send dshot command to thruster ### DO I NEED A -1??????
-            dshot_values[goal_handle.request.thruster_num] = dshot
-            dshot_msg.values = dshot_values
-            self.dshot_pub.publish(dshot_msg)
+            self.dshot = dshot_value
+            self.publish_dshot_command()
 
             # Send action feedback on current status
-            feedback_msg.current_dshot = dshot
+            feedback_msg.current_dshot = dshot_value
             goal_handle.publish_feedback(feedback_msg)
             self.get_logger().info(
-                f"Current dshot value: {dshot}")
+                f"Current dshot value: {dshot_value}")
 
             # Delay for transients to setting and for thruster to respond
             time.sleep(0.5)
@@ -77,35 +83,20 @@ class CalibrateThrusterAction(Node):
             ####  ethans_code.get_data()  ####
             ##################################
             (avg_force, avg_rpm) = (0, 0)
-            rows_data[i] = [dshot, avg_rpm, avg_force]
+            rows_data.append([dshot_value, avg_rpm, avg_force])
 
         # Data collection finished, send command to turn off thruster
-        dshot_msg.values = [0]*len(dshot_values)
-        self.dshot_pub.publish(dshot_msg)
+        self.dshot = NUETRAL_DSHOT
+        self.publish_dshot_command()
 
-        try:
-            # Create unique file name to store data to
-            file_name = self.create_filename()
-            filepath = f"thruster_cal_data/{file_name}"
-            with open(filepath, 'w', newline='') as csv_file:
-                # Write data in file
-                csv_writer = csv.writer(csv_file)
-                csv_writer.writerow(["dshot", "rpm", "force (N)"])
-                csv_writer.writerows(rows_data)
-        except Exception as e:
-            # Error running code, report error
-            self.get_logger().error(str(e))
-            self.get_logger().info(
-                f"File could not open, here's the data: {rows_data}")
-            goal_handle.abort()
-            self.running = False
+        # Save data and report results
+        result = CalibrateThruster.Result()
+        result.results_file_name = self.save_data(rows_data)
+        if result.results_file_name:
+            goal_handle.succeed(result)
         else:
-            # Success, return finished data file
-            result = CalibrateThruster.Result()
-            goal_handle.succeed()
-            self.running = False
-            result.file_name = file_name
-            return result.file_name
+            goal_handle.abort(result)
+        self.running = False
 
     def goal_callback(self, goal_request):
         # Accept or reject a client request to begin an action
@@ -122,12 +113,50 @@ class CalibrateThrusterAction(Node):
         self._action_server.destroy()
         super().destroy_node()
 
+    def publish_dshot_command(self):
+        # Publishes dshot value to specified thruster and 0 to all other thrusters
+        # Function is called on timer to prevent firmware from timing out
+        dshot_msg = DshotCommand()
+        dshot_values = self.zeros_thruster_len()
+        dshot_values[self.thruster_num] = self.dshot
+        dshot_msg.values = dshot_values
+        self.dshot_pub.publish(self.dshot_msg)
+
+    def save_data(self, data):
+        # Saves each row of data into a csv file and returns the file name
+        try:
+            # Create unique file name to store data to
+            file_name = self.create_filename()
+            with open(file_name, 'w', newline='') as csv_file:
+                # Write data in file
+                csv_writer = csv.writer(csv_file)
+                csv_writer.writerow(["dshot", "rpm", "force (N)"])
+                csv_writer.writerows(data)
+
+            # File saved successfully, return the file name
+            return file_name
+        except Exception as e:
+            # Error opening file, report error
+            self.get_logger().error(str(e))
+            self.get_logger().info(
+                f"File could not open, here's the data: {data}")
+            return ""  # Return an empty string to indicate failure
+
     def create_filename(self) -> str:
         # Creates unique filename from current date and time
-        base_filename = "thruster_cal_data"
+        base_filename = f"thruster{self.thruster_num}_cal_data"
         current_datetime = datetime.now()
         date_string = current_datetime.strftime("%Y-%m-%d-%H-%M")
-        return f"{base_filename}_{date_string}.csv"
+
+        # Get the user's home directory
+        home_dir = os.path.expanduser("~")
+        folder_path = os.path.join(home_dir, "thruster_cal_data")
+        # Check if the user has a thruster_cal_data folder, if not make one
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
+
+        # Return joined file name in path
+        return os.path.join(folder_path, f"{base_filename}_{date_string}.csv")
 
     def zeros_thruster_len(self):
         # Load thruster info
