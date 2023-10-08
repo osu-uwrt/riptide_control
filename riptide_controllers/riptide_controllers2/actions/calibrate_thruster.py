@@ -190,7 +190,6 @@ class CalibrateThrusterAction(Node):
     def get_thruster_length(self) -> int:
         # Returns amount of thrusters on vehicle
         # Load thruster info
-        """
         self.declare_parameter("vehicle_config", "")
         config_path = self.get_parameter("vehicle_config").value
         if (config_path == ''):
@@ -199,8 +198,8 @@ class CalibrateThrusterAction(Node):
             return 8
         with open(config_path, 'r') as stream:
             config_file = yaml.safe_load(stream)
-        thruster_info = config_file['thrusters']"""
-        return 8  # len(thruster_info)
+        thruster_info = config_file['thrusters']
+        return len(thruster_info)
 
     def wait_for_input(self):
         # Goes into loop until Node has recieved a trigger command
