@@ -122,6 +122,8 @@ class controllerOverseer(Node):
     def odometryCB(self, msg):
         #check if thrusters are submerged
 
+        
+
     def adjustThrusterWeights(self):
         #TODO add weight values into descriptions
 
