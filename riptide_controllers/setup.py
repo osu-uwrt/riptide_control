@@ -33,6 +33,7 @@ setup(
             'calibrate_drag = riptide_controllers2.actions.calibrate_drag:main',
             'calibrate_buoyancy = riptide_controllers2.actions.calibrate_buoyancy:main',
             'calibrate_thruster = riptide_controllers2.actions.calibrate_thruster:main',
+            'read_load_cell = riptide_controllers2.actions.load_cell_reader:main'
         ],
     },
     py_modules=[

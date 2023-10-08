@@ -75,8 +75,15 @@ def main(args=None):
     pub = node.create_publisher(
         Int32, "force_gauge/force", qos_profile_system_default)
 
-    ser = serial.Serial(node.get_parameter("port").value, 115200)
-    decoder = SerialDecoder()
+    openedPort = False
+    while(openedPort == False):
+        try:
+            ser = serial.Serial(node.get_parameter("port").value, 115200)
+            decoder = SerialDecoder()
+            openedPort = True
+        except:
+            node.get_logger().info("Cannot open port: " + str(node.get_parameter("port").value))
+
 
     while True:
         while ser.in_waiting:
