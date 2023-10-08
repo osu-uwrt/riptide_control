@@ -18,7 +18,7 @@ import os
 
 import rclpy
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
-from std_msgs.msg import Empty, Int32
+from std_msgs.msg import Empty, Float32
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
@@ -58,7 +58,7 @@ class CalibrateThrusterAction(Node):
         self.thruster_rpm_sub = self.create_subscription(
             Empty, "ENTER_RPM_TOPIC_NAME_HERE", self.rpm_callback, qos_profile_sensor_data)
         self.thruster_force_sub = self.create_subscription(
-            Int32, "force_gauge/force", self.force_callback, qos_profile_sensor_data)
+            Float32, "force_gauge/force", self.force_callback, qos_profile_sensor_data)
 
         # Create action server
         self._action_server = ActionServer(
@@ -229,7 +229,7 @@ class CalibrateThrusterAction(Node):
         if self.collecting_data:
             self.rpm.append(msg[self.thruster_num])
 
-    def force_callback(self, msg: Int32):
+    def force_callback(self, msg: Float32):
         # Adds force data to list if data is collecting
         if self.collecting_data:
             self.force.append(msg)
