@@ -25,14 +25,19 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_system_default, qos_profile_sensor_data
 
 from riptide_msgs2.action import CalibrateThruster
-from riptide_msgs2.msg import DshotCommand
+from riptide_msgs2.msg import DshotCommand, DshotRPMFeedback
 
 NUETRAL_DSHOT = 0           # Dshot value which is "off" for the thrusters
-DSHOT_PUB_PERIOD = 0.075    # Time in seconds between dshot timer publishes
-DELAY_TIME = 0.5            # Delay in seconds between sending command and collecting data
-N_SAMPLES = 15              # Number of samples to collect at each dshot value
+DSHOT_PUB_PERIOD = 0.01    # Time in seconds between dshot timer publishes
+DELAY_TIME = 2.5           # Delay in seconds between sending command and collecting data
+N_SAMPLES = 50              # Number of samples to collect at each dshot value
 COLLECTION_TIMEOUT = 15     # Allowed data collection time in seconds before timeout
 
+#min and max dshot values for calibration
+DSHOT_MIN = 35
+DSHOT_MAX = 37
+
+NEGATIVE = False
 
 class CalibrateThrusterAction(Node):
 
@@ -52,13 +57,13 @@ class CalibrateThrusterAction(Node):
 
         # Create publishers and subscribers
         self.dshot_pub = self.create_publisher(
-            DshotCommand, "command/dshot", qos_profile_sensor_data)
+            DshotCommand, "command/thruster_rpm", qos_profile_sensor_data)
         self.trigger_sub = self.create_subscription(
             Empty, "command/trigger", self.trigger_callback, qos_profile_system_default)
         self.thruster_rpm_sub = self.create_subscription(
-            Empty, "ENTER_RPM_TOPIC_NAME_HERE", self.rpm_callback, qos_profile_sensor_data)
+            DshotRPMFeedback, "state/thrusters/rpm_complete", self.rpm_callback, qos_profile_sensor_data)
         self.thruster_force_sub = self.create_subscription(
-            Float32, "force_gauge/force", self.force_callback, qos_profile_sensor_data)
+            Float32, "/force_gauge/force", self.force_callback, qos_profile_sensor_data)
 
         # Create action server
         self._action_server = ActionServer(
@@ -82,6 +87,8 @@ class CalibrateThrusterAction(Node):
 
         # Wait for user to tare scale by reseting the arduino
         self.get_logger().info(
+            'Please ensure rpm echo node is running!')
+        self.get_logger().info(
             'Please reset arduino to tare the scale, publish command/trigger once complete')
         self.wait_for_input()
 
@@ -90,11 +97,35 @@ class CalibrateThrusterAction(Node):
         flag = True
         rows_data = []
         flip_force = -1
-        for dshot_value in range(DshotCommand.DSHOT_MIN, DshotCommand.DSHOT_MAX, goal_handle.request.step_size):
+
+        #generate the dshot values to measure at
+        measurementValues = []
+        measurementValuesNegative = []
+        val = DSHOT_MIN
+        while val < DSHOT_MAX:
+            measurementValues.append(round(val))
+            measurementValuesNegative.append(-round(val))
+
+            #step size is now a percent
+            val = val * (100 + goal_handle.request.step_size) / 100
+
+        measurementValues.append(DSHOT_MAX)
+        measurementValuesNegative.append(-DSHOT_MAX)
+
+        for value in measurementValuesNegative:
+            measurementValues.append(value)
+
+        #also append the last value
+        for dshot_value in measurementValues:
             # Once negative dshot commands have finished, operator needs to flip thruster before continueing
-            if dshot_value > NUETRAL_DSHOT and flag:
+            if dshot_value < 0 and flag:
                 flag = False
                 flip_force = 1
+
+                #stop while waiting
+                self.dshot = 0.0
+                self.publish_dshot_command()
+
                 self.get_logger().info('Please flip thruster, publish command/trigger once complete')
                 self.wait_for_input()
 
@@ -114,6 +145,8 @@ class CalibrateThrusterAction(Node):
             # Collect data and store it
             (avg_rpm, avg_force) = self.get_data(N_SAMPLES)
             rows_data.append([dshot_value, avg_rpm, flip_force*avg_force])
+
+            self.get_logger().info("Saving: " + str(dshot_value) + " Avg RPM: " + str(avg_rpm) + " Avg Force: " + str(avg_force))
 
         # Data collection finished, send command to turn off thruster
         self.dshot = NUETRAL_DSHOT
@@ -216,7 +249,12 @@ class CalibrateThrusterAction(Node):
         # Function is called on timer to prevent firmware from timing out
         dshot_msg = DshotCommand()
         dshot_values = [NUETRAL_DSHOT]*self.thruster_length
-        dshot_values[self.thruster_num] = self.dshot
+
+        if(NEGATIVE):
+            dshot_values[self.thruster_num] = -self.dshot
+        else:
+            dshot_values[self.thruster_num] = self.dshot
+
         dshot_msg.values = dshot_values
         self.dshot_pub.publish(dshot_msg)
 
@@ -224,15 +262,15 @@ class CalibrateThrusterAction(Node):
         # Indicated user has triggered to move on in code
         self.triggered = True
 
-    def rpm_callback(self, msg):
+    def rpm_callback(self, msg:DshotRPMFeedback):
         # Adds rpm data to list if data is collecting
         if self.collecting_data:
-            self.rpm.append(msg[self.thruster_num])
+            self.rpm.append(msg.rpm[self.thruster_num])
 
     def force_callback(self, msg: Float32):
         # Adds force data to list if data is collecting
         if self.collecting_data:
-            self.force.append(msg)
+            self.force.append(msg.data)
 
     ##########################################
     #     Boiler plate action functions      #
