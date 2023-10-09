@@ -29,13 +29,13 @@ from riptide_msgs2.msg import DshotCommand, DshotRPMFeedback
 
 NUETRAL_DSHOT = 0           # Dshot value which is "off" for the thrusters
 DSHOT_PUB_PERIOD = 0.01    # Time in seconds between dshot timer publishes
-DELAY_TIME = 2.5           # Delay in seconds between sending command and collecting data
-N_SAMPLES = 50              # Number of samples to collect at each dshot value
+DELAY_TIME = 5           # Delay in seconds between sending command and collecting data
+N_SAMPLES = 15              # Number of samples to collect at each dshot value
 COLLECTION_TIMEOUT = 15     # Allowed data collection time in seconds before timeout
 
 #min and max dshot values for calibration
-DSHOT_MIN = 35
-DSHOT_MAX = 37
+DSHOT_MIN = 20
+DSHOT_MAX = 725
 
 NEGATIVE = False
 
@@ -96,7 +96,7 @@ class CalibrateThrusterAction(Node):
         self.get_logger().info('Thruster calibration starting...')
         flag = True
         rows_data = []
-        flip_force = -1
+        flip_force = 1
 
         #generate the dshot values to measure at
         measurementValues = []
@@ -104,13 +104,13 @@ class CalibrateThrusterAction(Node):
         val = DSHOT_MIN
         while val < DSHOT_MAX:
             measurementValues.append(round(val))
-            measurementValuesNegative.append(-round(val))
+            #measurementValuesNegative.append(-round(val))
 
             #step size is now a percent
             val = val * (100 + goal_handle.request.step_size) / 100
 
         measurementValues.append(DSHOT_MAX)
-        measurementValuesNegative.append(-DSHOT_MAX)
+        #measurementValuesNegative.append(-DSHOT_MAX)
 
         for value in measurementValuesNegative:
             measurementValues.append(value)
@@ -120,10 +120,10 @@ class CalibrateThrusterAction(Node):
             # Once negative dshot commands have finished, operator needs to flip thruster before continueing
             if dshot_value < 0 and flag:
                 flag = False
-                flip_force = 1
+                flip_force = -1
 
                 #stop while waiting
-                self.dshot = 0.0
+                self.dshot = 0
                 self.publish_dshot_command()
 
                 self.get_logger().info('Please flip thruster, publish command/trigger once complete')
