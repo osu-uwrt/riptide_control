@@ -25,7 +25,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_system_default, qos_profile_sensor_data
 
 from riptide_msgs2.action import CalibrateThruster
-from riptide_msgs2.msg import DshotCommand, DshotRPMFeedback
+from riptide_msgs2.msg import DshotCommand, DshotRPMFeedback, BatteryStatus
 
 NUETRAL_DSHOT = 0           # Dshot value which is "off" for the thrusters
 DSHOT_PUB_PERIOD = 0.01    # Time in seconds between dshot timer publishes
@@ -33,11 +33,12 @@ DELAY_TIME = 5           # Delay in seconds between sending command and collecti
 N_SAMPLES = 15              # Number of samples to collect at each dshot value
 COLLECTION_TIMEOUT = 15     # Allowed data collection time in seconds before timeout
 
-#min and max dshot values for calibration
+# min and max dshot values for calibration
 DSHOT_MIN = 20
 DSHOT_MAX = 725
 
 NEGATIVE = False
+
 
 class CalibrateThrusterAction(Node):
 
@@ -52,8 +53,12 @@ class CalibrateThrusterAction(Node):
         self.dshot = NUETRAL_DSHOT
         self.thruster_length = self.get_thruster_length()
         self.thruster_num = 0
+        self.idle_current = 0
+        self.present_current = 0
+        self.battery_serial = None
         self.rpm = []
         self.force = []
+        self.power = []
 
         # Create publishers and subscribers
         self.dshot_pub = self.create_publisher(
@@ -64,6 +69,8 @@ class CalibrateThrusterAction(Node):
             DshotRPMFeedback, "state/thrusters/rpm_complete", self.rpm_callback, qos_profile_sensor_data)
         self.thruster_force_sub = self.create_subscription(
             Float32, "/force_gauge/force", self.force_callback, qos_profile_sensor_data)
+        self.electrical_sub = self.create_subscription(
+            BatteryStatus, "state/battery", self.electrical_callback, qos_profile_sensor_data)
 
         # Create action server
         self._action_server = ActionServer(
@@ -88,41 +95,43 @@ class CalibrateThrusterAction(Node):
         # Wait for user to tare scale by reseting the arduino
         self.get_logger().info(
             'Please ensure rpm echo node is running!')
+        self.get_logger().info("The background current will also be measured at this time")
         self.get_logger().info(
             'Please reset arduino to tare the scale, publish command/trigger once complete')
         self.wait_for_input()
 
         # Start calibration, looping through dshot values and saving data
         self.get_logger().info('Thruster calibration starting...')
+        self.idle_current = self.present_current
         flag = True
         rows_data = []
         flip_force = 1
 
-        #generate the dshot values to measure at
+        # generate the dshot values to measure at
         measurementValues = []
         measurementValuesNegative = []
         val = DSHOT_MIN
         while val < DSHOT_MAX:
             measurementValues.append(round(val))
-            #measurementValuesNegative.append(-round(val))
+            # measurementValuesNegative.append(-round(val))
 
-            #step size is now a percent
+            # step size is now a percent
             val = val * (100 + goal_handle.request.step_size) / 100
 
         measurementValues.append(DSHOT_MAX)
-        #measurementValuesNegative.append(-DSHOT_MAX)
+        # measurementValuesNegative.append(-DSHOT_MAX)
 
         for value in measurementValuesNegative:
             measurementValues.append(value)
 
-        #also append the last value
+        # also append the last value
         for dshot_value in measurementValues:
             # Once negative dshot commands have finished, operator needs to flip thruster before continueing
             if dshot_value < 0 and flag:
                 flag = False
                 flip_force = -1
 
-                #stop while waiting
+                # stop while waiting
                 self.dshot = 0
                 self.publish_dshot_command()
 
@@ -143,10 +152,13 @@ class CalibrateThrusterAction(Node):
             time.sleep(DELAY_TIME)
 
             # Collect data and store it
-            (avg_rpm, avg_force) = self.get_data(N_SAMPLES)
-            rows_data.append([dshot_value, avg_rpm, flip_force*avg_force])
+            (avg_rpm, avg_current, avg_voltage,
+             avg_force) = self.get_data(N_SAMPLES)
+            rows_data.append(
+                [dshot_value, avg_rpm, avg_current, avg_voltage, flip_force*avg_force])
 
-            self.get_logger().info("Saving: " + str(dshot_value) + " Avg RPM: " + str(avg_rpm) + " Avg Force: " + str(avg_force))
+            self.get_logger().info("Saving: " + str(dshot_value) + " Avg RPM: " +
+                                   str(avg_rpm) + " Avg Force: " + str(avg_force) + " Avg current: " + str(avg_current) + " Avg voltage: " + str(avg_voltage))
 
         # Data collection finished, send command to turn off thruster
         self.dshot = NUETRAL_DSHOT
@@ -169,6 +181,8 @@ class CalibrateThrusterAction(Node):
 
         # Clear previous data and start collecting
         self.rpm = []
+        self.current = []
+        self.voltage = []
         self.force = []
         self.collecting_data = True
 
@@ -179,10 +193,10 @@ class CalibrateThrusterAction(Node):
                 self.get_logger().error(
                     f"Data collection timed out at dshot value {self.dshot}")
                 # Data failed to collect, return imaginary numbers to indicate failure
-                return (1j, 1j)
+                return (1j, 1j, 1j, 1j)
         # Stop data collection and return averages
         self.collecting_data = False
-        return (mean(self.rpm), mean(self.force))
+        return (mean(self.rpm), mean(self.current), mean(self.voltage), mean(self.force))
 
     def save_data(self, data) -> str:
         # Saves each row of data into a csv file and returns the file name
@@ -192,7 +206,8 @@ class CalibrateThrusterAction(Node):
             with open(file_name, 'w', newline='') as csv_file:
                 # Write data in file
                 csv_writer = csv.writer(csv_file)
-                csv_writer.writerow(["dshot", "rpm", "force (N)"])
+                csv_writer.writerow(
+                    ["dshot", "rpm", "current", "voltage", "force (N)"])
                 csv_writer.writerows(data)
 
             # File saved successfully, return the file name
@@ -250,7 +265,7 @@ class CalibrateThrusterAction(Node):
         dshot_msg = DshotCommand()
         dshot_values = [NUETRAL_DSHOT]*self.thruster_length
 
-        if(NEGATIVE):
+        if (NEGATIVE):
             dshot_values[self.thruster_num] = -self.dshot
         else:
             dshot_values[self.thruster_num] = self.dshot
@@ -262,7 +277,7 @@ class CalibrateThrusterAction(Node):
         # Indicated user has triggered to move on in code
         self.triggered = True
 
-    def rpm_callback(self, msg:DshotRPMFeedback):
+    def rpm_callback(self, msg: DshotRPMFeedback):
         # Adds rpm data to list if data is collecting
         if self.collecting_data:
             self.rpm.append(msg.rpm[self.thruster_num])
@@ -271,6 +286,23 @@ class CalibrateThrusterAction(Node):
         # Adds force data to list if data is collecting
         if self.collecting_data:
             self.force.append(msg.data)
+
+    def electrical_callback(self, msg: BatteryStatus):
+
+        # Ensure there is only one battery connected, if it reads two different serial number print error
+        if self.battery_serial is None:
+            self.battery_serial = msg.serial
+        elif msg.serial != self.battery_serial:
+            self.get_logger().fatal("ERROR: Only one battery should be connected")
+
+        # Saves present current for getting idle
+        self.present_current = msg.pack_current
+
+        # Add voltage and current to data
+        if self.collecting_data:
+            self.current.append(
+                (msg.pack_current - self.idle_current))
+            self.voltage.append(msg.pack_voltage)
 
     ##########################################
     #     Boiler plate action functions      #
