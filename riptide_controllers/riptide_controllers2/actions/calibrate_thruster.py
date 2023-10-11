@@ -104,13 +104,13 @@ class CalibrateThrusterAction(Node):
         val = DSHOT_MIN
         while val < DSHOT_MAX:
             measurementValues.append(round(val))
-            #measurementValuesNegative.append(-round(val))
+            measurementValuesNegative.append(-round(val))
 
             #step size is now a percent
             val = val * (100 + goal_handle.request.step_size) / 100
 
         measurementValues.append(DSHOT_MAX)
-        #measurementValuesNegative.append(-DSHOT_MAX)
+        measurementValuesNegative.append(-DSHOT_MAX)
 
         for value in measurementValuesNegative:
             measurementValues.append(value)
