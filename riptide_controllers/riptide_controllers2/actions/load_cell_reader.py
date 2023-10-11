@@ -28,18 +28,26 @@ def main(args=None):
     start = time.time()
     tare = 0
     weight = 0
+    badReadings = 0
     while(time.time() < start + 5):
         if ser.in_waiting:
-            new = float(ser.readline()[:-2])
 
-            node.get_logger().info("New: " + str(new) + " tare: " + str(tare))
+            try:
+                new = float(ser.readline()[:-2])
 
-            if tare == 0:
-                tare = new
-                weight = 1
+                node.get_logger().info("New: " + str(new) + " tare: " + str(tare))
 
-            else:
-                tare = tare * ((weight) / (weight + 1)) + new / (weight + 1)
+                if tare == 0:
+                    tare = new
+                    weight = 1
+
+                else:
+                    tare = tare * ((weight) / (weight + 1)) + new / (weight + 1)
+            except:
+                badReadings += 1
+
+    if(badReadings > 5):
+        node.get_logger().warn("Signifcat Number of Bad Readings in Tare: " + str(badReadings))
     
     while True:
         if ser.in_waiting:
