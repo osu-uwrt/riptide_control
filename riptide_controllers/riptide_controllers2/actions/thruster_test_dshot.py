@@ -11,6 +11,7 @@ from rclpy.qos import qos_profile_sensor_data, qos_profile_system_default
 from riptide_msgs2.msg import DshotCommand
 from riptide_msgs2.action import ThrusterTest
 from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Bool
 
 import yaml
 
@@ -32,6 +33,7 @@ class ThrusterTestActionServer(Node):
 
         self.Dshot_pub = self.create_publisher(DshotCommand ,"command/dshot", qos_profile_sensor_data)
         self.thruster_forces_pub = self.create_publisher(Float32MultiArray ,"thruster_forces", qos_profile_system_default)
+        self.dshot_mode_pub = self.create_publisher(Bool, "dshot_tune/set_raw", qos_profile_system_default)
 
         # Get the mass and COM
         with open(self.get_parameter('vehicle_config').value, 'r') as stream:
@@ -79,9 +81,15 @@ class ThrusterTestActionServer(Node):
         msg = Float32MultiArray()
         msg.data = forces
         self.thruster_forces_pub.publish(msg)
+    
+    def publish_dshot_mode(self, mode):
+        msg = Bool()
+        msg.data = mode
+        self.dshot_mode_pub.publish(msg)
 
     def execute_cb(self, goal_handle: ServerGoalHandle):
         self.get_logger().info("Starting ThrusterTest Action")
+        self.publish_dshot_mode(True)
         Dshot = [DSHOT_NEUTRAL_VALUE] * self.num_thrusters
         thruster_forces = [THRUSTER_NEUTRAL_FORCE] * self.num_thrusters
 
@@ -92,6 +100,7 @@ class ThrusterTestActionServer(Node):
                     self.publish_dshot([DSHOT_NEUTRAL_VALUE] * self.num_thrusters)
                     self.publish_forces([THRUSTER_NEUTRAL_FORCE] * self.num_thrusters)
 
+                    self.publish_dshot_mode(False)
                     self.running = False
                     goal_handle.canceled()
                     return ThrusterTest.Result()
@@ -117,6 +126,7 @@ class ThrusterTestActionServer(Node):
 
         #should never reach this point in the code
         self.get_logger().info("ThrustTest succeeded")
+        self.publish_dshot_mode(True)
         goal_handle.succeed()
         self.running = False
         return ThrusterTest.Result()
