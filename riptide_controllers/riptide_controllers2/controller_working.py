@@ -29,7 +29,7 @@ import numpy as np
 import yaml
 
 from riptide_controllers2.Controllers import ControlMode, LinearCascadedPController, AngularCascadedPController, AccelerationCalculator
-from riptide_msgs2.msg import RobotState, ControllerCommand
+from riptide_msgs2.msg import ControllerCommand
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Vector3, Twist
 from sensor_msgs.msg import JointState
@@ -288,11 +288,11 @@ class ControllerNode(Node):
         self.forcePub.publish(forceTwist)
 
     def setLinear(self, msg : ControllerCommand):
-        self.get_logger().info(f'Setting linear controller to mode {msg.mode}')
+        # self.get_logger().info(f'Setting linear controller to mode {msg.mode}')
         self.linearController.setTargetPosition(msg.setpoint_vect, ControlMode(msg.mode))
 
     def setAngular(self, msg : ControllerCommand):
-        self.get_logger().info(f'Setting angular controller to mode {msg.mode}')
+        # self.get_logger().info(f'Setting angular controller to mode {msg.mode}')
         if(msg.mode == ControllerCommand.POSITION):
             self.angularController.setTargetPosition(msg.setpoint_quat, ControlMode(msg.mode))
         else:
