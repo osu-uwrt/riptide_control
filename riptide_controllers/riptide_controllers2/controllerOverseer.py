@@ -1,6 +1,10 @@
+import os
+
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_services_default, qos_profile_system_default
+
+from ament_index_python import get_package_share_directory
 
 from ros2node.api import get_node_names, NodeName
 
@@ -47,7 +51,7 @@ class controllerOverseer(Node):
         config_path = self.get_parameter("vehicle_config").value
         if(config_path == ''):
             #remove before running on robot
-            config_path = "src/riptide_core/riptide_descriptions/config/talos.yaml"
+            config_path = os.path.join(get_package_share_directory("riptide_descriptions2"), "config", "talos.yaml")
 
             #self.get_logger().fatal("Controller Overseer: cannot find vehicle configuration file!")
 
@@ -105,8 +109,8 @@ class controllerOverseer(Node):
 
         #republish matlab to firmware
         #TODO remove
-        self.create_subscription(Int32MultiArray, "reqforce", self.forceRepublishCb, qos_profile_system_default)
-        self.create_subscription(Int32MultiArray, "reqRPM", self.rpmRepublishCb, qos_profile_system_default)
+        self.create_subscription(Int32MultiArray, "/talos/reqforce", self.forceRepublishCb, qos_profile_system_default)
+        self.create_subscription(Int32MultiArray, "/talos/reqRPM", self.rpmRepublishCb, qos_profile_system_default)
 
         self.rpmCommandPub = self.create_publisher(DshotCommand, "/talos/command/thruster_rpm", qos_profile_system_default)
         self.forceCommandPub = self.create_publisher(Float32MultiArray, "/talos/thruster_forces", qos_profile_system_default)
