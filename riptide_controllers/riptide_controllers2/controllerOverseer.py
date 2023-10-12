@@ -22,6 +22,7 @@ from nav_msgs.msg import Odometry
 from rcl_interfaces.srv import SetParameters
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from std_msgs.msg import Int16, Int32MultiArray, Float32MultiArray
+from rclpy.time import Time
 
 ERROR_PATIENCE = 1.0
 
@@ -36,6 +37,8 @@ THRUSTER_SOLVER_INDIVIDUAL_LIMIT_PARAM = "talos_indiv_lim"
 THRUSTER_SOLVER_SCALING_PARAM = "thruster_solver_scaling_parameters"
 THRUSTER_SOLVER_FORCE_RPM_COEFFICENTS_PARAM = "talos_force_curve_coefficents"
 
+RPM_PUBLISH_PERIOD = .02
+
 #manages parameters for the controller / thruster solver
 class controllerOverseer(Node):
 
@@ -45,6 +48,9 @@ class controllerOverseer(Node):
         #get robot name 
         self.declare_parameter("robot", "")
         self.robotName = self.get_parameter("robot").value
+
+        #kill plane
+        self.declare_parameter("thrusterKillPlane", .5)
 
         #get robot config file path
         self.declare_parameter("vehicle_config", "")
@@ -97,15 +103,15 @@ class controllerOverseer(Node):
         #declare pubs and subs
 
         #thruster telemetry
-        self.create_subscription(DshotPartialTelemetry, "state/thrusters/telemetry", self.thrusterTelemetryCB, qos_profile_system_default)
+        self.create_subscription(DshotPartialTelemetry, "/talos/state/thrusters/telemetry", self.thrusterTelemetryCB, qos_profile_system_default)
         #thruster Weights
         self.setThrusterSolverParamsClient = self.create_client(SetParameters, f"/{THRUSTER_SOLVER_NODE_NAME}/set_parameters")
         #thruster mode
-        self.create_subscription(Int16, "thrusterSolver/thrusterState", self.setThrusterModeCB, qos_profile_system_default)
+        self.create_subscription(Int16, "/thrusterSolver/thrusterState", self.setThrusterModeCB, qos_profile_system_default)
         #software kill 
-        self.killPub = self.create_publisher(KillSwitchReport, "command/software_kill", qos_profile_system_default)
+        self.killPub = self.create_publisher(KillSwitchReport, "/talos/command/software_kill", qos_profile_system_default)
         #odometry filtered
-        self.create_subscription(Odometry, "odometry/filtered", self.odometryCB, qos_profile_system_default)
+        self.create_subscription(Odometry, "/talos/odometry/filtered", self.odometryCB, qos_profile_system_default)
 
         #republish matlab to firmware
         #TODO remove
@@ -120,7 +126,9 @@ class controllerOverseer(Node):
         self.tfListener = TransformListener(self.tfBuffer, self)
 
         #the tf namespace
-        self.tfNamespace = self.get_parameter("robot").value
+        # TODO: FIX
+        # self.tfNamespace = self.get_parameter("robot").value
+        self.tfNamespace = "talos"
 
         #the plane at which to kill power to thrusters
         self.declare_parameter("thrusterKillPlace", 0)
@@ -134,34 +142,40 @@ class controllerOverseer(Node):
         #attempt to set the wrench matrix in the thruster solver
         self.create_timer(1.0, self.checkIfSolverActive)
 
+        #publsh msgs at frequency
+        self.pubRPMMsg = None
+        self.pubForceMsg = None
+
 
     def thrusterTelemetryCB(self, msg: DshotPartialTelemetry):
         #wether or not the thrusterSolverweigths need adjusted
         adjustWeights = False
 
-        # which thrusters - groups of 4
-        if(msg.start_thruster_num == 0):
-            #check wether each thruster is active
-            for i, esc in enumerate(msg.esc_telemetry):
-                if not esc.present:
-                    if self.activeThrusters[i] == True:
-                        #if change, adjust the thruster weights
-                        self.activeThrusters[i] = False
-                        adjustWeights = True
-                else:
-                    if self.activeThrusters[i] == False:
-                        self.activeThrusters[i] = True
-                        adjustWeights = True
-        else:
-            for i, esc in enumerate(msg.esc_telemetry):
-                if not esc.present:
-                    if self.activeThrusters[i + 4] == True:
-                        self.activeThrusters[i + 4] = False
-                        adjustWeights = True
-                else:
-                    if self.activeThrusters[i + 4] == False:
-                        self.activeThrusters[i + 4] = True
-                        adjustWeights = True
+        #TODO: DONT ASSERT KILL
+
+        # # which thrusters - groups of 4
+        # if(msg.start_thruster_num == 0):
+        #     #check wether each thruster is active
+        #     for i, esc in enumerate(msg.esc_telemetry):
+        #         if not esc.present:
+        #             if self.activeThrusters[i] == True:
+        #                 #if change, adjust the thruster weights
+        #                 self.activeThrusters[i] = False
+        #                 adjustWeights = True
+        #         else:
+        #             if self.activeThrusters[i] == False:
+        #                 self.activeThrusters[i] = True
+        #                 adjustWeights = True
+        # else:
+        #     for i, esc in enumerate(msg.esc_telemetry):
+        #         if not esc.present:
+        #             if self.activeThrusters[i + 4] == True:
+        #                 self.activeThrusters[i + 4] = False
+        #                 adjustWeights = True
+        #         else:
+        #             if self.activeThrusters[i + 4] == False:
+        #                 self.activeThrusters[i + 4] = True
+        #                 adjustWeights = True
 
         #adjust the weights of the thruster solver if anything has changed
         if(adjustWeights):
@@ -184,28 +198,28 @@ class controllerOverseer(Node):
         #check if thrusters are submerged - everytime odom is updated - just using as a frequency 
 
         #start the start time on first cb
-        if(self.startTime == None):
+        if(self.startTime is None):
             self.startTime = self.get_clock().now()
 
-        submerged = {False, False, False, False, False, False, False, False}
+        submerged = [False, False, False, False, False, False, False, False]
 
         try:
             #look at each thruster
             for i, thursterSufaced in enumerate(self.submerdgedThrusters):
-                pos = self.tfBuffer.lookup_transform(f"{self.tfNamespace}/thruster_{i}", "world", self.get_clock().now())
+                pos = self.tfBuffer.lookup_transform("world", f"{self.tfNamespace}/thruster_{i}", Time())
 
                 #if thruster is above the kill plane
-                if pos.transform.translation.z < self.get_parameter("thrusterKillPlane"):
+                if pos.transform.translation.z < self.get_parameter("thrusterKillPlane").value:
                     submerged[i] = True
-                
+                            
             if not (np.array_equal(submerged, self.submerdgedThrusters)):
                 #if a different thruster combo is submerdged, adjust, the weights
                 self.submerdgedThrusters = submerged
                 self.adjustThrusterWeights()
                 
         except Exception as ex:
-            if(self.get_clock().now() >= ERROR_PATIENCE + self.startTime):
-                self.get_logger().error("Thruster Position Lookup failed with exception: " + ex)
+            if(self.get_clock().now().to_msg().sec >= ERROR_PATIENCE + self.startTime.to_msg().sec):
+                self.get_logger().error("Thruster Position Lookup failed with exception: " + str(ex))
         
     def adjustThrusterWeights(self):
         #TODO add weight values into descriptions
@@ -215,7 +229,7 @@ class controllerOverseer(Node):
         submerdgedThrusters = 0
 
         #shutoff inactive thrusters - disabled or broken
-        for i, isActive in self.activeThrusters:
+        for i, isActive in enumerate(self.activeThrusters):
             if(isActive):
                 activeThrusterCount += 1
 
@@ -226,7 +240,7 @@ class controllerOverseer(Node):
                 else:
                     #thruster is active and submerdged
                     submerdgedThrusters += 1
-                    self.thrusterWeights = 1
+                    self.thrusterWeights[i] = 1
 
             else:
                 #if a thruster is inactive - raise the cost of "using" thruster
@@ -297,7 +311,9 @@ class controllerOverseer(Node):
         #update wether or not the solver has been found
         self.solverActive = foundSolver
 
-    def setSolverParams(self):            
+    def setSolverParams(self):   
+        self.get_logger().info("default")
+
         #make the thruster effect matrix 1-D
         effects = []
         for thruster in self.thrusterEffects:
@@ -312,9 +328,13 @@ class controllerOverseer(Node):
         param.value = val
         param.name = THRUSTER_SOLVER_WRENCH_MATRIX_PARAM
 
+        weights = []
+        for weight in self.thrusterWeights:
+            weights.append(int(weight * PARAMETER_SCALE))
+
         val1 = ParameterValue()
         val1.type = ParameterType.PARAMETER_INTEGER_ARRAY
-        val1.integer_array_value = self.thrusterWeights
+        val1.integer_array_value = weights
 
         param1 = Parameter()
         param1.value = val1
@@ -366,6 +386,9 @@ class controllerOverseer(Node):
         #cancel the timer
         self.paramTimer.cancel()
 
+        #start the publish loop
+        self.create_timer(RPM_PUBLISH_PERIOD, self.pubCB)
+
     #remove once matlab publishes to correct message
     def forceRepublishCb(self, msg:Int32MultiArray):
         #the message to republish to
@@ -378,7 +401,7 @@ class controllerOverseer(Node):
 
 
             #publish the message
-            self.forceCommandPub.publish(pub_msg)
+            self.pubForceMsg = pub_msg
         else:
             self.get_logger().warn("Forces form solver has wrong length of: " + str(len(msg.data)))
 
@@ -392,10 +415,18 @@ class controllerOverseer(Node):
                 #scale by .000001
                 pub_msg.values[i] = (datum)
 
-            #publish the message
-            self.rpmCommandPub.publish(pub_msg)
+
+            self.pubRPMMsg = pub_msg
         else:
             self.get_logger().warn("RPM form solver has wrong length of: " + str(len(msg.data)))
+
+    def pubCB(self):
+        #publish rpms
+        if(self.pubForceMsg is not None):
+            self.forceCommandPub.publish(self.pubForceMsg)
+
+        if(self.pubRPMMsg is not None):
+            self.rpmCommandPub.publish(self.pubRPMMsg)
 
 def main(args=None):
     rclpy.init(args=args)
