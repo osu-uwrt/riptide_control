@@ -156,6 +156,7 @@ class controllerOverseer(Node):
         self.create_timer(RPM_PUBLISH_PERIOD, self.pubCB)
 
         self.pubTimer = None
+        self.enabled = True
 
 
     def thrusterTelemetryCB(self, msg: DshotPartialTelemetry):
