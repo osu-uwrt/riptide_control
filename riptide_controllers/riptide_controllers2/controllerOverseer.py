@@ -117,9 +117,8 @@ class controllerOverseer(Node):
         #thruster Weights
         self.setThrusterSolverParamsClient = self.create_client(SetParameters, f"/{self.thrusterSolverName}/set_parameters")
         #thruster mode
-        self.create_subscription(Int16, "thrusterSolver/thrusterState", self.setThrusterModeCB, qos_profile_system_default)
-        #software kill 
-        self.killPub = self.create_publisher(KillSwitchReport, "command/software_kill", qos_profile_system_default)
+        self.create_subscription(Int16, "/thrusterSolver/thrusterState", self.setThrusterModeCB, qos_profile_system_default)
+
         #odometry filtered
         self.create_subscription(Odometry, "odometry/filtered", self.odometryCB, qos_profile_system_default)
 
@@ -163,31 +162,29 @@ class controllerOverseer(Node):
         #wether or not the thrusterSolverweigths need adjusted
         adjustWeights = False
 
-        #TODO: DONT ASSERT KILL
-
-        # # which thrusters - groups of 4
-        # if(msg.start_thruster_num == 0):
-        #     #check wether each thruster is active
-        #     for i, esc in enumerate(msg.esc_telemetry):
-        #         if not esc.present:
-        #             if self.activeThrusters[i] == True:
-        #                 #if change, adjust the thruster weights
-        #                 self.activeThrusters[i] = False
-        #                 adjustWeights = True
-        #         else:
-        #             if self.activeThrusters[i] == False:
-        #                 self.activeThrusters[i] = True
-        #                 adjustWeights = True
-        # else:
-        #     for i, esc in enumerate(msg.esc_telemetry):
-        #         if not esc.present:
-        #             if self.activeThrusters[i + 4] == True:
-        #                 self.activeThrusters[i + 4] = False
-        #                 adjustWeights = True
-        #         else:
-        #             if self.activeThrusters[i + 4] == False:
-        #                 self.activeThrusters[i + 4] = True
-        #                 adjustWeights = True
+        # which thrusters - groups of 4
+        if(msg.start_thruster_num == 0):
+            #check wether each thruster is active
+            for i, esc in enumerate(msg.esc_telemetry):
+                if not esc.present:
+                    if self.activeThrusters[i] == True:
+                        #if change, adjust the thruster weights
+                        self.activeThrusters[i] = False
+                        adjustWeights = True
+                else:
+                    if self.activeThrusters[i] == False:
+                        self.activeThrusters[i] = True
+                        adjustWeights = True
+        else:
+            for i, esc in enumerate(msg.esc_telemetry):
+                if not esc.present:
+                    if self.activeThrusters[i + 4] == True:
+                        self.activeThrusters[i + 4] = False
+                        adjustWeights = True
+                else:
+                    if self.activeThrusters[i + 4] == False:
+                        self.activeThrusters[i + 4] = True
+                        adjustWeights = True
 
         #adjust the weights of the thruster solver if anything has changed
         if(adjustWeights):
@@ -264,15 +261,9 @@ class controllerOverseer(Node):
             #remove if PIA
 
             self.get_logger().error("System has become underactuated. Only:  " + str(activeThrusterCount) + " thrusters are active. Killing Thrusters!")
-            
-            #add a kill switch report
-            msg = KillSwitchReport()
-            msg.sender_id = self.get_name()
-            msg.kill_switch_id = 3 # this is the debug switch - ask firmware to fix
-            msg.switch_asserting_kill = True
-            msg.switch_needs_update = True
-
-            self.killPub.publish(msg)
+            self.enabled = False
+        else:
+            self.enabled = True
             
         if(submerdgedThrusters >= 8):
             #take into account control modes only if all actuators are working
@@ -445,11 +436,12 @@ class controllerOverseer(Node):
 
     def pubCB(self):
         #publish rpms
-        if(self.pubForceMsg is not None):
-            self.forceCommandPub.publish(self.pubForceMsg)
+        if(self.enabled):
+            if(self.pubForceMsg is not None):
+                self.forceCommandPub.publish(self.pubForceMsg)
 
-        if(self.pubRPMMsg is not None):
-            self.rpmCommandPub.publish(self.pubRPMMsg)
+            if(self.pubRPMMsg is not None):
+                self.rpmCommandPub.publish(self.pubRPMMsg)
 
 def main(args=None):
     rclpy.init(args=args)
