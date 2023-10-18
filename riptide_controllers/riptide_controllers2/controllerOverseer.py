@@ -28,8 +28,6 @@ ERROR_PATIENCE = 1.0
 
 PARAMETER_SCALE = 1000000
 
-THRUSTER_SOLVER_NODE_NAME = "ThrusterSolver"
-
 THRUSTER_SOLVER_WRENCH_MATRIX_PARAM = "talos_wrenchmat"
 THRUSTER_SOLVER_WEIGHT_MATRIX_PARAM = "talos_thruster_weights"
 THRUSTER_SOLVER_SYSTEM_LIMIT_PARAM = "talos_sys_lim"
@@ -49,12 +47,14 @@ class controllerOverseer(Node):
         self.declare_parameter("robot", "")
         self.robotName = self.get_parameter("robot").value
 
-        #kill plane
-        self.declare_parameter("thrusterKillPlane", .5)
-
         #get robot config file path
         self.declare_parameter("vehicle_config", "")
         config_path = self.get_parameter("vehicle_config").value
+
+        #get thruster solver node name
+        self.declare_parameter("thruster_solver_node_name", "")
+        self.thrusterSolverName = self.get_parameter("thruster_solver_node_name").value
+
         if(config_path == ''):
             #remove before running on robot
             config_path = os.path.join(get_package_share_directory("riptide_descriptions2"), "config", "talos.yaml")
@@ -64,6 +64,9 @@ class controllerOverseer(Node):
         #open configuration file
         with open(config_path, "r") as config:
             config_file = yaml.safe_load(config)
+
+        #read in kill plane height
+        self.killPlane = config_file["controller_overseer"]["thruster_kill_plane"]
 
         #read in thruster pose data
         thruster_info = config_file['thrusters']
@@ -88,14 +91,21 @@ class controllerOverseer(Node):
         thruster_solver_info = config_file["thruster_solver"]
         self.forceToRPMCoefficents = thruster_solver_info["force_to_rpm_coefficents"]
 
+        #read in weight info
+        self.defaultWeight = thruster_solver_info["default_weight"]
+        self.surfaceWeight = thruster_solver_info["surfaced_weight"]
+        self.disabledWeight = thruster_solver_info["disable_weight"]
+        self.lowDowndraftWeight = thruster_solver_info["low_downdraft_weight"]
+
+        #read in solver limit params
+        self.systemThrustLimit = thruster_solver_info["system_thrust_limit"]
+        self.individualThrustLimit = thruster_solver_info["individual_thrust_limit"]
+        
+
         #default thruster weights and working thrusters
         self.activeThrusters = [True, True, True, True, True, True, True, True]
         self.submerdgedThrusters = [True, True, True, True, True, True, True, True]
         self.thrusterWeights = [1,1,1,1,1,1,1,1]
-
-        #declare limit params
-        self.declare_parameter("System_Thruster_Limit", 20)
-        self.declare_parameter("Individual_Thruster_Limit", 8)
 
         # the thruster mode
         self.thrusterMode = 1
@@ -103,23 +113,23 @@ class controllerOverseer(Node):
         #declare pubs and subs
 
         #thruster telemetry
-        self.create_subscription(DshotPartialTelemetry, "/talos/state/thrusters/telemetry", self.thrusterTelemetryCB, qos_profile_system_default)
+        self.create_subscription(DshotPartialTelemetry, "state/thrusters/telemetry", self.thrusterTelemetryCB, qos_profile_system_default)
         #thruster Weights
-        self.setThrusterSolverParamsClient = self.create_client(SetParameters, f"/{THRUSTER_SOLVER_NODE_NAME}/set_parameters")
+        self.setThrusterSolverParamsClient = self.create_client(SetParameters, f"/{self.thrusterSolverName}/set_parameters")
         #thruster mode
-        self.create_subscription(Int16, "/thrusterSolver/thrusterState", self.setThrusterModeCB, qos_profile_system_default)
+        self.create_subscription(Int16, "thrusterSolver/thrusterState", self.setThrusterModeCB, qos_profile_system_default)
         #software kill 
-        self.killPub = self.create_publisher(KillSwitchReport, "/talos/command/software_kill", qos_profile_system_default)
+        self.killPub = self.create_publisher(KillSwitchReport, "command/software_kill", qos_profile_system_default)
         #odometry filtered
-        self.create_subscription(Odometry, "/talos/odometry/filtered", self.odometryCB, qos_profile_system_default)
+        self.create_subscription(Odometry, "odometry/filtered", self.odometryCB, qos_profile_system_default)
 
         #republish matlab to firmware
         #TODO remove
-        self.create_subscription(Int32MultiArray, "/talos/reqforce", self.forceRepublishCb, qos_profile_system_default)
-        self.create_subscription(Int32MultiArray, "/talos/reqRPM", self.rpmRepublishCb, qos_profile_system_default)
+        self.create_subscription(Int32MultiArray, "reqforce", self.forceRepublishCb, qos_profile_system_default)
+        self.create_subscription(Int32MultiArray, "reqRPM", self.rpmRepublishCb, qos_profile_system_default)
 
-        self.rpmCommandPub = self.create_publisher(DshotCommand, "/talos/command/thruster_rpm", qos_profile_system_default)
-        self.forceCommandPub = self.create_publisher(Float32MultiArray, "/talos/thruster_forces", qos_profile_system_default)
+        self.rpmCommandPub = self.create_publisher(DshotCommand, "test/thruster_rpm", qos_profile_system_default)
+        self.forceCommandPub = self.create_publisher(Float32MultiArray, "thruster_forces", qos_profile_system_default)
 
         #declare transform 
         self.tfBuffer = Buffer()
@@ -129,9 +139,6 @@ class controllerOverseer(Node):
         # TODO: FIX
         # self.tfNamespace = self.get_parameter("robot").value
         self.tfNamespace = "talos"
-
-        #the plane at which to kill power to thrusters
-        self.declare_parameter("thrusterKillPlace", 0)
 
         #start time
         self.startTime = None
@@ -145,6 +152,11 @@ class controllerOverseer(Node):
         #publsh msgs at frequency
         self.pubRPMMsg = None
         self.pubForceMsg = None
+
+        #start the publish loop
+        self.create_timer(RPM_PUBLISH_PERIOD, self.pubCB)
+
+        self.pubTimer = None
 
 
     def thrusterTelemetryCB(self, msg: DshotPartialTelemetry):
@@ -209,7 +221,7 @@ class controllerOverseer(Node):
                 pos = self.tfBuffer.lookup_transform("world", f"{self.tfNamespace}/thruster_{i}", Time())
 
                 #if thruster is above the kill plane
-                if pos.transform.translation.z < self.get_parameter("thrusterKillPlane").value:
+                if pos.transform.translation.z < self.killPlane:
                     submerged[i] = True
                             
             if not (np.array_equal(submerged, self.submerdgedThrusters)):
@@ -236,15 +248,15 @@ class controllerOverseer(Node):
                 #play around with weights for thrusters above surface
                 if not (self.submerdgedThrusters[i] == True):
                     #if thruster is not submerdged
-                    self.thrusterWeights[i] = 4
+                    self.thrusterWeights[i] = self.surfaceWeight
                 else:
                     #thruster is active and submerdged
                     submerdgedThrusters += 1
-                    self.thrusterWeights[i] = 1
+                    self.thrusterWeights[i] = self.defaultWeight
 
             else:
                 #if a thruster is inactive - raise the cost of "using" thruster
-                self.thrusterWeights[i] = 999999
+                self.thrusterWeights[i] = self.disabledWeight
         
         if(activeThrusterCount <= 6):
             #if system is not full actuated, it cannot be optimized, very high rpms / force can be requested
@@ -267,8 +279,8 @@ class controllerOverseer(Node):
             
             if(self.thrusterMode == 2):
                 #apply low downdraft
-                self.thrusterWeights[4] = 3
-                self.thrusterWeights[5] = 3
+                self.thrusterWeights[4] = self.lowDowndraftWeight
+                self.thrusterWeights[5] = self.lowDowndraftWeight
                 
         #scale and round all weights
         weights = []
@@ -296,23 +308,31 @@ class controllerOverseer(Node):
         foundSolver = False
         #see if the matlab node is running
         for nodeName in get_node_names(node=self):
-            if nodeName.name == THRUSTER_SOLVER_NODE_NAME:
+
+            if nodeName.name == self.thrusterSolverName:
                 foundSolver = True
 
         if(self.solverActive != foundSolver):
             if(foundSolver):
                 #thruster solver came online
                 self.paramTimer = self.create_timer(1.0, self.setSolverParams)
+
+                self.get_logger().info("Found Thruster Solver!")
             else:
                 #lost thruster solver
                 self.get_logger().error("Lost Thruster Solver!")
 
+                #cancel the set default params operation
+                self.paramTimer.cancel()
+
+                #cancel the publishing
+                self.pubTimer.cancel()
 
         #update wether or not the solver has been found
         self.solverActive = foundSolver
 
     def setSolverParams(self):   
-        self.get_logger().info("default")
+        self.get_logger().info("Setting Thruster Solver Default Parameters")
 
         #make the thruster effect matrix 1-D
         effects = []
@@ -342,7 +362,7 @@ class controllerOverseer(Node):
 
         val2 = ParameterValue()
         val2.type = ParameterType.PARAMETER_INTEGER
-        val2.integer_value = int(self.get_parameter("System_Thruster_Limit").value)
+        val2.integer_value = int(self.systemThrustLimit)
 
         param2 = Parameter()
         param2.value = val2
@@ -350,7 +370,7 @@ class controllerOverseer(Node):
 
         val3 = ParameterValue()
         val3.type = ParameterType.PARAMETER_INTEGER
-        val3.integer_value = int(self.get_parameter("Individual_Thruster_Limit").value)
+        val3.integer_value = int(self.individualThrustLimit)
 
         param3 = Parameter()
         param3.value = val3
@@ -385,9 +405,12 @@ class controllerOverseer(Node):
 
         #cancel the timer
         self.paramTimer.cancel()
+        #ensure the pub timer is running
+        if(self.pubTimer is None):
+            self.pubTimer = self.create_timer(RPM_PUBLISH_PERIOD, self.pubCB)
+        elif(self.pubTimer.is_canceled()):
+            self.pubTimer = self.create_timer(RPM_PUBLISH_PERIOD, self.pubCB)
 
-        #start the publish loop
-        self.create_timer(RPM_PUBLISH_PERIOD, self.pubCB)
 
     #remove once matlab publishes to correct message
     def forceRepublishCb(self, msg:Int32MultiArray):
