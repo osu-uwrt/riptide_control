@@ -34,6 +34,7 @@ THRUSTER_SOLVER_SYSTEM_LIMIT_PARAM = "talos_sys_lim"
 THRUSTER_SOLVER_INDIVIDUAL_LIMIT_PARAM = "talos_indiv_lim"
 THRUSTER_SOLVER_SCALING_PARAM = "thruster_solver_scaling_parameters"
 THRUSTER_SOLVER_FORCE_RPM_COEFFICENTS_PARAM = "talos_force_curve_coefficents"
+THRUSTER_SOLVER_DISABLE_WEIGHTS = "thruster_solver_disable_weight"
 
 RPM_PUBLISH_PERIOD = .02
 
@@ -278,7 +279,11 @@ class controllerOverseer(Node):
                 #apply low downdraft
                 self.thrusterWeights[4] = self.lowDowndraftWeight
                 self.thrusterWeights[5] = self.lowDowndraftWeight
-                
+
+        #impose disable weight if nessecary
+        if(self.thrusterMode == 0):
+            self.thrusterWeights = [0,0,0,0,0,0,0,0]
+
         msg = Int32MultiArray()
 
         #scale and round all weights
@@ -337,6 +342,14 @@ class controllerOverseer(Node):
         param.value = val
         param.name = THRUSTER_SOLVER_WRENCH_MATRIX_PARAM
 
+        val1 = ParameterValue()
+        val1.type = ParameterType.PARAMETER_INTEGER
+        val1.integer_value = int(self.disabledWeight)
+
+        param1 = Parameter()
+        param1.value = val1
+        param1.name = THRUSTER_SOLVER_DISABLE_WEIGHTS
+
         val2 = ParameterValue()
         val2.type = ParameterType.PARAMETER_INTEGER
         val2.integer_value = int(self.systemThrustLimit)
@@ -376,7 +389,7 @@ class controllerOverseer(Node):
 
         #setup service request
         request = SetParameters.Request()
-        request.parameters = [param, param2, param3, param4, param5]
+        request.parameters = [param, param1, param2, param3, param4, param5]
 
         self.future = self.setThrusterSolverParamsClient.call_async(request)
 
