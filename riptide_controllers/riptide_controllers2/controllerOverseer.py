@@ -29,7 +29,7 @@ ERROR_PATIENCE = 1.0
 PARAMETER_SCALE = 1000000
 
 THRUSTER_SOLVER_WRENCH_MATRIX_PARAM = "talos_wrenchmat"
-THRUSTER_SOLVER_WEIGHT_MATRIX_PARAM = "talos_thruster_weights"
+THRUSTER_SOLVER_WEIGHT_MATRIX_TOPIC = "controller/solver_weights"
 THRUSTER_SOLVER_SYSTEM_LIMIT_PARAM = "talos_sys_lim"
 THRUSTER_SOLVER_INDIVIDUAL_LIMIT_PARAM = "talos_indiv_lim"
 THRUSTER_SOLVER_SCALING_PARAM = "thruster_solver_scaling_parameters"
@@ -115,9 +115,9 @@ class controllerOverseer(Node):
         #thruster telemetry
         self.create_subscription(DshotPartialTelemetry, "state/thrusters/telemetry", self.thrusterTelemetryCB, qos_profile_system_default)
         #thruster Weights
-        self.setThrusterSolverParamsClient = self.create_client(SetParameters, f"/{self.thrusterSolverName}/set_parameters")
+        self.setThrusterSolverParamsClient = self.create_client(SetParameters, f"{self.thrusterSolverName}/set_parameters")
         #thruster mode
-        self.create_subscription(Int16, "/thrusterSolver/thrusterState", self.setThrusterModeCB, qos_profile_system_default)
+        self.create_subscription(Int16, "thrusterSolver/thrusterState", self.setThrusterModeCB, qos_profile_system_default)
 
         #odometry filtered
         self.create_subscription(Odometry, "odometry/filtered", self.odometryCB, qos_profile_system_default)
@@ -129,6 +129,9 @@ class controllerOverseer(Node):
 
         self.rpmCommandPub = self.create_publisher(DshotCommand, "test/thruster_rpm", qos_profile_system_default)
         self.forceCommandPub = self.create_publisher(Float32MultiArray, "thruster_forces", qos_profile_system_default)
+
+        #pub for thruster weights
+        self.weightsPub = self.create_publisher(Int32MultiArray, THRUSTER_SOLVER_WEIGHT_MATRIX_TOPIC, qos_profile_system_default)
 
         #declare transform 
         self.tfBuffer = Buffer()
@@ -157,6 +160,8 @@ class controllerOverseer(Node):
 
         self.pubTimer = None
         self.enabled = True
+
+        self.adjustThrusterWeights()
 
 
     def thrusterTelemetryCB(self, msg: DshotPartialTelemetry):
@@ -274,25 +279,17 @@ class controllerOverseer(Node):
                 self.thrusterWeights[4] = self.lowDowndraftWeight
                 self.thrusterWeights[5] = self.lowDowndraftWeight
                 
+        msg = Int32MultiArray()
+
         #scale and round all weights
         weights = []
         for weight in self.thrusterWeights:
-            weights.append(int(weight * PARAMETER_SCALE))
+            weights.append(int(weight * PARAMETER_SCALE))   
 
-        # #declare the weight paramter value
-        val = ParameterValue()
-        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
-        val.integer_array_value = weights
+        msg.data = weights
 
-        param = Parameter()
-        param.value = val
-        param.name = THRUSTER_SOLVER_WEIGHT_MATRIX_PARAM
-
-        #setup service request
-        request = SetParameters.Request()
-        request.parameters = [param]
-
-        self.future = self.setThrusterSolverParamsClient.call_async(request)
+        #publish weights
+        self.weightsPub.publish(msg)
 
     def checkIfSolverActive(self):
         #attempt to set the wrench matrix in the simulink node
@@ -340,18 +337,6 @@ class controllerOverseer(Node):
         param.value = val
         param.name = THRUSTER_SOLVER_WRENCH_MATRIX_PARAM
 
-        weights = []
-        for weight in self.thrusterWeights:
-            weights.append(int(weight * PARAMETER_SCALE))
-
-        val1 = ParameterValue()
-        val1.type = ParameterType.PARAMETER_INTEGER_ARRAY
-        val1.integer_array_value = weights
-
-        param1 = Parameter()
-        param1.value = val1
-        param1.name = THRUSTER_SOLVER_WEIGHT_MATRIX_PARAM
-
         val2 = ParameterValue()
         val2.type = ParameterType.PARAMETER_INTEGER
         val2.integer_value = int(self.systemThrustLimit)
@@ -391,7 +376,7 @@ class controllerOverseer(Node):
 
         #setup service request
         request = SetParameters.Request()
-        request.parameters = [param, param1, param2, param3, param4, param5]
+        request.parameters = [param, param2, param3, param4, param5]
 
         self.future = self.setThrusterSolverParamsClient.call_async(request)
 
