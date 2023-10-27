@@ -201,7 +201,7 @@ class controllerOverseer(Node):
         if(msg.start_thruster_num == 0):
             #check wether each thruster is active
             for i, esc in enumerate(msg.esc_telemetry):
-                if not esc.present:
+                if not esc.thruster_ready:
                     if self.activeThrusters[i] == True:
                         #if change, adjust the thruster weights
                         self.activeThrusters[i] = False
@@ -212,7 +212,7 @@ class controllerOverseer(Node):
                         adjustWeights = True
         else:
             for i, esc in enumerate(msg.esc_telemetry):
-                if not esc.present:
+                if not esc.thruster_ready:
                     if self.activeThrusters[i + 4] == True:
                         self.activeThrusters[i + 4] = False
                         adjustWeights = True
@@ -318,6 +318,8 @@ class controllerOverseer(Node):
         weights = []
         for weight in self.thrusterWeights:
             weights.append(int(weight * PARAMETER_SCALE))   
+
+        # self.get_logger().info(str(weights))
 
         msg.data = weights
 
