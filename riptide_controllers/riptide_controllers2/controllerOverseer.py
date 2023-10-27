@@ -36,7 +36,16 @@ THRUSTER_SOLVER_SCALING_PARAM = "thruster_solver_scaling_parameters"
 THRUSTER_SOLVER_FORCE_RPM_COEFFICENTS_PARAM = "talos_force_curve_coefficents"
 THRUSTER_SOLVER_DISABLE_WEIGHTS = "thruster_solver_disable_weight"
 
+FF_CONTROLLER_COM_PARAM = "COB"
+FF_CONTROLLER_COB_PARAM = "COM"
+FF_CONTROLLER_BUOYANT_FORCE_PARAM = "Buoyant_Force"
+FF_CONTROLLER_MASS_PARAM = "Mass"
+FF_CONTROLLER_SCALING_PARAM = "Scaling_Paramter"
+FF_CONTROLLER_YAW_COMPENSATION_PARAM = "Yaw_Compensation"
+
 RPM_PUBLISH_PERIOD = .02
+
+G = 9.8067
 
 #manages parameters for the controller / thruster solver
 class controllerOverseer(Node):
@@ -55,6 +64,10 @@ class controllerOverseer(Node):
         #get thruster solver node name
         self.declare_parameter("thruster_solver_node_name", "")
         self.thrusterSolverName = self.get_parameter("thruster_solver_node_name").value
+
+        #get the ff controller node name
+        self.declare_parameter("ff_controller_node_name", "")
+        self.ffControllerName = self.get_parameter("ff_controller_node_name").value
 
         if(config_path == ''):
             #remove before running on robot
@@ -101,7 +114,12 @@ class controllerOverseer(Node):
         #read in solver limit params
         self.systemThrustLimit = thruster_solver_info["system_thrust_limit"]
         self.individualThrustLimit = thruster_solver_info["individual_thrust_limit"]
-        
+
+        #read in ff properties
+        self.talos_mass = config_file["mass"]
+        self.talos_COM = config_file["com"]
+        self.talos_base_wrench = config_file["controller"]["feed_forward"]["base_wrench"]
+        self.talos_face_up_wrench = config_file["controller"]["feed_forward"]["face_up_wrench"]
 
         #default thruster weights and working thrusters
         self.activeThrusters = [True, True, True, True, True, True, True, True]
@@ -115,8 +133,13 @@ class controllerOverseer(Node):
 
         #thruster telemetry
         self.create_subscription(DshotPartialTelemetry, "state/thrusters/telemetry", self.thrusterTelemetryCB, qos_profile_system_default)
-        #thruster Weights
+        
+        #thruster solver parameters
         self.setThrusterSolverParamsClient = self.create_client(SetParameters, f"{self.thrusterSolverName}/set_parameters")
+
+        #FF controller parameters
+        self.setFFControllerParamsClient = self.create_client(SetParameters, f"{self.ffControllerName}/set_parameters")
+
         #thruster mode
         self.create_subscription(Int16, "thrusterSolver/thrusterState", self.setThrusterModeCB, qos_profile_system_default)
 
@@ -128,7 +151,7 @@ class controllerOverseer(Node):
         self.create_subscription(Int32MultiArray, "reqforce", self.forceRepublishCb, qos_profile_system_default)
         self.create_subscription(Int32MultiArray, "reqRPM", self.rpmRepublishCb, qos_profile_system_default)
 
-        self.rpmCommandPub = self.create_publisher(DshotCommand, "test/thruster_rpm", qos_profile_system_default)
+        self.rpmCommandPub = self.create_publisher(DshotCommand, "command/thruster_rpm", qos_profile_system_default)
         self.forceCommandPub = self.create_publisher(Float32MultiArray, "thruster_forces", qos_profile_system_default)
 
         #pub for thruster weights
@@ -149,8 +172,11 @@ class controllerOverseer(Node):
         #is the thrusterSolver active
         self.solverActive = False
 
+        #is the ff controller
+        self.ffActive = False
+
         #attempt to set the wrench matrix in the thruster solver
-        self.create_timer(1.0, self.checkIfSolverActive)
+        self.create_timer(1.0, self.checkIfSimulinkActive)
 
         #publsh msgs at frequency
         self.pubRPMMsg = None
@@ -163,6 +189,8 @@ class controllerOverseer(Node):
         self.enabled = True
 
         self.adjustThrusterWeights()
+
+        self.calculateVolumeConstants()
 
 
     def thrusterTelemetryCB(self, msg: DshotPartialTelemetry):
@@ -296,20 +324,40 @@ class controllerOverseer(Node):
         #publish weights
         self.weightsPub.publish(msg)
 
-    def checkIfSolverActive(self):
+    def calculateVolumeConstants(self):
+        #calculate the buoyant force and cov
+
+        self.talos_buoyant_force = (self.talos_mass * G - self.talos_base_wrench[2])
+
+        #calculate cov delta from cob
+        x = self.talos_base_wrench[4] / self.talos_base_wrench[2] + self.talos_COM[0]
+        y = -self.talos_base_wrench[3] / self.talos_base_wrench[2] + self.talos_COM[1]
+        z = -self.talos_face_up_wrench[1] / self.talos_face_up_wrench[4] + self.talos_COM[2]
+
+        self.talos_COB = [x,y,z]
+
+        #yaw compensation at central point
+        self.talos_yaw_compensation = self.talos_base_wrench[5]
+
+    def checkIfSimulinkActive(self):
         #attempt to set the wrench matrix in the simulink node
 
         foundSolver = False
+        foundFF = False
+
         #see if the matlab node is running
         for nodeName in get_node_names(node=self):
 
             if nodeName.name == self.thrusterSolverName:
                 foundSolver = True
 
+            if nodeName.name == self.ffControllerName:
+                foundFF = True
+
         if(self.solverActive != foundSolver):
             if(foundSolver):
                 #thruster solver came online
-                self.paramTimer = self.create_timer(1.0, self.setSolverParams)
+                self.paramTimerTS = self.create_timer(1.0, self.setSolverParams)
 
                 self.get_logger().info("Found Thruster Solver!")
             else:
@@ -317,13 +365,32 @@ class controllerOverseer(Node):
                 self.get_logger().error("Lost Thruster Solver!")
 
                 #cancel the set default params operation
-                self.paramTimer.cancel()
+                self.paramTimerTS.cancel()
+
+                #cancel the publishing
+                self.pubTimer.cancel()
+
+        if(self.ffActive != foundFF):
+            if(foundFF):
+                #thruster solver came online
+                self.paramTimerFF = self.create_timer(1.0, self.setFFParams)
+
+                self.get_logger().info("Found FF Controller Solver!")
+            else:
+                #lost thruster solver
+                self.get_logger().error("Lost FF Controller Solver!")
+
+                #cancel the set default params operation
+                self.paramTimerFF.cancel()
 
                 #cancel the publishing
                 self.pubTimer.cancel()
 
         #update wether or not the solver has been found
         self.solverActive = foundSolver
+
+        #update wether or not the ff controller is active
+        self.ffActive = foundFF
 
     def setSolverParams(self):   
         self.get_logger().info("Setting Thruster Solver Default Parameters")
@@ -394,12 +461,87 @@ class controllerOverseer(Node):
         self.future = self.setThrusterSolverParamsClient.call_async(request)
 
         #cancel the timer
-        self.paramTimer.cancel()
-        #ensure the pub timer is running
-        if(self.pubTimer is None):
-            self.pubTimer = self.create_timer(RPM_PUBLISH_PERIOD, self.pubCB)
-        elif(self.pubTimer.is_canceled()):
-            self.pubTimer = self.create_timer(RPM_PUBLISH_PERIOD, self.pubCB)
+        self.paramTimerTS.cancel()
+        #ensure the pub timer is running if both models are active
+        if(self.ffActive and self.solverActive):
+            if(self.pubTimer is None):
+                self.pubTimer = self.create_timer(RPM_PUBLISH_PERIOD, self.pubCB)
+            elif(self.pubTimer.is_canceled()):
+                self.pubTimer = self.create_timer(RPM_PUBLISH_PERIOD, self.pubCB)
+
+    def setFFParams(self):   
+        self.get_logger().info("Setting FF Contoller Default Parameters")
+
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = 1000000
+
+        param = Parameter()
+        param.value = val
+        param.name = FF_CONTROLLER_SCALING_PARAM
+
+        cobValues = []
+        for val in self.talos_COB:
+            cobValues.append(int(PARAMETER_SCALE * val))
+
+        val1 = ParameterValue()
+        val1.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val1.integer_array_value = cobValues
+
+        param1 = Parameter()
+        param1.value = val1
+        param1.name = FF_CONTROLLER_COB_PARAM
+
+        comValues = []
+        for val in self.talos_COM:
+            comValues.append(int(PARAMETER_SCALE * val))
+
+        val2 = ParameterValue()
+        val2.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val2.integer_array_value = comValues
+
+        param2 = Parameter()
+        param2.value = val2
+        param2.name = FF_CONTROLLER_COM_PARAM
+
+        val3 = ParameterValue()
+        val3.type = ParameterType.PARAMETER_INTEGER
+        val3.integer_value = int(self.talos_buoyant_force * PARAMETER_SCALE)
+
+        param3 = Parameter()
+        param3.value = val3
+        param3.name = FF_CONTROLLER_BUOYANT_FORCE_PARAM
+
+        val4 = ParameterValue()
+        val4.type = ParameterType.PARAMETER_INTEGER
+        val4.integer_value = int(self.talos_mass * PARAMETER_SCALE)
+
+        param4 = Parameter()
+        param4.value = val4
+        param4.name = FF_CONTROLLER_MASS_PARAM
+
+        val5 = ParameterValue()
+        val5.type = ParameterType.PARAMETER_INTEGER
+        val5.integer_value = int(self.talos_yaw_compensation * PARAMETER_SCALE)
+
+        param5 = Parameter()
+        param5.value = val5
+        param5.name = FF_CONTROLLER_YAW_COMPENSATION_PARAM
+
+        #setup service request
+        request = SetParameters.Request()
+        request.parameters = [param, param1, param2, param3, param4, param5]
+
+        self.future = self.setFFControllerParamsClient.call_async(request)
+
+        #cancel the timer
+        self.paramTimerFF.cancel()
+        #ensure the pub timer is running if both models are active
+        if(self.ffActive and self.solverActive):
+            if(self.pubTimer is None):
+                self.pubTimer = self.create_timer(RPM_PUBLISH_PERIOD, self.pubCB)
+            elif(self.pubTimer.is_canceled()):
+                self.pubTimer = self.create_timer(RPM_PUBLISH_PERIOD, self.pubCB)
 
 
     #remove once matlab publishes to correct message

@@ -8,6 +8,7 @@ from ament_index_python import get_package_share_directory
 #launch the new controller system
 
 THRUSTER_SOLVER_NAME = "thruster_solver"
+FEED_FORWARD_CONTROLLER_NAME = "FF_Controller"
 
 def generate_launch_description():
 
@@ -26,6 +27,7 @@ def generate_launch_description():
                         parameters=[{"vehicle_config": vehicle_config_file, 
                                      "robot": LaunchConfiguration("robot"),
                                      "thruster_solver_node_name": THRUSTER_SOLVER_NAME,
+                                     "ff_controller_node_name": FEED_FORWARD_CONTROLLER_NAME,
                                     }])
     
     #declare thruster solver node
@@ -34,9 +36,15 @@ def generate_launch_description():
                         executable="ThrusterSolver",
                         name=THRUSTER_SOLVER_NAME)
     
+    ffControllerNode = Node(package="ff_controller",
+                            namespace = LaunchConfiguration("robot"),
+                            executable="FF_Controller",
+                            name=FEED_FORWARD_CONTROLLER_NAME)
+    
     return LaunchDescription([
         DeclareLaunchArgument("robot", default_value="tempest", description="name of robot used for namespacing"),
         DeclareLaunchArgument("robot_yaml", default_value=[LaunchConfiguration("robot"), ".yaml"], description="robot config file name"),
         overseerNode,
-        thrusterSolverNode
+        thrusterSolverNode,
+        ffControllerNode
     ])
