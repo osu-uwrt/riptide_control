@@ -125,17 +125,21 @@ def handle_deploy_packages(deploy_config: str, deploy_dir: str, no_deploy: bool,
     if not no_deploy:
         # figure out where to run the deploy. If the directory is within UWRT_ROOT/release/src, then 
         # the build will be run in UWRT_ROOT/developement/software. Otherwise, the build will happen in place
-        cmd_dir = deploy_dir
-        rel_dir = os.path.join(UWRT_ROOT, "release")
-        if rel_dir in deploy_dir:
-            print(f"Local directory detected in release directory. Deploying from release directory")
-            cmd_dir = rel_dir
-            
-        print(f"Building models in directory {cmd_dir}")
-        execute_command(["colcon", "deploy", deploy_target], cmd_dir)
+        
+        if ping_device(deploy_target):
+            cmd_dir = deploy_dir
+            rel_dir = os.path.join(UWRT_ROOT, "release")
+            if rel_dir in deploy_dir:
+                print(f"Local directory detected in release directory. Deploying from release directory")
+                cmd_dir = rel_dir
+                
+            print(f"Building models in directory {cmd_dir}")
+            execute_command(["colcon", "deploy", deploy_target], cmd_dir)
+        else:
+            print(f"{deploy_target} not detected on the local network. Not deploying")
 
 
-def handle_packages_generic(config, dir):
+def handle_packages_generic(config: str, dir: str):
     generated_output_directory = os.path.join(MODELS_ROOT, "generated_models")
     config_name = get_object_name_from_file(config)
     archive_names = filter_list(os.listdir(generated_output_directory), config_name)
@@ -143,6 +147,14 @@ def handle_packages_generic(config, dir):
     ensure_not_directory_exists(dir) #clear directory if it exists
     ensure_directory_exists(dir)
     unpack_archives(generated_output_directory, archive_names, dir)
+
+
+def ping_device(name: str):
+    try:
+        execute_command(["ping", "-W0.25", "-i0.25", "-c4", name], os.getcwd())
+        return True
+    except RuntimeError:
+        return False
     
 
 def ensure_directory_exists(dir: str):
@@ -286,12 +298,23 @@ def parse_args():
     
     parser.add_argument("--deploy-target", action="store", default=DEFAULT_ROBOT_NAME,
                         help="Specifies the name of the target to deploy the deployable packages to")
+    
+    parser.add_argument("--test", action="store_true")
         
     return parser.parse_args()
 
 
+def test(name):
+    good = ping_device(name)
+    print(f"{name} is present" if good else f"{name} NOT present")
+
+
 def main():
     args = parse_args()
+    
+    if args.test:
+        test(args.deploy_target)
+        exit(0)
     
     models_select = find_files(args.models_select)
     models_ignore = find_files(args.models_ignore)
