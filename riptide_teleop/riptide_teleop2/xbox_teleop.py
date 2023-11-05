@@ -2,6 +2,7 @@
 
 import rclpy
 from rclpy.node import Node
+from rclpy.action import ActionServer
 from rclpy.qos import qos_profile_system_default, qos_profile_sensor_data
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Joy
@@ -9,6 +10,7 @@ from geometry_msgs.msg import Vector3, Quaternion
 from transforms3d.euler import quat2euler, euler2quat
 from transforms3d.quaternions import qmult
 from riptide_msgs2.msg import ControllerCommand, KillSwitchReport
+from riptide_msgs2.action import ActivateTeleop
 import numpy as np
 import math
 import yaml
@@ -58,6 +60,13 @@ class XBOXTeleop(Node):
             self.max_linear_velocity = config['controller']['linear']['max']['velocity']
             self.max_angular_velocity = config['controller']['angular']['max']['velocity']
 
+        self._action_server = ActionServer(
+            self,
+            ActivateTeleop,
+            'activate_teleop',
+            self.action_entry
+        )
+
         self.START_DEPTH = -1
         self.last_odom_msg = self.get_clock().now()
         self.last_linear_velocity = np.zeros(3)
@@ -73,7 +82,7 @@ class XBOXTeleop(Node):
         #self.software_kill_pub = self.create_publisher(KillSwitchReport, "control/software_kill", qos_profile_sensor_data)
         self.lin_pub = self.create_publisher(ControllerCommand, "controller/linear", qos_profile_system_default)
         self.ang_pub = self.create_publisher(ControllerCommand, "controller/angular", qos_profile_system_default)
-      
+    
     def joy_cb(self, msg: 'Joy'):
         # Kill button
         #self.get_logger().info('buttons: {}'.format(msg.buttons))
@@ -167,6 +176,11 @@ class XBOXTeleop(Node):
             self.ang_pub.publish(ang_msg)
 
         self.last_odom_msg = self.get_clock().now()
+
+    def action_entry(self, goal_hdl):
+        self.get_logger().info("Executing goal")
+        result = ActivateTeleop.Result()
+        return result
 
 def main(args=None):
     rclpy.init(args=args)
