@@ -62,10 +62,10 @@ function generate_cpp_packages(varargin)
 
     % fullfile expands to absolute path, trim_string_array removes empty
     % strings
-    selected_models = fullfile(pwd, trim_string_array(argument_matrix(1, :)));
-    ignored_models = fullfile(pwd, trim_string_array(argument_matrix(2, :)));
-    selected_configs = fullfile(pwd, trim_string_array(argument_matrix(3, :)));
-    ignored_configs = fullfile(pwd, trim_string_array(argument_matrix(4, :)));
+    selected_models = make_absolute(trim_string_array(argument_matrix(1, :)));
+    ignored_models = make_absolute(trim_string_array(argument_matrix(2, :)));
+    selected_configs = make_absolute(trim_string_array(argument_matrix(3, :)));
+    ignored_configs = make_absolute(trim_string_array(argument_matrix(4, :)));
 
     if ~isempty(selected_models)
         model_mode = MODE_SELECT;        
@@ -163,6 +163,16 @@ function list = file_structs_to_list(structs)
     list = strings(num_files, 1);
     for i = 1 : num_files
         list(i) = fullfile(structs(i).folder, structs(i).name);
+    end
+end
+
+
+function absolute_files = make_absolute(files)
+    absolute_files = files;
+    for i = 1 : length(absolute_files)
+        if ~startsWith(absolute_files(i), "/")
+            absolute_files(i) = fullfile(pwd, absolute_files(i));
+        end
     end
 end
 

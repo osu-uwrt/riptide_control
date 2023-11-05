@@ -52,6 +52,10 @@ install(PROGRAMS ${py_files}
   DESTINATION lib/${PROJECT_NAME}
 )
 
+file(GLOB model_py_files RELATIVE ${PROJECT_SOURCE_DIR} models/*.py)
+install(PROGRAMS ${model_py_files}
+  DESTINATION lib/${PROJECT_NAME})
+
 #Install launch files
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
