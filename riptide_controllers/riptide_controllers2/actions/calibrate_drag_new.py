@@ -166,6 +166,8 @@ class CalibrateDragNewActionServer(Node):
         stableSteps, stableStepsRequired = 0, 10
         vel, velPrev, velRatio = 0, 0, 0
 
+        time.sleep(2)
+
         while stableSteps < stableStepsRequired:
             
             #Get velocity from Odometry topic
@@ -183,7 +185,7 @@ class CalibrateDragNewActionServer(Node):
             velPrev = vel
 
             #Check if velocity ratio was stable within precision over interval
-            if (velRatio > (1 + precision)) | (velRatio < (1 - precision)):
+            if (velRatio < (1 + precision)) and (velRatio > (1 - precision)):
                 stableSteps += 1
             else:
                 stableSteps = 0
