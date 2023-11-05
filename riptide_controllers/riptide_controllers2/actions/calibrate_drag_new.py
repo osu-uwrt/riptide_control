@@ -181,7 +181,11 @@ class CalibrateDragNewActionServer(Node):
             ]
             
             vel = twist[axis]
-            velRatio = vel/velPrev
+            if(velPrev != 0):
+                velRatio = vel/velPrev
+            else:
+                velRatio = 0
+                
             velPrev = vel
 
             #Check if velocity ratio was stable within precision over interval
