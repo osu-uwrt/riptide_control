@@ -61,6 +61,11 @@ DEFAULT_ARCHIVE_DIR = os.path.join(UWRT_ROOT, "controller_model_archives")
 DEFAULT_LOCAL_DIR = os.path.join(UWRT_ROOT, "development", "software", "src", "controller_models")
 DEFAULT_DEPLOY_DIR = os.path.join(UWRT_ROOT, "release", "src", "controller_models")
 
+#cmdline consts
+GENERATE_PACKAGES_TASK_NAME = "generate_packages"
+DOWNLOAD_PACKAGES_TASK_NAME = "download_packages"
+PROCESS_CACHED_TASK_NAME    = "process_cached"
+
 
 def execute_command(cmd: 'list[str]', cwd: str):
     proc = subprocess.run(cmd, cwd=cwd)
@@ -245,7 +250,7 @@ def parse_args():
                             "Then, unless otherwise specified by the --no-build and --no-deploy flags, the program will " + \
                             "invoke Colcon to build the local packages and deploy the deployable ones."
     )
-    
+        
     parser.add_argument("--models-select", action="store", default=[], nargs="+",
                         help="Select specific models to build. Models not specified after this flag will not be built. " + \
                             "This flag takes precedence over --models-ignore. If neither --models-ignore or --models-select " + \
@@ -269,9 +274,6 @@ def parse_args():
     parser.add_argument("--deploy-config", action = "store", default=DEFAULT_DEPLOY_CONFIG,
                         help="Sets the config that generates code runnable by the robot. If allowed, code generated with) " + \
                             "this config will be automatically transferred to the deploy-dir and built")
-
-    parser.add_argument("--no-archive", action="store_true",
-                        help="If specified, the generated archives will not be stored")
 
     parser.add_argument("--no-process-local", action="store_true",
                         help="If specified, local packages will not be unpacked and built")
@@ -300,7 +302,25 @@ def parse_args():
                         help="Specifies the name of the target to deploy the deployable packages to")
     
     parser.add_argument("--test", action="store_true")
-        
+    
+    #
+    # SUBPARSERS
+    #
+    subparsers = parser.add_subparsers(title="task", dest="task", help="The task to complete", required=True)
+    
+    #GENERATE_PACKAGES SUBPARSER
+    
+    generate_subparser = subparsers.add_parser(GENERATE_PACKAGES_TASK_NAME, help="Generate Colcon packages from Simulink models")
+    
+    generate_subparser.add_argument("--no-archive", action="store_true",
+                        help="If specified, the generated archives will not be stored")
+    
+    #DOWNLOAD_PACKAGES SUBPARSER
+    download_subparser = subparsers.add_parser(DOWNLOAD_PACKAGES_TASK_NAME, help="Download released packages from the Internet")
+    
+    #PROCESS_CACHED SUBPARSER
+    process_subparser = subparsers.add_parser(PROCESS_CACHED_TASK_NAME, help="Process cached packages were already downloaded or generated")
+    
     return parser.parse_args()
 
 
@@ -321,10 +341,14 @@ def main():
     configs_select = find_files(args.configs_select)
     configs_ignore = find_files(args.configs_ignore)
     
-    generate_packges(models_select, models_ignore, configs_select, configs_ignore)
+    if args.task == GENERATE_PACKAGES_TASK_NAME:
+        generate_packges(models_select, models_ignore, configs_select, configs_ignore)
+        
+        if not args.no_archive:
+            archive_packages(os.path.abspath(args.archives_dir))
     
-    if not args.no_archive:
-        archive_packages(os.path.abspath(args.archives_dir))
+    if args.task == DOWNLOAD_PACKAGES_TASK_NAME:
+        print("DOWNLOAD PACKAGES")
     
     if not args.no_process_local:
         handle_local_packages(
