@@ -6,6 +6,7 @@ import sys
 import subprocess
 import platform
 import shutil
+import glob
 
 #
 # Figure out location of the models in the src tree. This may be weird because we may be running out of the install tree
@@ -61,6 +62,9 @@ DEFAULT_ARCHIVE_DIR = os.path.join(UWRT_ROOT, "controller_model_archives")
 DEFAULT_LOCAL_DIR = os.path.join(UWRT_ROOT, "development", "software", "src", "controller_models")
 DEFAULT_DEPLOY_DIR = os.path.join(UWRT_ROOT, "release", "src", "controller_models")
 
+DEFAULT_DOWNLOAD_LATEST_URL = "https://github.com/osu-uwrt/riptide_control/releases/latest/download/"
+DEFAULT_DOWNLOAD_VERSION_URL = "https://github.com/osu-uwrt/riptide_control/releases/download/"
+
 #cmdline consts
 GENERATE_PACKAGES_TASK_NAME = "generate_packages"
 DOWNLOAD_PACKAGES_TASK_NAME = "download_packages"
@@ -74,7 +78,7 @@ def execute_command(cmd: 'list[str]', cwd: str):
         raise RuntimeError(f"Command {cmdstr} returned with non-zero exit code {proc.returncode}")
 
 
-def generate_packges(models_select: 'list[str]', models_ignore: 'list[str]', configs_select: 'list[str]', configs_ignore: 'list[str]'):
+def generate_packages(models_select: 'list[str]', models_ignore: 'list[str]', configs_select: 'list[str]', configs_ignore: 'list[str]'):
     matlab_cmd_args = []    
         
     if len(models_select) > 0:
@@ -100,6 +104,35 @@ def archive_packages(archives_dir: str):
     generated_output_directory = os.path.join(MODELS_ROOT, "generated_models")
     ensure_not_directory_exists(archives_dir)
     shutil.copytree(generated_output_directory, archives_dir)
+
+
+def download_packages(url: str, local_config: str, deploy_config: str):
+    local_config_name = get_object_name_from_file(local_config)
+    deploy_config_name = get_object_name_from_file(deploy_config)
+    print(f"Downloading packages from url {url} using local config {local_config_name} and deploy config {deploy_config_name}")
+    
+    # find and clear generated output dir
+    generated_output_directory = os.path.join(MODELS_ROOT, "generated_models")
+    ensure_not_directory_exists(generated_output_directory)
+    ensure_directory_exists(generated_output_directory)
+    
+    # find packages to install
+    model_files = glob.glob("./**/*.slx", recursive=True)
+    model_names = get_object_names_from_files(model_files)
+    
+    print(f"Discovered downloadable models: {model_names}")
+    
+    # perform download
+    for model in model_names:
+        download_single_package(url, model, local_config_name, generated_output_directory)
+        if deploy_config_name != local_config_name:
+            download_single_package(url, model, deploy_config_name, generated_output_directory)
+
+
+def download_single_package(url, model, config, output_dir):
+    asset_name = model + "_" + config + ".tgz"
+    asset_url = os.path.join(url, asset_name)
+    execute_command(["wget", asset_url], cwd=output_dir)
 
 
 def handle_local_packages(local_config: str, local_dir: str, no_build: bool):
@@ -178,6 +211,29 @@ def get_object_name_from_file(file):
     return object_name
 
 
+def get_object_names_from_files(files):
+    names = []
+    for file in files:
+        names.append(get_object_name_from_file(file))
+    
+    return names
+
+
+def resolve_single_config_file(cfg_file: str):
+    if not cfg_file.endswith(".m"):
+        return cfg_file + ".m"
+    
+    return cfg_file
+
+
+def resolve_config_files(files: 'list[str]'):
+    resolved = []
+    for file in files:
+        resolved.append(resolve_single_config_file(file))
+    
+    return resolved
+
+
 def filter_list(lis, filt):
     filtered = []
     for item in lis:
@@ -241,8 +297,9 @@ def parse_args():
     parser = argparse.ArgumentParser(
         prog = "generate_cpp_packages.py",
         description = "Generates c++ packages from Simulink models in the riptide_controllers source tree. This program will, " + \
-                            "unless otherwise specified using the arguments below, invoke MATLAB to detect all available models " + \
-                            "and build them with every available config. The number of generated packages will be equal to the " + \
+                            "unless otherwise specified using the arguments below, download all available models or " + \
+                            "invoke MATLAB to build them with every available config. The number of " + \
+                            "generated/downloaded packages will be equal to the " + \
                             "number of actionable models times the number of actionable configs. After generating the packages, " + \
                             "this program will automatically move the archives into the directory specified by --archives-dir, " + \
                             "the local packages (runnable by the local machine) into the directory specified by --local-dir, " + \
@@ -272,7 +329,7 @@ def parse_args():
                             "with this config will be automatically transferred to the local-dir and built.")
     
     parser.add_argument("--deploy-config", action = "store", default=DEFAULT_DEPLOY_CONFIG,
-                        help="Sets the config that generates code runnable by the robot. If allowed, code generated with) " + \
+                        help="Sets the config that generates code runnable by the robot. If allowed, code generated with " + \
                             "this config will be automatically transferred to the deploy-dir and built")
 
     parser.add_argument("--no-process-local", action="store_true",
@@ -282,10 +339,10 @@ def parse_args():
                         help="If specified, deploy packages will not be unpacked and built")
     
     parser.add_argument("--no-build", action="store_true",
-                        help="If specified, the program will not attempt to build the local packages")
+                        help="If specified, the program will unpack the local packages but it will not attempt to build them")
     
     parser.add_argument("--no-deploy", action="store_true",
-                        help="If specified, the program will not attempt to deploy the deployable packages")
+                        help="If specified, the program will unpack the deploy packages but it will not attempt to deploy them")
     
     parser.add_argument("--archives-dir", action="store", default=DEFAULT_ARCHIVE_DIR,
                         help="The path to the directory in which to store the tar archives containing the generated packages")
@@ -318,6 +375,12 @@ def parse_args():
     #DOWNLOAD_PACKAGES SUBPARSER
     download_subparser = subparsers.add_parser(DOWNLOAD_PACKAGES_TASK_NAME, help="Download released packages from the Internet")
     
+    download_subparser.add_argument("--from-url", action="store", default=DEFAULT_DOWNLOAD_LATEST_URL,
+                                    help="Specifies the URL to download the asset from.")
+    
+    download_subparser.add_argument("--from-release", action="store", default="latest",
+                                    help="specifies the github release from which to download the packages. Cannot be used with --from-url")
+    
     #PROCESS_CACHED SUBPARSER
     process_subparser = subparsers.add_parser(PROCESS_CACHED_TASK_NAME, help="Process cached packages were already downloaded or generated")
     
@@ -338,27 +401,39 @@ def main():
     
     models_select = find_files(args.models_select)
     models_ignore = find_files(args.models_ignore)
-    configs_select = find_files(args.configs_select)
-    configs_ignore = find_files(args.configs_ignore)
+    configs_select = find_files(resolve_config_files(args.configs_select))
+    configs_ignore = find_files(resolve_config_files(args.configs_ignore))
+    local_config = resolve_single_config_file(args.local_config)
+    deploy_config = resolve_single_config_file(args.deploy_config)
     
     if args.task == GENERATE_PACKAGES_TASK_NAME:
-        generate_packges(models_select, models_ignore, configs_select, configs_ignore)
+        generate_packages(models_select, models_ignore, configs_select, configs_ignore)
         
         if not args.no_archive:
             archive_packages(os.path.abspath(args.archives_dir))
     
     if args.task == DOWNLOAD_PACKAGES_TASK_NAME:
-        print("DOWNLOAD PACKAGES")
+        #determine url to download from
+        if args.from_url != DEFAULT_DOWNLOAD_LATEST_URL and args.from_release != "latest":
+            #both --from-url and --from-release were specified. This is a no-no
+            print("--from-url and --from-release cannot both be specified.")
+            exit(1)
+        
+        download_url = args.from_url
+        if args.from_release != "latest":
+            download_url = os.path.join(DEFAULT_DOWNLOAD_VERSION_URL, args.from_release)
+        
+        download_packages(download_url, local_config, deploy_config)
     
     if not args.no_process_local:
         handle_local_packages(
-            args.local_config,
+            local_config,
             os.path.abspath(args.local_dir),
             args.no_build)
     
     if not args.no_process_deploy:
         handle_deploy_packages(
-            args.deploy_config,
+            deploy_config,
             os.path.abspath(args.deploy_dir),
             args.no_deploy,
             args.deploy_target)
