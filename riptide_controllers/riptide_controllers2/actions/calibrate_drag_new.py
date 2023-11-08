@@ -14,7 +14,6 @@ from rcl_interfaces.msg import ParameterValue
 from rcl_interfaces.srv import GetParameters
 from rcl_interfaces.srv import SetParameters
 from riptide_msgs2.action import CalibrateDragNew
-from riptide_msgs2.msg import ControllerCommand
 from std_msgs.msg import Float32MultiArray, Empty
 
 from transforms3d import euler
@@ -43,7 +42,7 @@ class CalibrateDragNewActionServer(Node):
         self.running = False
         self.paused = False
 
-        self.csvPath = "dragCal.csv"
+        self.csvPath = "~/dragCal.csv"
 
         self.param_set_client = self.create_client(SetParameters, "controller/set_parameters")
         self.param_set_client.wait_for_service()
@@ -124,6 +123,10 @@ class CalibrateDragNewActionServer(Node):
         firstAxis = 0
         csvData = np.empty(7)
 
+        #Create file if not exists
+        with open(self.csvPath, "x") as csvfile:
+            csvfile.close()
+
         #Load saved data, full twelve-column files will be overwritten, not reloaded
         with open(self.csvPath, "r") as csvfile:
             if(os.path.getsize(self.csvPath) > 0):
@@ -141,7 +144,7 @@ class CalibrateDragNewActionServer(Node):
   
     #collect (net force, terminal velocity) data along a given axis, returns as numpy matrix with columns: force | velocity
     def collect_data(self, axis):
-        force_data = [7,6,5,4,3,2,1]
+        force_data = [21,18,15,12,9,6,3]
         vel_data = []
 
         for i in range(len(force_data)):
@@ -162,7 +165,7 @@ class CalibrateDragNewActionServer(Node):
         self.publish_force(force, axis)
         
         stepTime = 0.1
-        precision = 0.1
+        precision = 0.05
         stableSteps, stableStepsRequired = 0, 10
         vel, velPrev, velRatio = 0, 0, 0
 
@@ -171,16 +174,17 @@ class CalibrateDragNewActionServer(Node):
         while stableSteps < stableStepsRequired:
             
             #Get velocity from Odometry topic
-            twist= [
-                self.wait_for_odometry_msg().twist.linear.x,
-                self.wait_for_odometry_msg().twist.linear.y,
-                self.wait_for_odometry_msg().twist.linear.z,
-                self.wait_for_odometry_msg().twist.angular.x,
-                self.wait_for_odometry_msg().twist.angular.y,
-                self.wait_for_odometry_msg().twist.angular.z,
+            twist = [
+                lambda odom: odom.twist.twist.linear.x,
+                lambda odom: odom.twist.twist.linear.y,
+                lambda odom: odom.twist.twist.linear.z,
+                lambda odom: odom.twist.twist.angular.x,
+                lambda odom: odom.twist.twist.angular.y,
+                lambda odom: odom.twist.twist.angular.z
             ]
             
-            vel = twist[axis]
+            vel = twist[axis](self.wait_for_odometry_msg)
+            
             if(velPrev != 0):
                 velRatio = vel/velPrev
             else:
