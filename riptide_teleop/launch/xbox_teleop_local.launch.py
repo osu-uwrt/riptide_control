@@ -30,6 +30,16 @@ def generate_launch_description():
             default_value=[LC("robot"), '.yaml'],
             description="Name of the vehicle",
         ),
+
+        launch_ros.actions.Node(
+            package='joy',
+            executable='joy_node',
+            name='joy_node',
+            respawn=True,
+            output='screen',
+            
+            parameters=[{"deadzone": 0.1}]
+        ),
         
         launch.actions.GroupAction([
             launch_ros.actions.PushRosNamespace(
@@ -39,8 +49,8 @@ def generate_launch_description():
             # create the nodes    
             launch_ros.actions.Node(
                 package='riptide_teleop2',
-                executable='ps3_teleop',
-                name='ps3_teleop',
+                executable='xbox_teleop',
+                name='xbox_teleop',
                 respawn=True,
                 output='screen',
                 

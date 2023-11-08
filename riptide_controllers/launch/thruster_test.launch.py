@@ -12,7 +12,6 @@ def generate_launch_description():
 
     # Read in the vehicle's namespace through the command line or use the default value one is not provided
     robot = LaunchConfiguration("robot")
-
     
     # declare the path to the robot's vehicle description file
     config = PathJoinSubstitution([
@@ -36,13 +35,13 @@ def generate_launch_description():
 
             launch_ros.actions.Node(
                 package="riptide_controllers2",
-                executable="controller",
-                name="controller",
+                executable="thruster_test",
+                name="thruster_test",
                 output="screen",
                 parameters=[
-                    {"vehicle_config": config},
-                    {"robot": robot},
+                    {"vehicle_config": config}
                 ]
             ),
+
         ], scoped=True)
     ])
