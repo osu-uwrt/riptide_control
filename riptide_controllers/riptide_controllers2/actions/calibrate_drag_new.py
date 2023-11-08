@@ -185,6 +185,7 @@ class CalibrateDragNewActionServer(Node):
             
             vel = twist[axis](self.wait_for_odometry_msg)
             
+            #Find velocity ratio
             if(velPrev != 0):
                 velRatio = vel/velPrev
             else:
