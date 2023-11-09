@@ -47,7 +47,7 @@ include_directories(include/riptide_controllers2)
 # )
 
 # yoink python files
-file(GLOB py_files RELATIVE ${PROJECT_SOURCE_DIR} src/riptide_controllers2/*.py)
+file(GLOB py_files RELATIVE ${PROJECT_SOURCE_DIR} src/riptide_controllers/*.py)
 install(PROGRAMS ${py_files}
   DESTINATION lib/${PROJECT_NAME}
 )

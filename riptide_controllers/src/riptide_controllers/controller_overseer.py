@@ -1,3 +1,5 @@
+#! /usr/bin/env python3
+
 import os
 
 import rclpy
@@ -17,7 +19,7 @@ import numpy as np
 
 import yaml
 
-from riptide_msgs2.msg import DshotPartialTelemetry, KillSwitchReport, DshotCommand
+from riptide_msgs2.msg import DshotPartialTelemetry, DshotCommand
 from nav_msgs.msg import Odometry
 from rcl_interfaces.srv import SetParameters
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
