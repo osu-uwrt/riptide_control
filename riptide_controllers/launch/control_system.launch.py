@@ -36,15 +36,9 @@ def generate_launch_description():
                         executable="ThrusterSolver",
                         name=THRUSTER_SOLVER_NAME)
     
-    ffControllerNode = Node(package="ff_controller",
-                            namespace = LaunchConfiguration("robot"),
-                            executable="FF_Controller",
-                            name=FEED_FORWARD_CONTROLLER_NAME)
-    
     return LaunchDescription([
         DeclareLaunchArgument("robot", default_value="tempest", description="name of robot used for namespacing"),
         DeclareLaunchArgument("robot_yaml", default_value=[LaunchConfiguration("robot"), ".yaml"], description="robot config file name"),
         overseerNode,
         thrusterSolverNode,
-        ffControllerNode
     ])
