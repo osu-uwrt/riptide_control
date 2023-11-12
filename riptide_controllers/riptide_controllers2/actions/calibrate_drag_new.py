@@ -32,10 +32,10 @@ class CalibrateDragNewActionServer(Node):
 
         #self.twist_pub = self.create_publisher(Twist, "twist", qos_profile_system_default)
         #change body_force back to active_control when new thruster solver is integrated
-        self.force_pub = self.create_publisher(Float32MultiArray,"talos/controller/body_force", qos_profile_system_default)
+        self.force_pub = self.create_publisher(Twist,"controller/body_force", qos_profile_system_default)
         
         #TODO: make trigger topic
-        self.trigger_sub = self.create_subscription(Empty, "talos/trigger", self.trigger_cb, qos_profile_system_default, callback_group = ReentrantCallbackGroup())
+        self.trigger_sub = self.create_subscription(Empty, "trigger", self.trigger_cb, qos_profile_system_default, callback_group = ReentrantCallbackGroup())
         
         self.odometry_sub = self.create_subscription(Odometry, "odometry/filtered", self.odometry_cb, qos_profile_system_default, callback_group=ReentrantCallbackGroup())
         self.odometry_queue = Queue(1)
@@ -104,12 +104,12 @@ class CalibrateDragNewActionServer(Node):
         self.paused = False
 
     #Publisher functions
-    
     def publish_force(self, value, axis):
-        msg = Float32MultiArray()
+        msg = Twist()
         temp = [0.0,0.0,0.0,0.0,0.0,0.0]
         temp[axis] = float(value)
-        msg.data = temp
+        msg.linear = Vector3(x=temp[0], y=temp[1], z=temp[2])
+        msg.angular = Vector3(x=temp[3], y=temp[4], z=temp[5])
         self.force_pub.publish(msg)
 
     #def publish_twist(self):
@@ -122,7 +122,7 @@ class CalibrateDragNewActionServer(Node):
     def execute_cb(self, goal_handle: ServerGoalHandle):
         print("checkpoint 1")
         firstAxis = 0
-        csvData = np.empty(7)
+        self.csvData = np.empty(7)
 
         #Create file if not exists
         try:
@@ -137,7 +137,7 @@ class CalibrateDragNewActionServer(Node):
                 temp = np.genfromtxt(self.csvPath, delimiter=',')
                 firstAxis = int(np.shape(temp)[1]/2) % 6
                 if(firstAxis > 0):
-                     csvData = np.column_stack((csvData,temp))
+                     self.csvData = np.column_stack((self.csvData,temp))
             csvfile.close()
 
         print("checkpoint 2")
@@ -146,11 +146,30 @@ class CalibrateDragNewActionServer(Node):
         for currentAxis in range(firstAxis,6):
             axisData = self.collect_data(axis = currentAxis)
             self.csvData = np.column_stack((self.csvData,axisData))
+        
+        #write data to csv 
+        with open(self.csvPath, "w", newline = "") as csvfile:
+    
+            writer = csv.writer(csvfile)
+        
+            self.csvData = self.csvData[:,1:]
+
+            #writer.writerow(["X Force", "X Vel", "Y Force", "Y Vel", "Z Force", "Z Vel", "Roll Torque", "Roll", "Pitch Torque", "Pitch", "Yaw Torque", "Yaw", ])
+            writer.writerows(self.csvData)
+
+            csvfile.close()
+
+        self._result.linear_drag = list()
+        self._result.quadratic_drag = list()
+
+        self.running = False
+        goal_handle.succeed()
+        return self._result
   
     #collect (net force, terminal velocity) data along a given axis, returns as numpy matrix with columns: force | velocity
     def collect_data(self, axis):
-        force_data = [21,18,15,12,9,6,3]
-        vel_data = []
+        force_data = [-21,-18,-15,-12,-9,-6,-3]
+        vel_data = [0,0,0,0,0,0,0]
 
         for i in range(len(force_data)):
             vel_data[i] = self.run_until_stable(force_data[i], axis)
@@ -158,9 +177,10 @@ class CalibrateDragNewActionServer(Node):
             self.publish_force(0,axis)
             time.sleep(1)
             
-            paused = True
-            self.get_logger().info("Axis: %d, Datapoint: %d finished\n", axis, i)
-            while paused:
+            self.paused = True
+            print("Axis: %d, Datapoint: %d finished\n" % (axis, i))
+            while self.paused:
+
                 time.sleep(0.5)
         
         return np.column_stack((np.flip(np.array(force_data)), np.flip(np.array(vel_data))))
@@ -170,13 +190,15 @@ class CalibrateDragNewActionServer(Node):
         self.publish_force(force, axis)
         
         stepTime = 0.1
-        precision = 0.05
+        precision = 0.1
         stableSteps, stableStepsRequired = 0, 10
-        vel, velPrev, velRatio = 0, 0, 0
+        vel, velPrev = 0, 0
 
         time.sleep(2)
 
         while stableSteps < stableStepsRequired:
+            
+            self.publish_force(force, axis)
             
             #Get velocity from Odometry topic
             twist = [
@@ -190,16 +212,10 @@ class CalibrateDragNewActionServer(Node):
             
             vel = twist[axis](self.wait_for_odometry_msg())
             
-            #Find velocity ratio
-            if(velPrev != 0):
-                velRatio = vel/velPrev
-            else:
-                velRatio = 0
-                
             velPrev = vel
 
             #Check if velocity ratio was stable within precision over interval
-            if (velRatio < (1 + precision)) and (velRatio > (1 - precision)):
+            if abs(vel - velPrev) < precision:
                 stableSteps += 1
             else:
                 stableSteps = 0
@@ -216,6 +232,7 @@ def main(args=None):
     executor = MultiThreadedExecutor()
     rclpy.spin(drag_cal_action_server, executor=executor)
 
+    print('checkpoint 3')
     drag_cal_action_server.destroy()
     rclpy.shutdown()
 
