@@ -58,18 +58,6 @@ class CalibrateDragNewActionServer(Node):
             callback_group=ReentrantCallbackGroup())
     
     def destroy(self):
-        #write data to csv 
-        with open(self.csvPath, "w", newline = "") as csvfile:
-    
-            writer = csv.writer(csvfile)
-        
-            self.csvData = self.csvData[:,1:]
-
-            #writer.writerow(["X Force", "X Vel", "Y Force", "Y Vel", "Z Force", "Z Vel", "Roll Torque", "Roll", "Pitch Torque", "Pitch", "Yaw Torque", "Yaw", ])
-            writer.writerows(self.csvData)
-
-            csvfile.close()
-
         self.destroy_node()
         self._action_server.destroy()
 
@@ -147,6 +135,7 @@ class CalibrateDragNewActionServer(Node):
             axisData = self.collect_data(axis = currentAxis)
             self.csvData = np.column_stack((self.csvData,axisData))
         
+        #TODO: change to appending one row at a time with axis info in 0th column, force in 1st column
         #write data to csv 
         with open(self.csvPath, "w", newline = "") as csvfile:
     
@@ -154,7 +143,6 @@ class CalibrateDragNewActionServer(Node):
         
             self.csvData = self.csvData[:,1:]
 
-            #writer.writerow(["X Force", "X Vel", "Y Force", "Y Vel", "Z Force", "Z Vel", "Roll Torque", "Roll", "Pitch Torque", "Pitch", "Yaw Torque", "Yaw", ])
             writer.writerows(self.csvData)
 
             csvfile.close()
@@ -178,12 +166,13 @@ class CalibrateDragNewActionServer(Node):
             time.sleep(1)
             
             self.paused = True
+            
             print("Axis: %d, Datapoint: %d finished\n" % (axis, i))
-            while self.paused:
 
+            while self.paused:
                 time.sleep(0.5)
         
-        return np.column_stack((np.flip(np.array(force_data)), np.flip(np.array(vel_data))))
+        return np.column_stack((np.flip(np.abs(np.array(force_data))), np.flip(np.array(vel_data))))
     
     #Run at a specified force along given axis until velocity stabilizes (reaches terminal velocity)    
     def run_until_stable(self, force, axis):
@@ -222,7 +211,7 @@ class CalibrateDragNewActionServer(Node):
             
             time.sleep(stepTime)
         
-        return vel
+        return abs(vel)
 
 def main(args=None):
     rclpy.init(args=args)
