@@ -109,10 +109,10 @@ class CalibrateDragNewActionServer(Node):
 
     #Run data collection along all 6 axes, write force and velocity data to columns in a csv
     def execute_cb(self, goal_handle: ServerGoalHandle):
+        
+        #get start axis from goal request
         self._goal = goal_handle.request
         firstAxis = self._goal.start_axis
-        print(firstAxis)
-        self.csvData = np.empty(7)
 
         #Create file if not exists
         try:
@@ -121,29 +121,16 @@ class CalibrateDragNewActionServer(Node):
         except:
             a = 0
 
-        '''#Load saved data, full twelve-column files will be overwritten, not reloaded
-        with open(self.csvPath, "r") as csvfile:
-            if(os.path.getsize(self.csvPath) > 0):
-                temp = np.genfromtxt(self.csvPath, delimiter=',')
-                firstAxis = int(np.shape(temp)[1]/2) % 6
-                if(firstAxis > 0):
-                     self.csvData = np.column_stack((self.csvData,temp))
-            csvfile.close()'''
-        
-        #record new data
-        for currentAxis in range(firstAxis,6):
-            axisData = self.collect_data(axis = currentAxis)
-            self.csvData = np.column_stack((self.csvData,axisData))
-        
-        #TODO: change to appending one row at a time with axis info in 0th column, force in 1st column
-        #write data to csv 
-        with open(self.csvPath, "w", newline = "") as csvfile:
+        with open(self.csvPath, "a", newline = "") as csvfile:
     
             writer = csv.writer(csvfile)
-        
-            self.csvData = self.csvData[:,1:]
+            
+            #record new data
+            for currentAxis in range(firstAxis,6):
+                axisData = self.collect_data(axis = currentAxis)
+                header = np.array([currentAxis])
 
-            writer.writerows(self.csvData)
+                writer.writerow(np.append(header, np.flip(axisData)))
 
             csvfile.close()
 
@@ -169,7 +156,7 @@ class CalibrateDragNewActionServer(Node):
             while self.paused:
                 time.sleep(0.5)
         
-        return np.column_stack((np.flip(np.abs(np.array(force_data))), np.flip(np.array(vel_data))))
+        return np.abs(np.array(vel_data))
     
     #Run at a specified force along given axis until velocity stabilizes (reaches terminal velocity)    
     def run_until_stable(self, force, axis):
