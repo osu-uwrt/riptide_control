@@ -329,7 +329,7 @@ class controllerOverseer(Node):
         #see if the matlab node is running
         for nodeName in get_node_names(node=self):
 
-            if nodeName.name == self.thrusterSolverName:
+            if self.thrusterSolverName in nodeName.name:
                 foundSolver = True
 
         if(self.solverActive != foundSolver):
