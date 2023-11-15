@@ -13,7 +13,7 @@ from rcl_interfaces.msg import ParameterType
 from rcl_interfaces.msg import ParameterValue
 from rcl_interfaces.srv import GetParameters
 from rcl_interfaces.srv import SetParameters
-from riptide_msgs2.action import CalibrateDrag
+from riptide_msgs2.action import CalibrateDragNew
 from std_msgs.msg import Float32MultiArray, Empty
 
 from transforms3d import euler
@@ -24,7 +24,8 @@ import csv, time, yaml, os
 
 class CalibrateDragNewActionServer(Node):
 
-    _result = CalibrateDrag.Result()
+    _result = CalibrateDragNew.Result()
+    _goal = CalibrateDragNew.Goal()
 
     def __init__(self):
         super().__init__('calibrate_drag_new')
@@ -50,7 +51,7 @@ class CalibrateDragNewActionServer(Node):
 
         self._action_server = ActionServer(
             self,
-            CalibrateDrag,
+            CalibrateDragNew,
             'calibrate_drag_new',
             self.execute_cb,
             goal_callback=self.goal_callback,
@@ -108,8 +109,9 @@ class CalibrateDragNewActionServer(Node):
 
     #Run data collection along all 6 axes, write force and velocity data to columns in a csv
     def execute_cb(self, goal_handle: ServerGoalHandle):
-        print("checkpoint 1")
-        firstAxis = 0
+        self._goal = goal_handle.request
+        firstAxis = self._goal.start_axis
+        print(firstAxis)
         self.csvData = np.empty(7)
 
         #Create file if not exists
@@ -119,16 +121,14 @@ class CalibrateDragNewActionServer(Node):
         except:
             a = 0
 
-        #Load saved data, full twelve-column files will be overwritten, not reloaded
+        '''#Load saved data, full twelve-column files will be overwritten, not reloaded
         with open(self.csvPath, "r") as csvfile:
             if(os.path.getsize(self.csvPath) > 0):
                 temp = np.genfromtxt(self.csvPath, delimiter=',')
                 firstAxis = int(np.shape(temp)[1]/2) % 6
                 if(firstAxis > 0):
                      self.csvData = np.column_stack((self.csvData,temp))
-            csvfile.close()
-
-        print("checkpoint 2")
+            csvfile.close()'''
         
         #record new data
         for currentAxis in range(firstAxis,6):
@@ -146,9 +146,6 @@ class CalibrateDragNewActionServer(Node):
             writer.writerows(self.csvData)
 
             csvfile.close()
-
-        self._result.linear_drag = list()
-        self._result.quadratic_drag = list()
 
         self.running = False
         goal_handle.succeed()
