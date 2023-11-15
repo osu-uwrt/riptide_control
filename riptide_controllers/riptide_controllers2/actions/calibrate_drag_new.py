@@ -44,7 +44,7 @@ class CalibrateDragNewActionServer(Node):
         self.running = False
         self.paused = False
 
-        self.csvPath = "/home/osu-uwrt/dragCal.csv"
+        self.csvPath = os.path.expanduser("~/osu-uwrt/dragCal.csv")
 
         #self.param_set_client = self.create_client(SetParameters, "controller/set_parameters")
         #self.param_set_client.wait_for_service()
@@ -71,7 +71,9 @@ class CalibrateDragNewActionServer(Node):
             return GoalResponse.ACCEPT
 
     def cancel_callback(self, goal):
-        return CancelResponse.REJECT
+        print("Received request to cancel the action")
+        self.running = False
+        return CancelResponse.ACCEPT
     
     #Subscriber Functions
 
@@ -109,6 +111,7 @@ class CalibrateDragNewActionServer(Node):
 
     #Run data collection along all 6 axes, write force and velocity data to columns in a csv
     def execute_cb(self, goal_handle: ServerGoalHandle):
+        print("Starting drag calibration")
         
         #get start axis from goal request
         self._goal = goal_handle.request
@@ -127,6 +130,11 @@ class CalibrateDragNewActionServer(Node):
             
             #record new data
             for currentAxis in range(firstAxis,6):
+                if not self.running:
+                    print("Action canceled.")
+                    goal_handle.canceled()
+                    return self._result
+                    
                 axisData = self.collect_data(axis = currentAxis)
                 header = np.array([currentAxis])
 
@@ -153,13 +161,21 @@ class CalibrateDragNewActionServer(Node):
             
             print("Axis: %d, Datapoint: %d finished\n" % (axis, i))
 
-            while self.paused:
+            while self.paused and self.running:
                 time.sleep(0.5)
+            
+            if not self.running:
+                break
         
         return np.abs(np.array(vel_data))
     
     #Run at a specified force along given axis until velocity stabilizes (reaches terminal velocity)    
     def run_until_stable(self, force, axis):
+        print(f"Running until stable with force {force} on axis {axis}")
+        print("Waiting for odometry message")
+        self.wait_for_odometry_msg()
+        print("Got odometry")
+        
         self.publish_force(force, axis)
         
         stepTime = 0.1
@@ -169,8 +185,7 @@ class CalibrateDragNewActionServer(Node):
 
         time.sleep(2)
 
-        while stableSteps < stableStepsRequired:
-            
+        while stableSteps < stableStepsRequired and self.running:
             self.publish_force(force, axis)
             
             #Get velocity from Odometry topic
