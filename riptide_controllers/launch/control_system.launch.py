@@ -64,8 +64,8 @@ def generate_launch_description():
             ),
             
             enabledNode(
-                package = "thrustersolver",
-                executable = "ThrusterSolver",
+                package = "thruster_solver",
+                executable = "thruster_solver",
                 name = THRUSTER_SOLVER_NAME
             ),
             

@@ -369,6 +369,7 @@ def parse_args():
                         help="Specifies the name of the target to deploy the deployable packages to")
     
     parser.add_argument("--test", action="store_true")
+    parser.add_argument("--task", action="store_true", help="Use to specify the task after using a flag like --models-select")
     
     #
     # SUBPARSERS
