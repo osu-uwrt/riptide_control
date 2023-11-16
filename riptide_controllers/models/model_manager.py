@@ -20,7 +20,7 @@ if CONTROLLERS_ROOT_LOCATION.find("/install/") >= 0:
     CONTROLLERS_ROOT_LOCATION = os.path.join(CONTROLLERS_ROOT_LOCATION[0 : CONTROLLERS_ROOT_LOCATION.find("/install/")],
                                              "src", "riptide_control", "riptide_controllers")
 
-UWRT_ROOT   = CONTROLLERS_ROOT_LOCATION[0 : CONTROLLERS_ROOT_LOCATION.find("/development/software/src/")]
+UWRT_ROOT   = os.path.expanduser("~/osu-uwrt")
 MODELS_ROOT = os.path.join(CONTROLLERS_ROOT_LOCATION, "models")
 
 #check that paths exist
@@ -139,6 +139,11 @@ def handle_local_packages(local_config: str, local_dir: str, no_build: bool):
     print(f"Storing local packages ({os.path.basename(local_config)}) in {local_dir} and " + \
         f"{'not building' if no_build else 'building'}")
     
+    local_dir_container = os.path.dirname(local_dir)
+    if not os.path.exists(local_dir_container):
+        print(f"No local path {local_dir_container}. Skipping handling of local (development) packages.")
+        return
+    
     handle_packages_generic(local_config, local_dir)
     
     if not no_build:
@@ -157,6 +162,11 @@ def handle_local_packages(local_config: str, local_dir: str, no_build: bool):
 def handle_deploy_packages(deploy_config: str, deploy_dir: str, no_deploy: bool, deploy_target: str):
     print(f"Storing deploy packages ({os.path.basename(deploy_config)}) in {deploy_dir} and " + \
         f"{'not deploying' if no_deploy else 'deploying'} to {deploy_target}")
+
+    deploy_dir_container = os.path.dirname(deploy_dir)
+    if not os.path.exists(deploy_dir_container):
+        print(f"No deploy path {deploy_dir_container}. Skipping handling of deploy (release) packages.")
+        return
     
     handle_packages_generic(deploy_config, deploy_dir)
     
