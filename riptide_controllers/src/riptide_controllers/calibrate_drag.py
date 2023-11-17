@@ -35,7 +35,7 @@ class CalibrateDragNewActionServer(Node):
 
         #self.twist_pub = self.create_publisher(Twist, "twist", qos_profile_system_default)
         #change body_force back to active_control when new thruster solver is integrated
-        self.force_pub = self.create_publisher(Twist,"controller/body_force", qos_profile_system_default)
+        self.force_pub = self.create_publisher(Twist,"controller/active_body_force", qos_profile_system_default)
         
         #TODO: make trigger topic
         self.trigger_sub = self.create_subscription(Empty, "trigger", self.trigger_cb, qos_profile_system_default, callback_group = ReentrantCallbackGroup())
@@ -47,6 +47,9 @@ class CalibrateDragNewActionServer(Node):
         self.paused = False
 
         self.csvPath = os.path.expanduser("~/osu-uwrt/dragCal.csv")
+        if not os.path.exists(self.csvPath):
+            self.get_logger().info(f"Proposed csv path {self.csvPath} does not exist; falling back to home directory")
+            self.csvPath = os.path.expanduser("~/dragCal.csv")
 
         #self.param_set_client = self.create_client(SetParameters, "controller/set_parameters")
         #self.param_set_client.wait_for_service()

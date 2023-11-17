@@ -70,9 +70,16 @@ def generate_launch_description():
             ),
             
             enabledNode(
-                package = "activecontrol",
-                executable = "ActiveControl",
+                package = "active_control",
+                executable = "active_control",
                 name = ACTIVE_CONTROLLER_NAME
+            ),
+
+            Node(
+                package="riptide_controllers2",
+                executable="calibrate_drag.py",
+                name="calibrate_drag"
             )
+
         ], scoped=True)
     ])
