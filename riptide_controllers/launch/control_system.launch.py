@@ -78,7 +78,8 @@ def generate_launch_description():
             Node(
                 package="riptide_controllers2",
                 executable="calibrate_drag.py",
-                name="calibrate_drag"
+                name="calibrate_drag",
+                output="screen"
             )
 
         ], scoped=True)

@@ -76,7 +76,7 @@ class CalibrateDragNewActionServer(Node):
             return GoalResponse.ACCEPT
 
     def cancel_callback(self, goal):
-        print("Received request to cancel the action")
+        self.get_logger().info("Received request to cancel the action")
         self.running = False
         return CancelResponse.ACCEPT
     
@@ -116,7 +116,7 @@ class CalibrateDragNewActionServer(Node):
 
     #Run data collection along all 6 axes, write force and velocity data to columns in a csv
     def execute_cb(self, goal_handle: ServerGoalHandle):
-        print("Starting drag calibration")
+        self.get_logger().info("Starting drag calibration")
         
         #get start axis from goal request
         self._goal = goal_handle.request
@@ -136,7 +136,7 @@ class CalibrateDragNewActionServer(Node):
             #record new data
             for currentAxis in range(firstAxis,6):
                 if not self.running:
-                    print("Action canceled.")
+                    self.get_logger().info("Action canceled.")
                     goal_handle.canceled()
                     return self._result
                     
@@ -153,7 +153,7 @@ class CalibrateDragNewActionServer(Node):
   
     #collect (net force, terminal velocity) data along a given axis, returns as numpy matrix with columns: force | velocity
     def collect_data(self, axis):
-        force_data = [-21,-18,-15,-12,-9,-6,-3]
+        force_data = [-49,-42,-35,-28,-21,-14,-7] if (axis < 2) else [-21,-18,-15,-12,-9,-6,-3]
         vel_data = [0,0,0,0,0,0,0]
 
         for i in range(len(force_data)):
@@ -164,7 +164,7 @@ class CalibrateDragNewActionServer(Node):
             
             self.paused = True
             
-            print("Axis: %d, Datapoint: %d finished\n" % (axis, i))
+            self.get_logger().info("Axis: %d, Datapoint: %d finished\n" % (axis, i))
 
             while self.paused and self.running:
                 time.sleep(0.5)
@@ -176,16 +176,16 @@ class CalibrateDragNewActionServer(Node):
     
     #Run at a specified force along given axis until velocity stabilizes (reaches terminal velocity)    
     def run_until_stable(self, force, axis):
-        print(f"Running until stable with force {force} on axis {axis}")
-        print("Waiting for odometry message")
+        self.get_logger().info(f"Running until stable with force {force} on axis {axis}")
+        self.get_logger().info("Waiting for odometry message")
         self.wait_for_odometry_msg()
-        print("Got odometry")
+        self.get_logger().info("Got odometry")
         
         self.publish_force(force, axis)
         
         stepTime = 0.1
-        precision = 0.1
-        stableSteps, stableStepsRequired = 0, 10
+        precision = 0.08
+        stableSteps, stableStepsRequired = 0, 20
         vel, velPrev = 0, 0
 
         time.sleep(2)
@@ -225,7 +225,6 @@ def main(args=None):
     executor = MultiThreadedExecutor()
     rclpy.spin(drag_cal_action_server, executor=executor)
 
-    print('checkpoint 3')
     drag_cal_action_server.destroy()
     rclpy.shutdown()
 
