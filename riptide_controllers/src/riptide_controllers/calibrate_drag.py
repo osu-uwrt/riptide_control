@@ -184,9 +184,10 @@ class CalibrateDragNewActionServer(Node):
         self.publish_force(force, axis)
         
         stepTime = 0.1
-        precision = 0.08
-        stableSteps, stableStepsRequired = 0, 20
-        vel, velPrev = 0, 0
+        precision = 0.05
+        stableSteps, stableStepsRequired = 0, 10
+        vels = np.ndarray(stableStepsRequired)
+        vel, velStable = 0, 0
 
         time.sleep(2)
 
@@ -203,19 +204,19 @@ class CalibrateDragNewActionServer(Node):
                 lambda odom: odom.twist.twist.angular.z
             ]
             
-            vel = twist[axis](self.wait_for_odometry_msg())
-            
-            velPrev = vel
+            vel = twist[axis](self.wait_for_odometry_msg())            
 
             #Check if velocity ratio was stable within precision over interval
-            if abs(vel - velPrev) < precision:
+            if abs(vel - velStable) < precision:
+                vels[stableSteps] = vel
                 stableSteps += 1
             else:
+                velStable = vel
                 stableSteps = 0
             
             time.sleep(stepTime)
         
-        return abs(vel)
+        return abs(np.mean(vels))
 
 def main(args=None):
     rclpy.init(args=args)
