@@ -127,3 +127,18 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+
+#
+# MATLAB
+#
++bus_conv_fcns/
+*_ert_rtw
+slprj/
+*/models/src/
+*.slxc
+build_ros2_model.sh
+generated_models/
+*.tgz
+codegen/
+*.prj

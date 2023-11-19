@@ -15,22 +15,12 @@
   <author>Blaine Miller</author>
   <author>Mitchell Sayre</author>
 
-  <build_depend>libceres-dev</build_depend>
-  <build_depend>eigen</build_depend>
   <build_depend>geometry_msgs</build_depend>
-  <!-- <build_depend>imu_3dm_gx4</build_depend> -->
   <build_depend>riptide_msgs2</build_depend>
   <build_depend>rclcpp</build_depend>
-  <!-- <build_depend>roslint</build_depend> -->
   <build_depend>sensor_msgs</build_depend>
   <build_depend>tf2_geometry_msgs</build_depend>
   <build_depend>tf_transformations</build_depend>
-
-  <test_depend>ament_copyright</test_depend>
-  <test_depend>ament_flake8</test_depend>
-  <test_depend>ament_pep257</test_depend>
-  <test_depend>python3-pytest</test_depend>
-
   <exec_depend>rclpy</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>riptide_msgs2</exec_depend>
@@ -40,6 +30,6 @@
   <exec_depend>tf2_ros</exec_depend>
   
   <export>
-    <build_type>ament_python</build_type>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>

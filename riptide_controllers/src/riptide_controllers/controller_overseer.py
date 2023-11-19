@@ -1,3 +1,5 @@
+#! /usr/bin/env python3
+
 import os
 
 import rclpy
@@ -17,7 +19,7 @@ import numpy as np
 
 import yaml
 
-from riptide_msgs2.msg import DshotPartialTelemetry, KillSwitchReport, DshotCommand
+from riptide_msgs2.msg import DshotPartialTelemetry, DshotCommand
 from nav_msgs.msg import Odometry
 from rcl_interfaces.srv import SetParameters
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
@@ -41,6 +43,7 @@ FF_PUBLISH_PARAM = "disable_native_ff"
 FF_TOPIC_NAME = "controller/FF_body_force"
 
 RPM_PUBLISH_PERIOD = .02
+WEIGHTS_FORCE_UPDATE_PERIOD = 1
 
 G = 9.8067
 
@@ -139,7 +142,7 @@ class controllerOverseer(Node):
 
         #republish matlab to firmware
         #TODO remove
-        self.create_subscription(Int32MultiArray, "reqforce", self.forceRepublishCb, qos_profile_system_default)
+        self.create_subscription(Int32MultiArray, "reqforce", self.forceRepublishCb, 10)
         self.create_subscription(Int32MultiArray, "reqRPM", self.rpmRepublishCb, qos_profile_system_default)
 
         self.rpmCommandPub = self.create_publisher(DshotCommand, "command/thruster_rpm", qos_profile_system_default)
@@ -175,12 +178,10 @@ class controllerOverseer(Node):
 
         #start the publish loop
         self.create_timer(RPM_PUBLISH_PERIOD, self.pubCB)
+        self.create_timer(WEIGHTS_FORCE_UPDATE_PERIOD, self.adjustThrusterWeights)
 
         self.pubTimer = None
         self.enabled = True
-
-        self.adjustThrusterWeights()
-
         self.publishingFF = True
 
 
@@ -323,16 +324,21 @@ class controllerOverseer(Node):
 
         foundSolver = False
         foundFF = False
+        
+        thrusterSolverSetParamName = f"{self.thrusterSolverName}/set_parameters"
 
         #see if the matlab node is running
         for nodeName in get_node_names(node=self):
 
-            if nodeName.name == self.thrusterSolverName:
+            if self.thrusterSolverName in nodeName.name:
                 foundSolver = True
+                thrusterSolverSetParamName = f"{nodeName.full_name}/set_parameters"
 
         if(self.solverActive != foundSolver):
             if(foundSolver):
-                #thruster solver came online
+                #thruster solver came online. now that we know its name we can set its parameters
+                self.get_logger().info(f"Setting parameters using service {thrusterSolverSetParamName}")
+                self.setThrusterSolverParamsClient = self.create_client(SetParameters, thrusterSolverSetParamName)
                 self.paramTimerTS = self.create_timer(1.0, self.setSolverParams)
 
                 self.get_logger().info("Found Thruster Solver!")
