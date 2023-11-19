@@ -154,6 +154,12 @@ class CalibrateDragNewActionServer(Node):
     #collect (net force, terminal velocity) data along a given axis, returns as numpy matrix with columns: force | velocity
     def collect_data(self, axis):
         force_data = [-49,-42,-35,-28,-21,-14,-7] if (axis < 2) else [-21,-18,-15,-12,-9,-6,-3]
+        
+        try:
+            force_data = self._goal.force_values[axis]
+        except:
+            self.get_logger().info("Failed to get force data.")
+        
         vel_data = [0,0,0,0,0,0,0]
 
         for i in range(len(force_data)):
