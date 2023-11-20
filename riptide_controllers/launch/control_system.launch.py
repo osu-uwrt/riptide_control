@@ -9,8 +9,7 @@ from ament_index_python import get_package_share_directory
 #launch the new controller system
 
 THRUSTER_SOLVER_NAME = "thruster_solver"
-ACTIVE_CONTROLLER_NAME = "active_controller"
-
+ACTIVE_CONTROLLER_NAME = "SMC"
 
 def enabledNode(
     package: str,
@@ -59,7 +58,7 @@ def generate_launch_description():
                     {"vehicle_config": vehicle_config_file, 
                         "robot": LaunchConfiguration("robot"),
                         "thruster_solver_node_name": THRUSTER_SOLVER_NAME,
-                        "ff_controller_node_name": "ff_controller", #TODO remove
+                        "active_controller_node_name": ACTIVE_CONTROLLER_NAME
                     }]
             ),
             

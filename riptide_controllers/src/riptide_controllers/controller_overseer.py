@@ -43,13 +43,14 @@ ACTIVE_CONTROLLER_DRAG_COEFFICENTS_PARAM = "talos_drag_coefficents"
 ACTIVE_CONTROLLER_ANGULAR_REGEN_PARAM = "talos_angular_regeneration_threshhold"
 ACTIVE_CONTROLLER_LINEAR_REGEN_PARAM = "talos_linear_regeneration_threshhold"
 ACTIVE_CONTROLLER_MASS_PARAM = "talos_mass"
-ACTIVE_CONTROLLER_ROTATIONAL_INTERIAS_PARAM = "talos_rotational_interias"
-ACTIVE_CONTROLLER_LAMDA_PARAM = "talos_lamda"
+ACTIVE_CONTROLLER_ROTATIONAL_INERTIAS_PARAM = "talos_rotational_inertias"
+ACTIVE_CONTROLLER_LAMBDA_PARAM = "talos_lambda"
 ACTIVE_CONTROLLER_ETA_0_PARAM = "talos_Eta_Order_0"
 ACTIVE_CONTROLLER_ETA_1_PARAM = "talos_Eta_Order_1"
 ACTIVE_CONTROLLER_VMAX_PARAM = "talos_vMax"
 ACTIVE_CONTROLLER_AMAX_PARAM = "talos_aMax"
 ACTIVE_CONTROLLER_JAMX_PARAM = "talos_jMax"
+ACTIVE_CONTROLLER_RADIAL_FUNC_COUNT_PARAM = "talos_radial_function_count"
 ACTIVE_CONTROLLER_SCALING_PARAM = "parameter_scaling_factor"
 
 
@@ -220,17 +221,18 @@ class controllerOverseer(Node):
         self.talos_rotational_inertias = config_file["inertia"]
 
         #SMC specific parameters
-        self.talos_drag_coefficents = config_file["SMC"]["damping"]
-        self.talos_angular_regen = config_file["SMC"]["SMC_params"]["linear_regeneration_threshhold"]
-        self.talos_linear_regen = config_file["SMC"]["SMC_params"]["angular_regeneration_threshhold"]
-        self.talos_eta_0_values = config_file["SMC"]["SMC_params"]["eta_order_0"]
-        self.talos_eta_1_values = config_file["SMC"]["SMC_params"]["eta_order_1"]
-        self.talos_lamda_values = config_file["SMC"]["SMC_params"]["lamda"]
+        self.talos_drag_coefficents = config_file["controller"]["SMC"]["damping"]
+        self.talos_angular_regen = config_file["controller"]["SMC"]["SMC_params"]["linear_regeneration_threshhold"]
+        self.talos_linear_regen = config_file["controller"]["SMC"]["SMC_params"]["angular_regeneration_threshhold"]
+        self.talos_eta_0_values = config_file["controller"]["SMC"]["SMC_params"]["eta_order_0"]
+        self.talos_eta_1_values = config_file["controller"]["SMC"]["SMC_params"]["eta_order_1"]
+        self.talos_lambda_values = config_file["controller"]["SMC"]["SMC_params"]["lambda"]
 
         #motion generation params
-        self.talos_vmax_values = config_file["SMC"]["motion_profile_params"]["max_velocity"]
-        self.talos_amax_values = config_file["SMC"]["motion_profile_params"]["max_acceleration"]
-        self.talos_jmax_values = config_file["SMC"]["motion_profile_params"]["max_jerk"]
+        self.talos_vmax_values = config_file["controller"]["SMC"]["motion_profile_params"]["max_velocity"]
+        self.talos_amax_values = config_file["controller"]["SMC"]["motion_profile_params"]["max_acceleration"]
+        self.talos_jmax_values = config_file["controller"]["SMC"]["motion_profile_params"]["max_jerk"]
+        self.talos_radial_function_count = config_file["controller"]["SMC"]["motion_profile_params"]["radial_function_count"]
 
 
     def thrusterTelemetryCB(self, msg: DshotPartialTelemetry):
@@ -452,8 +454,9 @@ class controllerOverseer(Node):
             self.ffPub.publish(msg)
 
         
-        #update wether or not the solver has been found
+        #update wether or not the solver and active control has been found
         self.solverActive = foundSolver
+        self.activeActive = foundActiveControl
 
     def setSolverParams(self):   
         self.get_logger().info("Setting Thruster Solver Default Parameters")
@@ -533,6 +536,7 @@ class controllerOverseer(Node):
                 self.pubTimer = self.create_timer(RPM_PUBLISH_PERIOD, self.pubCB)
 
     def setActiveParams(self):
+        self.get_logger().info("Setting Active Controller Default Parameters")
         #load in paramters to the active controller
 
         #drag coefficents
@@ -596,17 +600,17 @@ class controllerOverseer(Node):
 
         #scale and int
         int_values = []
-        for value in self.talos_lamda_values:
+        for value in self.talos_lambda_values:
             int_values.append(int(value * PARAMETER_SCALE))
 
-        #SMC Lamda
+        #SMC lambda
         val = ParameterValue()
         val.type = ParameterType.PARAMETER_INTEGER_ARRAY
         val.integer_array_value = int_values
 
         param6 = Parameter()
         param6.value = val
-        param6.name = ACTIVE_CONTROLLER_LAMDA_PARAM
+        param6.name = ACTIVE_CONTROLLER_LAMBDA_PARAM
 
         #mass
         val = ParameterValue()
@@ -629,7 +633,7 @@ class controllerOverseer(Node):
 
         param8 = Parameter()
         param8.value = val
-        param8.name = ACTIVE_CONTROLLER_ROTATIONAL_INTERIAS_PARAM
+        param8.name = ACTIVE_CONTROLLER_ROTATIONAL_INERTIAS_PARAM
 
         #scale and int
         int_values = []
@@ -672,15 +676,24 @@ class controllerOverseer(Node):
         param11 = Parameter()
         param11.value = val
         param11.name = ACTIVE_CONTROLLER_JAMX_PARAM
+        
+        #radial function count
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = int(self.talos_radial_function_count * PARAMETER_SCALE)
+
+        param12 = Parameter()
+        param12.value = val
+        param12.name = ACTIVE_CONTROLLER_RADIAL_FUNC_COUNT_PARAM
 
         #mass
         val = ParameterValue()
         val.type = ParameterType.PARAMETER_INTEGER
         val.integer_value = int(PARAMETER_SCALE)
 
-        param12 = Parameter()
-        param12.value = val
-        param12.name = ACTIVE_CONTROLLER_SCALING_PARAM
+        param13 = Parameter()
+        param13.value = val
+        param13.name = ACTIVE_CONTROLLER_SCALING_PARAM
 
         #creste request to call the set parameters service
         request = SetParameters.Request()
