@@ -1,0 +1,21 @@
+function fitDrag()
+    forces = [0, 3, 6,	9,	12,	15,	18,	21,7,12,21,	28,	35,	42,	49];
+    velocity = [0, 0.109054062,	0.135542147,0.211913432,0.219817198,0.23192925,	0.24824003,	0.265763446, 0.1571701,	0.22296496,	0.312236227,0.373127916,0.406371837,0.473667358,0.503437425];
+    idealMaxVelocity = velocity(end);
+    
+    %define A matrix
+    A = zeros(length(velocity), 3);
+    for m = 1:length(velocity)
+        A(m, :) = [1, velocity(m), exp(velocity(m) / idealMaxVelocity)];
+    end
+    
+    b = inv(transpose(A) * A) * transpose(A) * transpose(forces);
+    
+    tVals = linspace(0, idealMaxVelocity, 1000);
+    curveVals = b(1) + tVals * b(2) + exp(tVals/idealMaxVelocity) * b(3);
+    
+    plot(velocity, forces, "ok", tVals, curveVals,"b")
+    
+    disp(dof)
+    disp(b(1), b(2), b)
+end
