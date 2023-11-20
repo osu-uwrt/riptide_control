@@ -8,7 +8,7 @@ function val = evalCurve(co,t)
     offsets = linspace(-pi(), pi() * (1 - 2 / functionCount), functionCount);
 
     for i = 1:length(co)
-        val = val + co(i) * sin(pi() / 2 * t + offsets(i)) ^ functionCount;
+        val = val + co(i) .* sin(pi() ./ 2 .* t + offsets(i)) .^ 9;
     end
 
     disp(offsets)
