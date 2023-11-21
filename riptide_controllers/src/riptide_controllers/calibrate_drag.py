@@ -160,7 +160,7 @@ class CalibrateDragNewActionServer(Node):
         except:
             self.get_logger().info("Failed to get force data.")
         
-        vel_data = [None]*len(force_data[0])
+        vel_data = [0]*len(force_data)
 
         for i in range(len(force_data)):
             vel_data[i] = self.run_until_stable(force_data[i], axis)
