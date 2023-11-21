@@ -134,16 +134,16 @@ class CalibrateDragNewActionServer(Node):
             writer = csv.writer(csvfile)
             
             #record new data
-            for currentAxis in range(firstAxis,6):
-                if not self.running:
-                    self.get_logger().info("Action canceled.")
-                    goal_handle.canceled()
-                    return self._result
-                    
-                axisData = self.collect_data(axis = currentAxis)
-                header = np.array([currentAxis])
-
-                writer.writerow(np.append(header, np.flip(axisData)))
+            if not self.running:
+                self.get_logger().info("Action canceled.")
+                goal_handle.canceled()
+                return self._result
+                
+            axisData = self.collect_data(axis = firstAxis)
+            header = np.array([firstAxis,])
+            writer.writerow(np.append(self._goal.force_values.data))
+            writer.writerow(np.append(header, np.flip(axisData)))
+            writer.writerow()
 
             csvfile.close()
 
@@ -156,7 +156,7 @@ class CalibrateDragNewActionServer(Node):
         force_data = [-49,-42,-35,-28,-21,-14,-7] if (axis < 2) else [-21,-18,-15,-12,-9,-6,-3]
         
         try:
-            force_data = self._goal.force_values[axis]
+            force_data = self._goal.force_values.data
         except:
             self.get_logger().info("Failed to get force data.")
         
