@@ -31,6 +31,9 @@ ERROR_PATIENCE = 1.0
 
 PARAMETER_SCALE = 1000000
 
+#
+# THRUSTER SOLVER PARAM NAMES
+#
 THRUSTER_SOLVER_WRENCH_MATRIX_PARAM = "talos_wrenchmat"
 THRUSTER_SOLVER_WEIGHT_MATRIX_TOPIC = "controller/solver_weights"
 THRUSTER_SOLVER_SYSTEM_LIMIT_PARAM = "talos_sys_lim"
@@ -39,6 +42,9 @@ THRUSTER_SOLVER_SCALING_PARAM = "thruster_solver_scaling_parameters"
 THRUSTER_SOLVER_FORCE_RPM_COEFFICENTS_PARAM = "talos_force_curve_coefficents"
 THRUSTER_SOLVER_DISABLE_WEIGHTS = "thruster_solver_disable_weight"
 
+#
+# SMC PARAM NAMES
+# 
 ACTIVE_CONTROLLER_DRAG_COEFFICENTS_PARAM = "talos_drag_coefficents"
 ACTIVE_CONTROLLER_ANGULAR_REGEN_PARAM = "talos_angular_regeneration_threshhold"
 ACTIVE_CONTROLLER_LINEAR_REGEN_PARAM = "talos_linear_regeneration_threshhold"
@@ -55,6 +61,14 @@ ACTIVE_CONTROLLER_JAMX_PARAM = "talos_jMax"
 ACTIVE_CONTROLLER_RADIAL_FUNC_COUNT_PARAM = "talos_radial_function_count"
 ACTIVE_CONTROLLER_SCALING_PARAM = "parameter_scaling_factor"
 
+#
+# PID PARAM NAMES
+#
+ACTIVE_CONTROLLER_PID_P_GAINS_PARAM = "pid_PGains"
+ACTIVE_CONTROLLER_PID_I_GAINS_PARAM = "pid_IGains"
+ACTIVE_CONTROLLER_PID_D_GAINS_PARAM = "pid_DGains"
+ACTIVE_CONTROLLER_PID_RESET_THRESHOLD_PARAM = "pid_reset_threshold"
+ACTIVE_CONTROLLER_PID_SCALING_FACTOR_PARAM = "pid_scaling_parameters"
 
 FF_PUBLISH_PARAM = "disable_native_ff"
 FF_TOPIC_NAME = "controller/FF_body_force"
@@ -261,6 +275,12 @@ class controllerOverseer(Node):
         self.talos_amax_values = config_file["controller"]["SMC"]["motion_profile_params"]["max_acceleration"]
         self.talos_jmax_values = config_file["controller"]["SMC"]["motion_profile_params"]["max_jerk"]
         self.talos_radial_function_count = config_file["controller"]["SMC"]["motion_profile_params"]["radial_function_count"]
+        
+        #PID specific parameters
+        self.talos_p_gains = config_file["controller"]["PID"]["p_gains"]
+        self.talos_i_gains = config_file["controller"]["PID"]["i_gains"]
+        self.talos_d_gains = config_file["controller"]["PID"]["d_gains"]
+        self.talos_pid_reset_threshold = config_file["controller"]["PID"]["reset_threshold"]
 
 
     def thrusterTelemetryCB(self, msg: DshotPartialTelemetry):
@@ -563,11 +583,9 @@ class controllerOverseer(Node):
             elif(self.pubTimer.is_canceled()):
                 self.pubTimer = self.create_timer(RPM_PUBLISH_PERIOD, self.pubCB)
 
-    def setActiveParams(self):
-        self.get_logger().info("Setting Active Controller Default Parameters")
-        #load in paramters to the active controller
 
-        #drag coefficents
+    def getSMCSetParamRequest(self):
+                #drag coefficents
         int_values = []
         for value in self.talos_drag_coefficents:
             int_values.append(int(value * PARAMETER_SCALE))
@@ -744,6 +762,83 @@ class controllerOverseer(Node):
         #creste request to call the set parameters service
         request = SetParameters.Request()
         request.parameters = [param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11, param12, param13, param14, param15]
+        return request
+    
+    
+    def getPIDSetParamRequest(self):
+        #SET P GAINS
+        int_values = []
+        for value in self.talos_p_gains:
+            int_values.append(int(value * PARAMETER_SCALE))
+        
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param1 = Parameter()
+        param1.value = val
+        param1.name = ACTIVE_CONTROLLER_PID_P_GAINS_PARAM
+        
+        #SET I GAINS
+        int_values = []
+        for value in self.talos_i_gains:
+            int_values.append(int(value * PARAMETER_SCALE))
+        
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param2 = Parameter()
+        param2.value = val
+        param2.name = ACTIVE_CONTROLLER_PID_I_GAINS_PARAM
+        
+        #SET D GAINS
+        int_values = []
+        for value in self.talos_d_gains:
+            int_values.append(int(value * PARAMETER_SCALE))
+        
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param3 = Parameter()
+        param3.value = val
+        param3.name = ACTIVE_CONTROLLER_PID_D_GAINS_PARAM
+        
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = int(self.talos_pid_reset_threshold * PARAMETER_SCALE)
+
+        param4 = Parameter()
+        param4.value = val
+        param4.name = ACTIVE_CONTROLLER_PID_RESET_THRESHOLD_PARAM
+        
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = int(PARAMETER_SCALE)
+
+        param5 = Parameter()
+        param5.value = val
+        param5.name = ACTIVE_CONTROLLER_PID_SCALING_FACTOR_PARAM
+        
+        request = SetParameters.Request()
+        request.parameters = [param1, param2, param3, param4, param5]
+        return request
+    
+
+    def setActiveParams(self):
+        self.get_logger().info("Setting Active Controller Default Parameters")
+        #load in paramters to the active controller
+
+        request = None
+        if(self.activeControllerName == "SMC"):
+            request = self.getSMCSetParamRequest()
+        elif(self.activeControllerName == "PID"):
+            request = self.getPIDSetParamRequest()
+        
+        if(request is None):
+            self.get_logger().error(f"Internal error! Cannot set parameters for control model {self.activeControllerName} because it does not have a paramter function.")
+            return
 
         #call set parameters service
         self.future = self.setActiveControllerParamsClient.call_async(request)
