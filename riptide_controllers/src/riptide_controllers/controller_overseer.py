@@ -248,10 +248,10 @@ class controllerOverseer(Node):
 
         #SMC specific parameters
         self.talos_drag_coefficents = config_file["controller"]["SMC"]["damping"]
-        self.talos_angular_regen = config_file["controller"]["SMC"]["SMC_params"]["angular_regeneration_threshhold"]
-        self.talos_linear_regen = config_file["controller"]["SMC"]["SMC_params"]["linear_regeneration_threshhold"]
-        self.talos_angular_stationkeep = config_file["controller"]["SMC"]["SMC_params"]["angular_stationkeep_threshhold"]
-        self.talos_linear_stationkeep = config_file["controller"]["SMC"]["SMC_params"]["linear_stationkeep_threshhold"]
+        self.talos_angular_regen = config_file["controller"]["SMC"]["SMC_params"]["angular_regeneration_threshold"]
+        self.talos_linear_regen = config_file["controller"]["SMC"]["SMC_params"]["linear_regeneration_threshold"]
+        self.talos_angular_stationkeep = config_file["controller"]["SMC"]["SMC_params"]["angular_stationkeep_threshold"]
+        self.talos_linear_stationkeep = config_file["controller"]["SMC"]["SMC_params"]["linear_stationkeep_threshold"]
         self.talos_eta_0_values = config_file["controller"]["SMC"]["SMC_params"]["eta_order_0"]
         self.talos_eta_1_values = config_file["controller"]["SMC"]["SMC_params"]["eta_order_1"]
         self.talos_lambda_values = config_file["controller"]["SMC"]["SMC_params"]["lambda"]
