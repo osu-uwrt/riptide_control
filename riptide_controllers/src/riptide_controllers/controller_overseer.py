@@ -42,6 +42,8 @@ THRUSTER_SOLVER_DISABLE_WEIGHTS = "thruster_solver_disable_weight"
 ACTIVE_CONTROLLER_DRAG_COEFFICENTS_PARAM = "talos_drag_coefficents"
 ACTIVE_CONTROLLER_ANGULAR_REGEN_PARAM = "talos_angular_regeneration_threshhold"
 ACTIVE_CONTROLLER_LINEAR_REGEN_PARAM = "talos_linear_regeneration_threshhold"
+ACTIVE_CONTROLLER_ANGULAR_STATIONKEEP_PARAM = "talos_angular_stationkeep_threshold"
+ACTIVE_CONTROLLER_LINEAR_STATIONKEEP_PARAM = "talos_linear_stationkeep_threshold"
 ACTIVE_CONTROLLER_MASS_PARAM = "talos_mass"
 ACTIVE_CONTROLLER_ROTATIONAL_INERTIAS_PARAM = "talos_rotational_inertias"
 ACTIVE_CONTROLLER_LAMBDA_PARAM = "talos_lambda"
@@ -222,8 +224,10 @@ class controllerOverseer(Node):
 
         #SMC specific parameters
         self.talos_drag_coefficents = config_file["controller"]["SMC"]["damping"]
-        self.talos_angular_regen = config_file["controller"]["SMC"]["SMC_params"]["linear_regeneration_threshhold"]
-        self.talos_linear_regen = config_file["controller"]["SMC"]["SMC_params"]["angular_regeneration_threshhold"]
+        self.talos_angular_regen = config_file["controller"]["SMC"]["SMC_params"]["angular_regeneration_threshhold"]
+        self.talos_linear_regen = config_file["controller"]["SMC"]["SMC_params"]["linear_regeneration_threshhold"]
+        self.talos_angular_stationkeep = config_file["controller"]["SMC"]["SMC_params"]["angular_stationkeep_threshhold"]
+        self.talos_linear_stationkeep = config_file["controller"]["SMC"]["SMC_params"]["linear_stationkeep_threshhold"]
         self.talos_eta_0_values = config_file["controller"]["SMC"]["SMC_params"]["eta_order_0"]
         self.talos_eta_1_values = config_file["controller"]["SMC"]["SMC_params"]["eta_order_1"]
         self.talos_lambda_values = config_file["controller"]["SMC"]["SMC_params"]["lambda"]
@@ -569,6 +573,24 @@ class controllerOverseer(Node):
         param3 = Parameter()
         param3.value = val
         param3.name = ACTIVE_CONTROLLER_LINEAR_REGEN_PARAM
+        
+        #angular stationkeep
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = int(self.talos_angular_stationkeep * PARAMETER_SCALE)
+
+        param4 = Parameter()
+        param4.value = val
+        param4.name = ACTIVE_CONTROLLER_ANGULAR_STATIONKEEP_PARAM
+
+        #linear stationkeep
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = int(self.talos_linear_stationkeep * PARAMETER_SCALE)
+
+        param5 = Parameter()
+        param5.value = val
+        param5.name = ACTIVE_CONTROLLER_LINEAR_STATIONKEEP_PARAM
 
         #scale and int
         int_values = []
@@ -580,9 +602,9 @@ class controllerOverseer(Node):
         val.type = ParameterType.PARAMETER_INTEGER_ARRAY
         val.integer_array_value = int_values
 
-        param4 = Parameter()
-        param4.value = val
-        param4.name = ACTIVE_CONTROLLER_ETA_0_PARAM
+        param6 = Parameter()
+        param6.value = val
+        param6.name = ACTIVE_CONTROLLER_ETA_0_PARAM
 
         #scale and int
         int_values = []
@@ -594,9 +616,9 @@ class controllerOverseer(Node):
         val.type = ParameterType.PARAMETER_INTEGER_ARRAY
         val.integer_array_value = int_values
 
-        param5 = Parameter()
-        param5.value = val
-        param5.name = ACTIVE_CONTROLLER_ETA_1_PARAM
+        param7 = Parameter()
+        param7.value = val
+        param7.name = ACTIVE_CONTROLLER_ETA_1_PARAM
 
         #scale and int
         int_values = []
@@ -608,18 +630,18 @@ class controllerOverseer(Node):
         val.type = ParameterType.PARAMETER_INTEGER_ARRAY
         val.integer_array_value = int_values
 
-        param6 = Parameter()
-        param6.value = val
-        param6.name = ACTIVE_CONTROLLER_LAMBDA_PARAM
+        param8 = Parameter()
+        param8.value = val
+        param8.name = ACTIVE_CONTROLLER_LAMBDA_PARAM
 
         #mass
         val = ParameterValue()
         val.type = ParameterType.PARAMETER_INTEGER
         val.integer_value = int(self.talos_mass * PARAMETER_SCALE)
 
-        param7 = Parameter()
-        param7.value = val
-        param7.name = ACTIVE_CONTROLLER_MASS_PARAM
+        param9 = Parameter()
+        param9.value = val
+        param9.name = ACTIVE_CONTROLLER_MASS_PARAM
 
         #scale and int
         int_values = []
@@ -631,9 +653,9 @@ class controllerOverseer(Node):
         val.type = ParameterType.PARAMETER_INTEGER_ARRAY
         val.integer_array_value = int_values
 
-        param8 = Parameter()
-        param8.value = val
-        param8.name = ACTIVE_CONTROLLER_ROTATIONAL_INERTIAS_PARAM
+        param10 = Parameter()
+        param10.value = val
+        param10.name = ACTIVE_CONTROLLER_ROTATIONAL_INERTIAS_PARAM
 
         #scale and int
         int_values = []
@@ -645,9 +667,9 @@ class controllerOverseer(Node):
         val.type = ParameterType.PARAMETER_INTEGER_ARRAY
         val.integer_array_value = int_values
 
-        param9 = Parameter()
-        param9.value = val
-        param9.name = ACTIVE_CONTROLLER_VMAX_PARAM
+        param11 = Parameter()
+        param11.value = val
+        param11.name = ACTIVE_CONTROLLER_VMAX_PARAM
 
         #scale and int
         int_values = []
@@ -659,9 +681,9 @@ class controllerOverseer(Node):
         val.type = ParameterType.PARAMETER_INTEGER_ARRAY
         val.integer_array_value = int_values
 
-        param10 = Parameter()
-        param10.value = val
-        param10.name = ACTIVE_CONTROLLER_AMAX_PARAM
+        param12 = Parameter()
+        param12.value = val
+        param12.name = ACTIVE_CONTROLLER_AMAX_PARAM
 
         #scale and int
         int_values = []
@@ -673,31 +695,31 @@ class controllerOverseer(Node):
         val.type = ParameterType.PARAMETER_INTEGER_ARRAY
         val.integer_array_value = int_values
 
-        param11 = Parameter()
-        param11.value = val
-        param11.name = ACTIVE_CONTROLLER_JAMX_PARAM
+        param13 = Parameter()
+        param13.value = val
+        param13.name = ACTIVE_CONTROLLER_JAMX_PARAM
         
         #radial function count
         val = ParameterValue()
         val.type = ParameterType.PARAMETER_INTEGER
         val.integer_value = int(self.talos_radial_function_count * PARAMETER_SCALE)
 
-        param12 = Parameter()
-        param12.value = val
-        param12.name = ACTIVE_CONTROLLER_RADIAL_FUNC_COUNT_PARAM
+        param14 = Parameter()
+        param14.value = val
+        param14.name = ACTIVE_CONTROLLER_RADIAL_FUNC_COUNT_PARAM
 
         #mass
         val = ParameterValue()
         val.type = ParameterType.PARAMETER_INTEGER
         val.integer_value = int(PARAMETER_SCALE)
 
-        param13 = Parameter()
-        param13.value = val
-        param13.name = ACTIVE_CONTROLLER_SCALING_PARAM
+        param15 = Parameter()
+        param15.value = val
+        param15.name = ACTIVE_CONTROLLER_SCALING_PARAM
 
         #creste request to call the set parameters service
         request = SetParameters.Request()
-        request.parameters = [param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11, param12]
+        request.parameters = [param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11, param12, param13, param14, param15]
 
         #call set parameters service
         self.future = self.setActiveControllerParamsClient.call_async(request)
