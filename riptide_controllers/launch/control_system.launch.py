@@ -35,39 +35,31 @@ def enabledNode(
 
 
 def generate_launch_description():
-
-    #get vehicle configuration directory
-    vehicle_config_file = PathJoinSubstitution([
-        get_package_share_directory("riptide_descriptions2"),
-        "config", 
-        LaunchConfiguration("robot_yaml")
-    ])
-
     return LaunchDescription([
         DeclareLaunchArgument("robot", default_value="tempest", description="name of robot used for namespacing"),
         DeclareLaunchArgument("robot_yaml", default_value=[LaunchConfiguration("robot"), ".yaml"], description="robot config file name"),
-        
+
         GroupAction([
             PushRosNamespace(LaunchConfiguration("robot")),
-            
+
             enabledNode(
                 package = "riptide_controllers2",
                 executable = "controller_overseer.py",
                 name = "controller_overseer",
                 parameters = [
-                    {"vehicle_config": vehicle_config_file, 
+                    {"vehicle_config": "",  # Leave empty to let the node discover it
                         "robot": LaunchConfiguration("robot"),
                         "thruster_solver_node_name": THRUSTER_SOLVER_NAME,
                         "active_controller_node_name": ACTIVE_CONTROLLER_NAME
                     }]
             ),
-            
+
             enabledNode(
                 package = "thruster_solver",
                 executable = "thruster_solver",
                 name = THRUSTER_SOLVER_NAME
             ),
-            
+
             enabledNode(
                 package = "smc",
                 executable = "SMC",

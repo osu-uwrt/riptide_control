@@ -70,7 +70,7 @@ class controllerOverseer(Node):
     def __init__(self):
         super().__init__("controllerOverseer")
 
-        #get robot name 
+        #get robot name
         self.declare_parameter("robot", "")
         self.robotName = self.get_parameter("robot").value
 
@@ -106,7 +106,7 @@ class controllerOverseer(Node):
 
         #thruster telemetry
         self.create_subscription(DshotPartialTelemetry, "state/thrusters/telemetry", self.thrusterTelemetryCB, qos_profile_system_default)
-        
+
         #thruster solver parameters
         self.setThrusterSolverParamsClient = self.create_client(SetParameters, f"{self.thrusterSolverName}/set_parameters")
 
@@ -137,7 +137,7 @@ class controllerOverseer(Node):
         self.repubSubActive = self.create_subscription(Empty, "controller_overseer/update_active_params", self.repubActiveParamsCb, qos_profile_system_default)
         self.repubSubThruster = self.create_subscription(Empty, "controller_overseer/update_ts_params", self.repubThrusterSolverParamsCb, qos_profile_system_default)
 
-        #declare transform 
+        #declare transform
         self.tfBuffer = Buffer()
         self.tfListener = TransformListener(self.tfBuffer, self)
 
@@ -188,7 +188,31 @@ class controllerOverseer(Node):
         #reload in file from scratch just incase the target yaml has changed
         configPath = self.get_parameter("vehicle_config").value
         if(configPath == ''):
-            configPath = os.path.join(get_package_share_directory("riptide_descriptions2"), "config", "talos.yaml")
+            # Try to locate the source directory, and use that configuration file directly
+            descriptions_share_dir = get_package_share_directory("riptide_descriptions2")
+
+            robot_config_subpath = os.path.join("config", self.robotName + ".yaml")
+
+            # Set fallback config path if we can't find the one in source
+            configPath = os.path.join(descriptions_share_dir, robot_config_subpath)
+
+            # Try to locate the share directory
+            dir_split = os.path.normpath(descriptions_share_dir).split(os.sep)
+            if 'install' in dir_split:
+                colcon_root = '/'.join(dir_split[:dir_split.index('install')])
+                colcon_source_dir = os.path.join(colcon_root, "src")
+
+                # List of possible paths we should check for a config file
+                possible_paths = [
+                    os.path.join(colcon_source_dir, "riptide_core", "riptide_descriptions", robot_config_subpath),
+                    os.path.join(colcon_source_dir, "riptide_descriptions", robot_config_subpath),
+                ]
+
+                for path_check in possible_paths:
+                    if os.path.exists(path_check):
+                        configPath = path_check
+                        self.get_logger().info(f"Discovered source directory, overidding descriptions to use '{configPath}'")
+                        break
 
         with open(configPath, "r") as config:
             config_file = yaml.safe_load(config)
@@ -283,9 +307,9 @@ class controllerOverseer(Node):
 
             #update the weights
             self.adjustThrusterWeights()
-        
+
     def odometryCB(self, msg):
-        #check if thrusters are submerged - everytime odom is updated - just using as a frequency 
+        #check if thrusters are submerged - everytime odom is updated - just using as a frequency
 
         #start the start time on first cb
         if(self.startTime is None):
@@ -301,20 +325,20 @@ class controllerOverseer(Node):
                 #if thruster is above the kill plane
                 if pos.transform.translation.z < self.killPlane:
                     submerged[i] = True
-                            
+
             if not (np.array_equal(submerged, self.submerdgedThrusters)):
                 #if a different thruster combo is submerdged, adjust, the weights
                 self.submerdgedThrusters = submerged
                 self.adjustThrusterWeights()
-                
+
         except Exception as ex:
             if(self.get_clock().now().to_msg().sec >= ERROR_PATIENCE + self.startTime.to_msg().sec):
                 self.get_logger().error("Thruster Position Lookup failed with exception: " + str(ex))
-        
+
     def adjustThrusterWeights(self):
         #TODO add weight values into descriptions
 
-        #number of active thrusters 
+        #number of active thrusters
         activeThrusterCount = 0
         submerdgedThrusters = 0
 
@@ -335,7 +359,7 @@ class controllerOverseer(Node):
             else:
                 #if a thruster is inactive - raise the cost of "using" thruster
                 self.thrusterWeights[i] = self.disabledWeight
-        
+
         if(activeThrusterCount <= 6):
             #if system is not full actuated, it cannot be optimized, very high rpms / force can be requested
             #for the safety of the system, this will autodisable robot (probably)
@@ -345,10 +369,10 @@ class controllerOverseer(Node):
             self.enabled = False
         else:
             self.enabled = True
-            
+
         if(submerdgedThrusters >= 8):
             #take into account control modes only if all actuators are working
-            
+
             if(self.thrusterMode == 2):
                 #apply low downdraft
                 self.thrusterWeights[4] = self.lowDowndraftWeight
@@ -363,7 +387,7 @@ class controllerOverseer(Node):
         #scale and round all weights
         weights = []
         for weight in self.thrusterWeights:
-            weights.append(int(weight * PARAMETER_SCALE))   
+            weights.append(int(weight * PARAMETER_SCALE))
 
         # self.get_logger().info(str(weights))
 
@@ -377,13 +401,13 @@ class controllerOverseer(Node):
 
         foundSolver = False
         foundActiveControl = False
-        
+
         thrusterSolverSetParamName = f"{self.thrusterSolverName}/set_parameters"
         activeControllerSetParamName = f"{self.activeControllerName}/set_parameters"
 
         #see if the matlab node is running
         for nodeName in get_node_names(node=self):
-            
+
             #check the thruster solver
             if self.thrusterSolverName in nodeName.name:
                 foundSolver = True
@@ -457,12 +481,12 @@ class controllerOverseer(Node):
 
             self.ffPub.publish(msg)
 
-        
+
         #update wether or not the solver and active control has been found
         self.solverActive = foundSolver
         self.activeActive = foundActiveControl
 
-    def setSolverParams(self):   
+    def setSolverParams(self):
         self.get_logger().info("Setting Thruster Solver Default Parameters")
 
         #make the thruster effect matrix 1-D
@@ -727,7 +751,7 @@ class controllerOverseer(Node):
         #cancel the time that loads in paramters - don't spam reload
         self.paramTimerActive.cancel()
 
-    
+
     def repubActiveParamsCb(self, msg):
         if(self.activeActive):
             self.get_logger().info("Preparing to reload Active Controller Params! Rereading Yaml!")
@@ -759,7 +783,7 @@ class controllerOverseer(Node):
     def forceRepublishCb(self, msg:Int32MultiArray):
         #the message to republish to
         pub_msg = Float32MultiArray()
-                
+
         if(len(msg.data) == 8):
             for datum in msg.data:
                 #scale by .000001
@@ -775,7 +799,7 @@ class controllerOverseer(Node):
     def rpmRepublishCb(self, msg:Int32MultiArray):
         #the message to republish to
         pub_msg = DshotCommand()
-        
+
         if(len(msg.data) == 8):
             for i, datum in enumerate(msg.data):
                 #scale by .000001
@@ -805,4 +829,4 @@ def main(args=None):
 if __name__ == '__main__':
     main()
 
-            
+
