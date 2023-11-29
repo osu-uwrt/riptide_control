@@ -16,7 +16,7 @@ from rcl_interfaces.msg import ParameterValue
 from rcl_interfaces.srv import GetParameters
 from rcl_interfaces.srv import SetParameters
 from riptide_msgs2.action import CalibrateDragNew
-from std_msgs.msg import Float32MultiArray, Empty
+from std_msgs.msg import Float32, Empty
 
 from transforms3d import euler
 from queue import Queue
@@ -141,11 +141,13 @@ class CalibrateDragNewActionServer(Node):
                 
             axisData = self.collect_data(axis = firstAxis)
             header = np.array([firstAxis,])
-            writer.writerow(np.append(self._goal.force_values.data))
+            writer.writerow(np.append(header, self._goal.force_values))
             writer.writerow(np.append(header, np.flip(axisData)))
             writer.writerow()
 
             csvfile.close()
+
+            self._result.drag_force = self.curve_fit(axisData)
 
         self.running = False
         goal_handle.succeed()
@@ -156,7 +158,7 @@ class CalibrateDragNewActionServer(Node):
         force_data = [-49,-42,-35,-28,-21,-14,-7] if (axis < 2) else [-21,-18,-15,-12,-9,-6,-3]
         
         try:
-            force_data = self._goal.force_values.data
+            force_data = self._goal.force_values
         except:
             self.get_logger().info("Failed to get force data.")
         
@@ -223,6 +225,15 @@ class CalibrateDragNewActionServer(Node):
             time.sleep(stepTime)
         
         return abs(np.mean(vels))
+
+    #Curve fit to a quadratic
+    def curve_fit(self, velocities):
+        X = np.transpose(np.vstack((np.divide(velocities,velocities), velocities, np.multiply(velocities, velocities))))
+        y = np.transpose(np.atleast_2d(np.array(self._goal.force_values)))
+
+        B = np.linalg.lstsq(X,y, rcond=1)
+
+        return B[0]
 
 def main(args=None):
     rclpy.init(args=args)
