@@ -124,10 +124,15 @@ def download_packages(url: str, local_config: str, deploy_config: str):
     
     # perform download
     for model in model_names:
-        download_single_package(url, model, local_config_name, generated_output_directory)
-        if deploy_config_name != local_config_name:
-            download_single_package(url, model, deploy_config_name, generated_output_directory)
 
+        try:
+
+            download_single_package(url, model, local_config_name, generated_output_directory)
+            if deploy_config_name != local_config_name:
+                download_single_package(url, model, deploy_config_name, generated_output_directory)
+
+        except:
+            print(f"Failed to Download model: {model}. Please ensure the model exists!")
 
 def download_single_package(url, model, config, output_dir):
     asset_name = model + "_" + config + ".tgz"
