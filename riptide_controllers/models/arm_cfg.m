@@ -1,5 +1,5 @@
 function cs = arm_cfg()
-% MATLAB function for configuration set generated on 04-Nov-2023 01:30:27
+% MATLAB function for configuration set generated on 29-Nov-2023 23:06:23
 % MATLAB version: 9.14.0.2337262 (R2023a) Update 5
 
 cs = Simulink.ConfigSet;
@@ -245,7 +245,8 @@ cs.set_param('SimGenImportedTypeDefs', 'off');   % Generate typedefs for importe
 cs.set_param('CompileTimeRecursionLimit', 50);   % Compile-time recursion limit for MATLAB functions
 cs.set_param('EnableRuntimeRecursion', 'on');   % Enable run-time recursion for MATLAB functions
 cs.set_param('EnableImplicitExpansion', 'on');   % Enable implicit expansion in MATLAB functions
-cs.set_param('MATLABDynamicMemAlloc', 'off');   % Dynamic memory allocation in MATLAB functions
+cs.set_param('MATLABDynamicMemAlloc', 'on');   % Dynamic memory allocation in MATLAB functions
+cs.set_param('MATLABDynamicMemAllocThreshold', 65536);   % Dynamic memory allocation threshold in MATLAB functions
 cs.set_param('LegacyBehaviorForPersistentVarInContinuousTime', 'off');   % Enable continuous-time MATLAB functions to write to initialized persistent variables
 cs.set_param('CustomCodeFunctionArrayLayout', []);   % Exception by function...
 cs.set_param('DefaultCustomCodeFunctionArrayLayout', 'NotSpecified');   % Default function array layout

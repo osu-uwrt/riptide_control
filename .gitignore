@@ -142,3 +142,4 @@ generated_models/
 *.tgz
 codegen/
 *.prj
+*.mex*
