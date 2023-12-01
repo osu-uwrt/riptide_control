@@ -67,6 +67,12 @@ ACTIVE_CONTROLLER_SCALING_PARAM = "parameter_scaling_factor"
 ACTIVE_CONTROLLER_PID_P_GAINS_PARAM = "pid_PGains"
 ACTIVE_CONTROLLER_PID_I_GAINS_PARAM = "pid_IGains"
 ACTIVE_CONTROLLER_PID_D_GAINS_PARAM = "pid_DGains"
+ACTIVE_CONTROLLER_PID_P_SURFACE_GAINS_PARAM = "pid_P_surface_gains"
+ACTIVE_CONTROLLER_PID_I_SURFACE_GAINS_PARAM = "pid_I_surface_gains"
+ACTIVE_CONTROLLER_PID_D_SURFACE_GAINS_PARAM = "pid_D_surface_gains"
+ACTIVE_CONTROLLER_PID_MAX_CONTROLS = "pid_max_control"
+ACTIVE_CONTROLLER_PID_SURFACE_GAIN_FLOOR = "pid_surface_gain_floor"
+ACTIVE_CONTROLLER_PID_SURFACE_GAIN_BUFFER = "pid_surface_gain_buffer"
 ACTIVE_CONTROLLER_PID_RESET_THRESHOLD_PARAM = "pid_reset_threshold"
 ACTIVE_CONTROLLER_PID_SCALING_FACTOR_PARAM = "pid_scaling_parameters"
 
@@ -279,7 +285,13 @@ class controllerOverseer(Node):
         #PID specific parameters
         self.talos_p_gains = config_file["controller"]["PID"]["p_gains"]
         self.talos_i_gains = config_file["controller"]["PID"]["i_gains"]
-        self.talos_d_gains = config_file["controller"]["PID"]["d_gains"]
+        self.talos_d_gains = config_file["controller"]["PID"]["d_gains"]        
+        self.talos_p_surface_gains = config_file["controller"]["PID"]["p_surface_gains"]
+        self.talos_i_surface_gains = config_file["controller"]["PID"]["i_surface_gains"]
+        self.talos_d_surface_gains = config_file["controller"]["PID"]["d_surface_gains"]
+        self.talos_max_control = config_file["controller"]["PID"]["max_control_threshholds"]
+        self.talos_surface_gain_floor = config_file["controller"]["PID"]["surface_gain_floor"]
+        self.talos_surface_gain_buffer = config_file["controller"]["PID"]["surface_gain_buffer"]
         self.talos_pid_reset_threshold = config_file["controller"]["PID"]["reset_threshold"]
 
 
@@ -779,6 +791,7 @@ class controllerOverseer(Node):
         param1.value = val
         param1.name = ACTIVE_CONTROLLER_PID_P_GAINS_PARAM
         
+
         #SET I GAINS
         int_values = []
         for value in self.talos_i_gains:
@@ -792,6 +805,7 @@ class controllerOverseer(Node):
         param2.value = val
         param2.name = ACTIVE_CONTROLLER_PID_I_GAINS_PARAM
         
+
         #SET D GAINS
         int_values = []
         for value in self.talos_d_gains:
@@ -805,6 +819,7 @@ class controllerOverseer(Node):
         param3.value = val
         param3.name = ACTIVE_CONTROLLER_PID_D_GAINS_PARAM
         
+
         val = ParameterValue()
         val.type = ParameterType.PARAMETER_INTEGER
         val.integer_value = int(self.talos_pid_reset_threshold * PARAMETER_SCALE)
@@ -813,6 +828,7 @@ class controllerOverseer(Node):
         param4.value = val
         param4.name = ACTIVE_CONTROLLER_PID_RESET_THRESHOLD_PARAM
         
+
         val = ParameterValue()
         val.type = ParameterType.PARAMETER_INTEGER
         val.integer_value = int(PARAMETER_SCALE)
@@ -820,9 +836,85 @@ class controllerOverseer(Node):
         param5 = Parameter()
         param5.value = val
         param5.name = ACTIVE_CONTROLLER_PID_SCALING_FACTOR_PARAM
+
+
+        #Procces P Surface Gains
+        int_values = []
+        for value in self.talos_p_surface_gains:
+            int_values.append(int(value * PARAMETER_SCALE))
+
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param6 = Parameter()
+        param6.value = val
+        param6.name = ACTIVE_CONTROLLER_PID_P_SURFACE_GAINS_PARAM
+
+
+        #Procces D Surface Gains
+        int_values = []
+        for value in self.talos_d_surface_gains:
+            int_values.append(int(value * PARAMETER_SCALE))
+
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param7 = Parameter()
+        param7.value = val
+        param7.name = ACTIVE_CONTROLLER_PID_D_SURFACE_GAINS_PARAM
+
+
+        #Procces I Surface Gains
+        int_values = []
+        for value in self.talos_i_surface_gains:
+            int_values.append(int(value * PARAMETER_SCALE))
+
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param8 = Parameter()
+        param8.value = val
+        param8.name = ACTIVE_CONTROLLER_PID_I_SURFACE_GAINS_PARAM
+
+
+        #Procces Max controls
+        int_values = []
+        for value in self.talos_max_control:
+            int_values.append(int(value * PARAMETER_SCALE))
+
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param9 = Parameter()
+        param9.value = val
+        param9.name = ACTIVE_CONTROLLER_PID_MAX_CONTROLS
+
+
+        #Set the surface gain floor
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = int(PARAMETER_SCALE * self.talos_surface_gain_floor)
+
+        param10 = Parameter()
+        param10.value = val
+        param10.name = ACTIVE_CONTROLLER_PID_SURFACE_GAIN_FLOOR
+
+
+        #set the surface gain buffer
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = int(PARAMETER_SCALE * self.talos_surface_gain_buffer)
+
+        param11 = Parameter()
+        param11.value = val
+        param11.name = ACTIVE_CONTROLLER_PID_SURFACE_GAIN_BUFFER
         
         request = SetParameters.Request()
-        request.parameters = [param1, param2, param3, param4, param5]
+        request.parameters = [param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11]
         return request
     
 
