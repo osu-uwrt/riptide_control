@@ -1,5 +1,10 @@
 #! /usr/bin/env python3
 
+#
+# UWRT controller MATLAB model manager. 
+# handles code generation and download of all simulink models in all configurations.
+#
+
 import argparse
 import os
 import sys
@@ -48,6 +53,8 @@ def determine_system_cfg(machine: str):
     for key in ARCHITECTURE_CONFIGS.keys():
         if key in machine:
             return ARCHITECTURE_CONFIGS[key]
+    
+    return ""
 
 #
 # CONSTS
@@ -68,7 +75,11 @@ DEFAULT_DOWNLOAD_VERSION_URL = "https://github.com/osu-uwrt/riptide_control/rele
 #cmdline consts
 GENERATE_PACKAGES_TASK_NAME = "generate_packages"
 DOWNLOAD_PACKAGES_TASK_NAME = "download_packages"
+DELETE_PACKAGES_TASK_NAME   = "delete_packages"
 PROCESS_CACHED_TASK_NAME    = "process_cached"
+
+
+assume_yes = False
 
 
 def execute_command(cmd: 'list[str]', cwd: str):
@@ -106,7 +117,15 @@ def archive_packages(archives_dir: str):
     shutil.copytree(generated_output_directory, archives_dir)
 
 
-def download_packages(url: str, local_config: str, deploy_config: str):
+def download_packages(
+    url: str, 
+    local_config: str, 
+    deploy_config: str,
+    models_select: 'list[str]',
+    models_ignore: 'list[str]',
+    configs_select: 'list[str]',
+    configs_ignore: 'list[str]'
+):
     local_config_name = get_object_name_from_file(local_config)
     deploy_config_name = get_object_name_from_file(deploy_config)
     print(f"Downloading packages from url {url} using local config {local_config_name} and deploy config {deploy_config_name}")
@@ -117,22 +136,49 @@ def download_packages(url: str, local_config: str, deploy_config: str):
     ensure_directory_exists(generated_output_directory)
     
     # find packages to install
-    model_files = glob.glob("./**/*.slx", recursive=True)
+    model_files = glob.glob(os.path.join(MODELS_ROOT, "**/*.slx"), recursive=True)
     model_names = get_object_names_from_files(model_files)
+    
+    models_select_names = get_object_names_from_files(models_select)
+    models_ignore_names = get_object_names_from_files(models_ignore)
+    configs_select_names = get_object_names_from_files(configs_select)
+    configs_ignore_names = get_object_names_from_files(configs_ignore)
+    
+    #filter out models based on models_select and models_ignore
+    if len(models_select) > 0:
+        model_names = list_intersection(model_names, models_select_names)
+    elif len(models_ignore) > 0:
+        model_names = list_difference(model_names, models_ignore_names)
     
     print(f"Discovered downloadable models: {model_names}")
     
+    #determine configs
+    cfg_names = [local_config_name]
+    if deploy_config_name != local_config_name:
+        cfg_names.append(deploy_config_name)
+    
+    #filter out configs based on configs_select and configs_ignore
+    if len(configs_select) > 0:
+        cfg_names = list_intersection(cfg_names, configs_select_names)
+    elif len(configs_ignore) > 0:
+        cfg_names = list_difference(cfg_names, configs_ignore_names)
+        
+    print(f"Using configurations: {cfg_names}")
+    
+    if not yesNoPrompt("Proceed with download?"):
+        print("Not proceeding with operation.")
+        exit(0)
+        
     # perform download
     for model in model_names:
+        for cfg in cfg_names:
+            try:
+                download_single_package(url, model, cfg, generated_output_directory)
+            except KeyboardInterrupt: #needed otherwise wget might go on a rampage because it becomes uninterruptable
+                exit()
+            except:
+                print(f"Failed to Download model: {model} with config {cfg}. Please ensure the model exists!", file=sys.stderr)
 
-        try:
-
-            download_single_package(url, model, local_config_name, generated_output_directory)
-            if deploy_config_name != local_config_name:
-                download_single_package(url, model, deploy_config_name, generated_output_directory)
-
-        except:
-            print(f"Failed to Download model: {model}. Please ensure the model exists!")
 
 def download_single_package(url, model, config, output_dir):
     asset_name = model + "_" + config + ".tgz"
@@ -197,8 +243,6 @@ def handle_packages_generic(config: str, dir: str):
     config_name = get_object_name_from_file(config)
     archive_names = filter_list(os.listdir(generated_output_directory), config_name)
     
-    ensure_not_directory_exists(dir) #clear directory if it exists
-    ensure_directory_exists(dir)
     unpack_archives(generated_output_directory, archive_names, dir)
 
 
@@ -208,7 +252,15 @@ def ping_device(name: str):
         return True
     except RuntimeError:
         return False
+
+
+def yesNoPrompt(question: str):
+    if assume_yes:
+        return True
     
+    yes_no = input(question + " [y/n?]: ")
+    return yes_no.lower() == "y" or len(yes_no) == 0
+
 
 def ensure_directory_exists(dir: str):
     if not os.path.exists(dir):
@@ -234,17 +286,17 @@ def get_object_names_from_files(files):
     return names
 
 
-def resolve_single_config_file(cfg_file: str):
-    if not cfg_file.endswith(".m"):
-        return cfg_file + ".m"
+def ensure_extension_for_file(cfg_file: str, extension: str):
+    if not cfg_file.endswith(extension):
+        return cfg_file + extension
     
     return cfg_file
 
 
-def resolve_config_files(files: 'list[str]'):
+def ensure_extensions_for_files(files: 'list[str]', extension: str):
     resolved = []
     for file in files:
-        resolved.append(resolve_single_config_file(file))
+        resolved.append(ensure_extension_for_file(file, extension))
     
     return resolved
 
@@ -256,6 +308,14 @@ def filter_list(lis, filt):
             filtered.append(item)
     
     return filtered
+
+
+def list_intersection(l1, l2):
+    return [item for item in l1 if item in l2]
+
+#returns l1 - l2
+def list_difference(l1, l2):
+    return [item for item in l1 if item not in l2]
 
 
 def unpack_archives(src: str, files: 'list[str]', dst: str):    
@@ -277,13 +337,28 @@ def find_files(files: 'list[str]'):
     paths = files
     for i in range(0, len(paths)):
         if not os.path.exists(paths[i]):
-            model_relative_path = os.path.join(MODELS_ROOT, paths[i])
-            if os.path.exists(model_relative_path):
-                paths[i] = model_relative_path
-            else:
-                msg = f"File {files[i]} does not name an existing file relative to the current directory, the models directory, or root."
+            #file is not relative to root or cwd, look recursively in models
+            model_relative_path_recursive = os.path.join(MODELS_ROOT, "**", paths[i])
+            possible_paths_recursive = glob.glob(model_relative_path_recursive)
+            
+            model_relative_path_nonrecursive = os.path.join(MODELS_ROOT, paths[i])
+            possible_paths_nonrecursive = glob.glob(model_relative_path_nonrecursive)
+            
+            possible_paths = possible_paths_recursive + possible_paths_nonrecursive
+            
+            if len(possible_paths) > 1:
+                #multiple possible files
+                msg = f"Name {files[i]} names multiple possible candidates ({possible_paths}). Please specify a more specific name."
                 print(msg, file=sys.stderr)
                 raise ValueError(msg)
+            elif len(possible_paths) == 0:
+                #no possible files
+                msg = f"Name {files[i]} does not specify an existing file within the models directory, or relative to the current directory or root."
+                print(msg, file=sys.stderr)
+                raise ValueError(msg)
+
+            #one possible file
+            paths[i] = possible_paths[0]
     
     return paths
                 
@@ -373,8 +448,13 @@ def parse_args():
     parser.add_argument("--deploy-target", action="store", default=DEFAULT_ROBOT_NAME,
                         help="Specifies the name of the target to deploy the deployable packages to")
     
+    parser.add_argument("-y", "--assume-yes", action="store_true",
+                        help="Assume yes on all prompts")
+    
     parser.add_argument("--test", action="store_true")
-    parser.add_argument("--task", action="store_true", help="Use to specify the task after using a flag like --models-select")
+    
+    #this is a kind of hacky way to get around the nargs issue (i.e --models-select tries to eat the task like "generate_packages" like its a model name)
+    parser.add_argument("--do-task", action="store_true", help="Use to specify the task after using a flag like --models-select")
     
     #
     # SUBPARSERS
@@ -397,6 +477,10 @@ def parse_args():
     download_subparser.add_argument("--from-release", action="store", default="latest",
                                     help="specifies the github release from which to download the packages. Cannot be used with --from-url")
     
+    #DELETE_PACKAGES SUBPARSER
+    #TODO IMPLEMENT
+    delete_subparser = subparsers.add_parser(DELETE_PACKAGES_TASK_NAME, help="Delete packages from the local and deploy directories")
+    
     #PROCESS_CACHED SUBPARSER
     process_subparser = subparsers.add_parser(PROCESS_CACHED_TASK_NAME, help="Process cached packages were already downloaded or generated")
     
@@ -409,18 +493,22 @@ def test(name):
 
 
 def main():
+    global assume_yes
+    
     args = parse_args()
     
     if args.test:
         test(args.deploy_target)
         exit(0)
+        
+    assume_yes = args.assume_yes
     
-    models_select = find_files(args.models_select)
-    models_ignore = find_files(args.models_ignore)
-    configs_select = find_files(resolve_config_files(args.configs_select))
-    configs_ignore = find_files(resolve_config_files(args.configs_ignore))
-    local_config = resolve_single_config_file(args.local_config)
-    deploy_config = resolve_single_config_file(args.deploy_config)
+    models_select = find_files(ensure_extensions_for_files(args.models_select, ".slx"))
+    models_ignore = find_files(ensure_extensions_for_files(args.models_ignore, ".slx"))
+    configs_select = find_files(ensure_extensions_for_files(args.configs_select, ".m"))
+    configs_ignore = find_files(ensure_extensions_for_files(args.configs_ignore, ".m"))
+    local_config = ensure_extension_for_file(args.local_config, ".m")
+    deploy_config = ensure_extension_for_file(args.deploy_config, ".m")
     
     if args.task == GENERATE_PACKAGES_TASK_NAME:
         generate_packages(models_select, models_ignore, configs_select, configs_ignore)
@@ -439,7 +527,14 @@ def main():
         if args.from_release != "latest":
             download_url = os.path.join(DEFAULT_DOWNLOAD_VERSION_URL, args.from_release)
         
-        download_packages(download_url, local_config, deploy_config)
+        download_packages(
+            download_url, 
+            local_config, 
+            deploy_config,
+            models_select,
+            models_ignore,
+            configs_select,
+            configs_ignore)
     
     if not args.no_process_local:
         handle_local_packages(

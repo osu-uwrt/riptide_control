@@ -23,7 +23,8 @@ from riptide_msgs2.msg import DshotPartialTelemetry, DshotCommand
 from nav_msgs.msg import Odometry
 from rcl_interfaces.srv import SetParameters
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
-from std_msgs.msg import Int16, Int32MultiArray, Float32MultiArray, Empty
+from std_msgs.msg import Int16, Int32MultiArray, Float32MultiArray
+from std_srvs.srv import Trigger
 from geometry_msgs.msg import Twist
 from rclpy.time import Time
 
@@ -112,7 +113,7 @@ class controllerOverseer(Node):
         self.readInRobotYaml()
 
         #generate thruster force matrix
-        self.genertateThrusterForceMatrix(self.thruster_info, self.com)
+        self.generateThrusterForceMatrix(self.thruster_info, self.com)
 
         #default thruster weights and working thrusters
         self.activeThrusters = [True, True, True, True, True, True, True, True]
@@ -153,9 +154,13 @@ class controllerOverseer(Node):
         #pub ff force
         self.ffPub = self.create_publisher(Twist, FF_TOPIC_NAME, qos_profile_system_default)
 
-        #sub to republish params trigger
-        self.repubSubActive = self.create_subscription(Empty, "controller_overseer/update_active_params", self.repubActiveParamsCb, qos_profile_system_default)
-        self.repubSubThruster = self.create_subscription(Empty, "controller_overseer/update_ts_params", self.repubThrusterSolverParamsCb, qos_profile_system_default)
+        #services to republish params
+        self.repubSrvActive = self.create_service(Trigger, "controller_overseer/update_active_params", self.repubActiveParamsCb)
+        self.repubSrvThruster = self.create_service(Trigger, "controller_overseer/update_ts_params", self.repubThrusterSolverParamsCb)
+
+        #timestamps to prevent spamming of param repub
+        self.lastRepubActiveTime = self.get_clock().now()
+        self.lastRepubThrusterTime = self.get_clock().now()
 
         #declare transform
         self.tfBuffer = Buffer()
@@ -190,7 +195,7 @@ class controllerOverseer(Node):
         self.enabled = True
         self.publishingFF = True
 
-    def genertateThrusterForceMatrix(self, thruster_info, com):
+    def generateThrusterForceMatrix(self, thruster_info, com):
         #generate the thruster effect matrix
         self.thrusterEffects = np.zeros(shape=(8,6))
         for i, thruster in enumerate(thruster_info):
@@ -231,7 +236,7 @@ class controllerOverseer(Node):
                 for path_check in possible_paths:
                     if os.path.exists(path_check):
                         configPath = path_check
-                        self.get_logger().info(f"Discovered source directory, overidding descriptions to use '{configPath}'")
+                        self.get_logger().info(f"Discovered source directory, overriding descriptions to use '{configPath}'")
                         break
 
         with open(configPath, "r") as config:
@@ -937,34 +942,64 @@ class controllerOverseer(Node):
 
         #cancel the time that loads in paramters - don't spam reload
         self.paramTimerActive.cancel()
+    
+    
+    def repubSrvResponse(self, response: Trigger.Response, success: bool, msg: str):
+        if(success):
+            self.get_logger().info(msg)
+        else:
+            self.get_logger().error(msg)
+        
+        response = Trigger.Response()
+        response.success = success
+        response.message = msg
+        return response
+
+    
+    def repubParamsCbGeneric(self, currentTime: Time, lastRepubTime: Time, setFunc, response: Trigger.Response):
+        elapsedSinceLastRepub = currentTime - lastRepubTime
+        if(elapsedSinceLastRepub.to_msg().sec > 5):
+            self.get_logger().info("Preparing to reload parameters! Rereading Yaml!")
+            self.readInRobotYaml()
+            self.generateThrusterForceMatrix(self.thruster_info, self.com)
+            setFunc()
+            
+            self.lastRepubActiveTime = currentTime
+            return self.repubSrvResponse(response, True, "Parameters loaded successfully.")
+        
+        return self.repubSrvResponse(
+            response,
+            False, 
+            "Not loading parameters because they were loaded less than 5 seconds ago!")
 
 
-    def repubActiveParamsCb(self, msg):
+    def repubActiveParamsCb(self, request: Trigger.Request, response: Trigger.Response):
+        self.get_logger().info("Received request to reload the Active Parameters")
         if(self.activeActive):
-            self.get_logger().info("Preparing to reload Active Controller Params! Rereading Yaml!")
+            #set the parameters if there has been at least 5 seconds since the last set 
+            currentTime = self.get_clock().now()
+            response = self.repubParamsCbGeneric(currentTime, self.lastRepubActiveTime, self.setActiveParams, response)
+            if(response.success):
+                self.lastRepubActiveTime = currentTime
+            
+            return response
+        
+        return self.repubSrvResponse(response, False, "Failed to reload Active Params; the Active Controller is not active!")
 
-            self.readInRobotYaml()
-            self.genertateThrusterForceMatrix(self.thruster_info, self.com)
 
-            #reload paramters using a time to prevent spam reloading ;)
-            self.get_logger().info("Parameters will be reloaded in 5 seconds!")
-            self.paramTimerActive = self.create_timer(5.0, self.setActiveParams)
-        else:
-            self.get_logger().error("Failed to reload Active Params, the Active Controller is not active!")
-
-
-    def repubThrusterSolverParamsCb(self, msg):
+    def repubThrusterSolverParamsCb(self, request: Trigger.Request, response: Trigger.Response):
+        self.get_logger().info("Received request to reload the Solver parameters")
         if(self.solverActive):
-            self.get_logger().info("Preparing to reload Thruster Solver Params! Rereading Yaml!")
-
-            self.readInRobotYaml()
-            self.genertateThrusterForceMatrix(self.thruster_info, self.com)
-
-            #reload paramters using a time to prevent spam reloading ;)
-            self.get_logger().info("Parameters will be reloaded in 5 seconds!")
-            self.paramTimerTS = self.create_timer(5.0, self.setSolverParams)
-        else:
-            self.get_logger().error("Failed to reload Thruster Solver Params, the Thruster solver is not active!")
+            #set the parameters if there has been at least 5 seconds since the last set
+            currentTime = self.get_clock().now()
+            response = self.repubParamsCbGeneric(currentTime, self.lastRepubThrusterTime, self.setSolverParams, response)
+            if(response.success):
+                self.lastRepubThrusterTime = currentTime
+            
+            return response
+        
+        return self.repubSrvResponse(response, False, "Failed to reload Solver params; the Thruster Solver is not active!")
+        
 
     #remove once matlab publishes to correct message
     def forceRepublishCb(self, msg:Int32MultiArray):
