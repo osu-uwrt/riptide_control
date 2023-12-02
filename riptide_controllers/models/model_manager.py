@@ -243,6 +243,7 @@ def handle_packages_generic(config: str, dir: str):
     config_name = get_object_name_from_file(config)
     archive_names = filter_list(os.listdir(generated_output_directory), config_name)
     
+    ensure_directory_exists(dir)
     unpack_archives(generated_output_directory, archive_names, dir)
 
 
