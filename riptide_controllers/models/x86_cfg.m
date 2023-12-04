@@ -1,5 +1,5 @@
 function cs = x86_cfg()
-% MATLAB function for configuration set generated on 29-Nov-2023 23:06:31
+% MATLAB function for configuration set generated on 03-Dec-2023 13:25:24
 % MATLAB version: 9.14.0.2337262 (R2023a) Update 5
 
 cs = Simulink.ConfigSet;
@@ -76,6 +76,7 @@ cs.set_param('GainParamInheritBuiltInType', 'on');   % Gain parameters inherit a
 cs.set_param('UseFloatMulNetSlope', 'on');   % Use floating-point multiplication to handle net slope corrections
 cs.set_param('InheritOutputTypeSmallerThanSingle', 'off');   % Inherit floating-point output type smaller than single precision
 cs.set_param('DefaultUnderspecifiedDataType', 'double');   % Default for underspecified data type
+cs.set_param('UseSpecifiedMinMax', 'off');   % Optimize using the specified minimum and maximum values
 cs.set_param('InlineInvariantSignals', 'on');   % Inline invariant signals
 cs.set_param('DataBitsets', 'off');   % Use bitsets for storing Boolean data
 cs.set_param('StateBitsets', 'off');   % Use bitsets for storing state configuration
@@ -84,10 +85,18 @@ cs.set_param('EnableMemcpy', 'on');   % Use memcpy for vector assignment
 cs.set_param('OptimizeBlockIOStorage', 'on');   % Signal storage reuse
 cs.set_param('ExpressionFolding', 'on');   % Eliminate superfluous local variables (expression folding)
 cs.set_param('BufferReuse', 'on');   % Reuse local block outputs
+cs.set_param('AdvancedOptControl', '');   % Disable incompatible optimizations
+cs.set_param('OptimizationLevel', 'level2');   % Level
+cs.set_param('OptimizationPriority', 'Balanced');   % Priority
+cs.set_param('OptimizationCustomize', 'off');   % Specify custom optimizations
+cs.set_param('BitwiseOrLogicalOp', 'Same as modeled');   % Operator to represent Bitwise and Logical Operator blocks
 cs.set_param('MemcpyThreshold', 64);   % Memcpy threshold (bytes)
+cs.set_param('PassReuseOutputArgsAs', 'Individual arguments');   % Pass reusable subsystem outputs as
+cs.set_param('PassReuseOutputArgsThreshold', 12);   % Maximum number of arguments for subsystem outputs
 cs.set_param('RollThreshold', 5);   % Loop unrolling threshold
 cs.set_param('ActiveStateOutputEnumStorageType', 'Native Integer');   % Base storage type for automatically created enumerations
 cs.set_param('InitFltsAndDblsToZero', 'off');   % Use memset to initialize floats and doubles to 0.0
+cs.set_param('NoFixptDivByZeroProtection', 'off');   % Remove code that protects against division arithmetic exceptions
 cs.set_param('EfficientFloat2IntCast', 'on');   % Remove code from floating-point to integer conversions that wraps out-of-range values
 cs.set_param('EfficientMapNaN2IntZero', 'on');   % Remove code from floating-point to integer conversions with saturation that maps NaN to zero
 cs.set_param('LifeSpan', 'auto');   % Application lifespan (days)
@@ -97,7 +106,9 @@ cs.set_param('BufferReusableBoundary', 'on');   % Buffer for reusable subsystems
 cs.set_param('SimCompilerOptimization', 'off');   % Compiler optimization level
 cs.set_param('AccelVerboseBuild', 'off');   % Verbose accelerator builds
 cs.set_param('UseRowMajorAlgorithm', 'off');   % Use algorithms optimized for row-major array layout
+cs.set_param('LabelGuidedReuse', 'off');   % Use signal labels to guide buffer reuse
 cs.set_param('DenormalBehavior', 'GradualUnderflow');   % In accelerated simulation modes, denormal numbers can be flushed to zero using 'flush-to-zero' option.
+cs.set_param('EfficientTunableParamExpr', 'on');   % Remove code from tunable parameter expressions that saturates out-of-range values
 
 % Diagnostics
 cs.set_param('RTPrefix', 'error');   % "rt" prefix for identifiers
@@ -167,6 +178,7 @@ cs.set_param('ModelReferenceExtraNoncontSigs', 'error');   % Extraneous discrete
 cs.set_param('StateNameClashWarn', 'none');   % State name clash
 cs.set_param('OperatingPointInterfaceChecksumMismatchMsg', 'warning');   % Operating point restore interface checksum mismatch
 cs.set_param('NonCurrentReleaseOperatingPointMsg', 'error');   % Operating point object from a different release
+cs.set_param('PregeneratedLibrarySubsystemCodeDiagnostic', 'warning');   % Behavior when pregenerated library subsystem code is missing
 cs.set_param('SubsystemReferenceDiagnosticForUnitTest', 'error');   % Behavior when a matching unit test for subsystem reference is missing
 cs.set_param('InitInArrayFormatMsg', 'warning');   % Initial state is array
 cs.set_param('StrictBusMsg', 'ErrorLevel1');   % Bus signal treated as vector
@@ -188,6 +200,8 @@ cs.set_param('IntegerSaturationMsg', 'warning');   % Saturate on overflow
 cs.set_param('AllowedUnitSystems', 'all');   % Allowed unit systems
 cs.set_param('UnitsInconsistencyMsg', 'warning');   % Units inconsistency messages
 cs.set_param('AllowAutomaticUnitConversions', 'on');   % Allow automatic unit conversions
+cs.set_param('RCSCRenamedMsg', 'warning');   % Detect non-reused custom storage classes
+cs.set_param('RCSCObservableMsg', 'warning');   % Detect ambiguous custom storage class final values
 cs.set_param('ForceCombineOutputUpdateInSim', 'off');   % Combine output and update methods for code generation and simulation
 cs.set_param('UnderSpecifiedDimensionMsg', 'none');   % Underspecified dimensions
 cs.set_param('DebugExecutionForFMUViaOutOfProcess', 'off');   % FMU Import blocks
@@ -203,6 +217,7 @@ cs.set_param('ProdLongLongMode', 'off');   % Support long long
 cs.set_param('ProdEqTarget', 'on');   % Test hardware is the same as production hardware
 cs.set_param('TargetPreprocMaxBitsSint', 32);   % Maximum bits for signed integer in C preprocessor
 cs.set_param('TargetPreprocMaxBitsUint', 32);   % Maximum bits for unsigned integer in C preprocessor
+cs.set_param('UseEmbeddedCoderFeatures', 'on');   % Use Embedded Coder features
 cs.set_param('HardwareBoardFeatureSet', 'EmbeddedCoderHSP');   % Feature set for selected hardware board
 
 % Model Referencing
@@ -258,6 +273,8 @@ cs.set_param('SimDLTargetLibrary', 'mkl-dnn');   % Target library
 % Code Generation
 cs.set_param('GenerateGPUCode', 'None');   % Generate GPU code
 cs.set_param('UseOperatorNewForModelRefRegistration', 'off');   % Use dynamic memory allocation for model block instantiation
+cs.set_param('ExistingSharedCode', '');   % Existing shared code
+cs.set_param('EmbeddedCoderDictionary', '');   % Shared coder dictionary
 cs.set_param('TLCOptions', '-aInlineSetEventsForThisBaseRateFcn=TLC_FALSE -aSuppressMultiTaskScheduler=TLC_FALSE  -aRateBasedStepFcn=0');   % TLC command line options
 cs.set_param('Toolchain', 'Colcon Tools');   % Toolchain
 cs.set_param('GenCodeOnly', 'on');   % Generate code only
@@ -284,16 +301,56 @@ cs.set_param('CustomFFTCallback', '');   % Custom FFT library callback
 cs.set_param('CustomInitializer', '');   % Initialize code
 cs.set_param('CustomTerminator', '');   % Terminate code
 cs.set_param('BuildConfiguration', 'Faster Runs');   % Build configuration
+cs.set_param('PortableWordSizes', 'off');   % Enable portable word sizes
+cs.set_param('CreateSILPILBlock', 'None');   % Create block
+cs.set_param('CodeExecutionProfiling', 'off');   % Measure task execution time
+cs.set_param('CodeProfilingInstrumentation', 'off');   % Measure function execution times
+cs.set_param('CodeStackProfiling', 'off');   % Measure task stack usage
+cs.set_param('CodeCoverageSettings', coder.coverage.CodeCoverageSettings([],'off','off','None'));   % Third-party tool
+cs.set_param('SILPILDebugging', 'off');   % Enable source-level debugging for SIL or PIL
+cs.set_param('DataTypeReplacement', 'CoderTypedefs');   % Data type replacement
+cs.set_param('GenerateCodeMetricsReport', 'off');   % Generate static code metrics
 cs.set_param('ObjectivePriorities', {'Execution efficiency'});   % Prioritized objectives
 cs.set_param('CheckMdlBeforeBuild', 'Off');   % Check model before generating code
 cs.set_param('DLTargetLibrary', 'none');   % Target library
 cs.set_param('GenerateComments', 'on');   % Include comments
 cs.set_param('ForceParamTrailComments', 'on');   % Verbose comments for 'Model default' storage class
+cs.set_param('CommentStyle', 'Auto');   % Comment style
+cs.set_param('IgnoreCustomStorageClasses', 'off');   % Ignore custom storage classes
+cs.set_param('IgnoreTestpoints', 'off');   % Ignore test point signals
 cs.set_param('MaxIdLength', 31);   % Maximum identifier length
 cs.set_param('ShowEliminatedStatement', 'on');   % Show eliminated blocks
+cs.set_param('OperatorAnnotations', 'on');   % Operator annotations
+cs.set_param('SimulinkDataObjDesc', 'on');   % Simulink data object descriptions
+cs.set_param('SFDataObjDesc', 'on');   % Stateflow object descriptions
+cs.set_param('MATLABFcnDesc', 'off');   % MATLAB user comments
+cs.set_param('MangleLength', 1);   % Minimum mangle length
+cs.set_param('SharedChecksumLength', 8);   % Shared checksum length
+cs.set_param('CustomSymbolStrGlobalVar', '$R$N$M');   % Global variables
+cs.set_param('CustomSymbolStrType', '$N$R$M_T');   % Global types
+cs.set_param('CustomSymbolStrField', '$N$M');   % Field name of global types
+cs.set_param('CustomSymbolStrFcn', '$R$N$M$F');   % Subsystem methods
+cs.set_param('CustomSymbolStrFcnArg', 'rt$I$N$M');   % Subsystem method arguments
+cs.set_param('CustomSymbolStrBlkIO', 'rtb_$N$M');   % Local block output variables
+cs.set_param('CustomSymbolStrTmpVar', '$N$M');   % Local temporary variables
+cs.set_param('CustomSymbolStrMacro', '$R$N$M');   % Constant macros
+cs.set_param('CustomSymbolStrUtil', '$N$C');   % Shared utilities identifier format
+cs.set_param('CustomSymbolStrEmxType', 'emxArray_$M$N');   % EMX array types identifier format
+cs.set_param('CustomSymbolStrEmxFcn', 'emx$M$N');   % EMX array utility functions identifier format
+cs.set_param('CustomUserTokenString', '');   % Custom token text
+cs.set_param('EnableCustomComments', 'off');   % Custom comments (MPT objects only)
+cs.set_param('DefineNamingRule', 'None');   % #define naming
+cs.set_param('ParamNamingRule', 'None');   % Parameter naming
+cs.set_param('SignalNamingRule', 'None');   % Signal naming
+cs.set_param('InsertBlockDesc', 'on');   % Simulink block descriptions
+cs.set_param('InsertPolySpaceComments', 'off');   % Insert Polyspace comments
 cs.set_param('SimulinkBlockComments', 'on');   % Simulink block comments
 cs.set_param('StateflowObjectComments', 'off');   % Stateflow object comments
+cs.set_param('BlockCommentType', 'BlockPathComment');   % Trace to model using
 cs.set_param('MATLABSourceComments', 'off');   % MATLAB source code as comments
+cs.set_param('InternalIdentifier', 'Shortened');   % System-generated identifiers
+cs.set_param('InlinedPrmAccess', 'Literals');   % Generate scalar inlined parameters as
+cs.set_param('ReqsInCode', 'off');   % Requirements in block comments
 cs.set_param('UseSimReservedNames', 'off');   % Use the same reserved names as Simulation Target
 cs.set_param('ReservedNameArray', []);   % Reserved names
 cs.set_param('EnumMemberNameClash', 'error');   % Duplicate enumeration member names
@@ -302,17 +359,35 @@ cs.set_param('TargetPreCompLibLocation', '');   % Precompiled library location
 cs.set_param('TargetLangStandard', 'C++11 (ISO)');   % Language standard
 cs.set_param('CodeReplacementLibrary', 'None');   % Code replacement library
 cs.set_param('UtilityFuncGeneration', 'Auto');   % Shared code placement
-cs.set_param('MultiwordLength', 256);   % Maximum word length
+cs.set_param('MultiwordTypeDef', 'System defined');   % Multiword type definitions
 cs.set_param('DynamicStringBufferSize', 256);   % Buffer size of dynamically-sized string (bytes)
 cs.set_param('GenerateFullHeader', 'on');   % Generate full file banner
 cs.set_param('InferredTypesCompatibility', 'off');   % Create preprocessor directive in rtwtypes.h
+cs.set_param('GenerateSampleERTMain', 'off');   % Generate an example main program
+cs.set_param('IncludeMdlTerminateFcn', 'on');   % Terminate function required
 cs.set_param('CombineOutputUpdateFcns', 'on');   % Single output/update function
+cs.set_param('CombineSignalStateStructs', 'off');   % Combine signal/state structures
 cs.set_param('MatFileLogging', 'off');   % MAT-file logging
+cs.set_param('SuppressErrorStatus', 'off');   % Remove error status field in real-time model data structure
+cs.set_param('ERTCustomFileBanners', 'on');   % Enable custom file banner
+cs.set_param('SupportAbsoluteTime', 'on');   % Support absolute time
+cs.set_param('PurelyIntegerCode', 'off');   % Support floating-point numbers
 cs.set_param('SupportNonFinite', 'on');   % Support non-finite numbers
+cs.set_param('SupportComplex', 'on');   % Support complex numbers
+cs.set_param('SupportContinuousTime', 'off');   % Support continuous time
+cs.set_param('SupportNonInlinedSFcns', 'off');   % Support non-inlined S-functions
+cs.set_param('RemoveDisableFunc', 'off');   % Remove disable function
+cs.set_param('RemoveResetFunc', 'on');   % Remove reset function
+cs.set_param('SupportVariableSizeSignals', 'on');   % Support variable-size signals
+cs.set_param('ParenthesesLevel', 'Nominal');   % Parentheses level
+cs.set_param('CastingMode', 'Nominal');   % Casting modes
 cs.set_param('ArrayLayout', 'Column-major');   % Array layout
 cs.set_param('LUTObjectStructOrderExplicitValues', 'Size,Breakpoints,Table');   % LUT object struct order for explicit value specification
 cs.set_param('LUTObjectStructOrderEvenSpacing', 'Size,Breakpoints,Table');   % LUT object struct order for even spacing specification
+cs.set_param('ERTHeaderFileRootName', '$R$E');   % Header files
+cs.set_param('ERTSourceFileRootName', '$R$E');   % Source files
 cs.set_param('ERTFilePackagingFormat', 'Modular');   % File packaging format
+cs.set_param('ERTDataFileRootName', '$R_data');   % Data files
 cs.set_param('InstructionSetExtensions', {'SSE2'});   % Leverage target hardware instruction set extensions
 cs.set_param('OptimizeReductions', 'off');   % Optimize reductions
 cs.set_param('ExtModeMexFile', 'ext_comm');   % MEX-file name
@@ -369,7 +444,7 @@ cs.set_param('CovModelRefEnable', 'off');   % Record coverage for referenced mod
 try
   cs_componentCC = CoderTarget.SettingsController;
   cs.attachComponent(cs_componentCC);
-  cs.set_param('CoderTargetData', struct('UseCoderTarget',true,'TargetHardware','Robot Operating System 2 (ROS 2)','ConnectionInfo',struct('TCPIP',struct('IPAddress','ros.codertarget.internal.getExtmodeDeviceAddress(hCS)','Port','17725','Verbose',false,'RunInBackground',true)),'ExtMode',struct('Configuration','TCP/IP'),'RTOS','Linux','RTOSBaseRateTaskPriority','40','Scheduler_interrupt_source',0,'Packaging',struct('MaintainerName','ROS User','MaintainerEmail','ros2user@test.com','License','BSD','Version','1.0.0'),'BoardParameters',struct('DeviceAddress','orin','Username','ros'),'Runtime',struct('BuildAction','Build'),'ROS2Install',struct('Folder','/opt/ros/humble','Workspace','/home/ros/colcon_deploy'),'ROS',struct('RemoteBuild',true,'ROSTimeStepping',false,'ROSTimeNotification',false,'StepNotify','/step_notify'),'DataVersion','2016.02'));   % CoderTargetData
+  cs.set_param('CoderTargetData', struct('UseCoderTarget',true,'TargetHardware','Robot Operating System 2 (ROS 2)','ConnectionInfo',struct('TCPIP',struct('IPAddress','ros.codertarget.internal.getExtmodeDeviceAddress(hCS)','Port','17725','Verbose',false,'RunInBackground',true)),'ExtMode',struct('Configuration','TCP/IP'),'RTOS','Linux','RTOSBaseRateTaskPriority','40','Scheduler_interrupt_source',0,'Packaging',struct('MaintainerName','ROS User','MaintainerEmail','ros2user@test.com','License','BSD','Version','1.0.0'),'BoardParameters',struct('DeviceAddress','','Username',''),'Runtime',struct('BuildAction','Build'),'ROS2Install',struct('Folder','/opt/ros/foxy','Workspace','~/ros2_ws'),'ROS',struct('RemoteBuild',true,'ROSTimeStepping',false,'ROSTimeNotification',false,'StepNotify','/step_notify'),'DataVersion','2016.02'));   % CoderTargetData
 catch ME
   warning('Simulink:ConfigSet:AttachComponentError', '%s', ME.message);
 end
