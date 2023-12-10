@@ -79,6 +79,7 @@ ACTIVE_CONTROLLER_PID_SCALING_FACTOR_PARAM = "pid_scaling_parameters"
 
 FF_PUBLISH_PARAM = "disable_native_ff"
 FF_TOPIC_NAME = "controller/FF_body_force"
+ACTIVE_CONTROL_FORCE_TOPIC_NAME = "/talos/controller/active_body_force"
 
 RPM_PUBLISH_PERIOD = .02
 WEIGHTS_FORCE_UPDATE_PERIOD = 1
@@ -153,7 +154,7 @@ class controllerOverseer(Node):
 
         #pub ff force
         self.ffPub = self.create_publisher(Twist, FF_TOPIC_NAME, qos_profile_system_default)
-
+        
         #services to republish params
         self.repubSrvActive = self.create_service(Trigger, "controller_overseer/update_active_params", self.repubActiveParamsCb)
         self.repubSrvThruster = self.create_service(Trigger, "controller_overseer/update_ts_params", self.repubThrusterSolverParamsCb)
