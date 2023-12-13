@@ -141,5 +141,4 @@ build_ros2_model.sh
 generated_models/
 *.tgz
 codegen/
-*.prj
 *.mex*
