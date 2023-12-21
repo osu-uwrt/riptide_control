@@ -32,6 +32,7 @@ ERROR_PATIENCE = 1.0
 
 #the number of frames the escs can be powered off before clearing acculators
 ESC_POWER_STOP_TOLERANCE = 2
+ESC_POWER_TIMEOUT = 2
 
 PARAMETER_SCALE = 1000000
 
@@ -205,6 +206,9 @@ class controllerOverseer(Node):
         self.enabled = True
         self.publishingFF = True
 
+        #a timer to ensure that the active controllers stop if telemtry stops publishing!
+        self.escPowerCheckTimer = self.create_timer(ESC_POWER_TIMEOUT, self.escPowerTimeout)
+
     def generateThrusterForceMatrix(self, thruster_info, com):
         #generate the thruster effect matrix
         self.thrusterEffects = np.zeros(shape=(8,6))
@@ -314,6 +318,9 @@ class controllerOverseer(Node):
         #wether or not the thrusterSolverweigths need adjusted
         adjustWeights = False
 
+        #restart the timeout
+        self.escPowerCheckTimer.reset()
+
         # which thrusters - groups of 4
         if(msg.start_thruster_num == 0):
             #check wether each thruster is active
@@ -332,7 +339,7 @@ class controllerOverseer(Node):
             if not (msg.disabled_flags == 0):  
                 self.escPowerStopsLow += 1    
             else:
-                self.escPowerStopsHigh = 0 
+                self.escPowerStopsLow = 0 
 
         else:
             for i, esc in enumerate(msg.esc_telemetry):
@@ -359,13 +366,24 @@ class controllerOverseer(Node):
         #check if the boards are enebaled
         if self.escPowerStopsLow > ESC_POWER_STOP_TOLERANCE or self.escPowerStopsHigh > ESC_POWER_STOP_TOLERANCE:
             #publish disabled message
-            motionMsg = False
+            motionMsg.data = False
+
+            self.get_logger().warn("Recieving disabled flags from ESC!")
         else:
 
             motionMsg.data = True
             #publish enabled message
         
-        self.motionEnabledPub(motionMsg)
+        self.motionEnabledPub.publish(motionMsg)
+
+    def escPowerTimeout(self):
+        #timeout for if the escs go to long without publishing telemerty
+        self.get_logger().warn("Not recieving thruster telemtry!")
+
+        motionMsg = Bool()
+        motionMsg.data = False
+        self.motionEnabledPub.publish(motionMsg)
+
 
     def setThrusterModeCB(self, msg:Int16):
         #change the thruster mode
