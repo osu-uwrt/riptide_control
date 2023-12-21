@@ -23,12 +23,15 @@ from riptide_msgs2.msg import DshotPartialTelemetry, DshotCommand
 from nav_msgs.msg import Odometry
 from rcl_interfaces.srv import SetParameters
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
-from std_msgs.msg import Int16, Int32MultiArray, Float32MultiArray
+from std_msgs.msg import Int16, Int32MultiArray, Float32MultiArray, Bool
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import Twist
 from rclpy.time import Time
 
 ERROR_PATIENCE = 1.0
+
+#the number of frames the escs can be powered off before clearing acculators
+ESC_POWER_STOP_TOLERANCE = 2
 
 PARAMETER_SCALE = 1000000
 
@@ -89,6 +92,9 @@ G = 9.8067
 #manages parameters for the controller / thruster solver
 class controllerOverseer(Node):
 
+    escPowerStopsLow = 0
+    escPowerStopsHigh = 0
+
     def __init__(self):
         super().__init__("controllerOverseer")
 
@@ -128,6 +134,9 @@ class controllerOverseer(Node):
 
         #thruster telemetry
         self.create_subscription(DshotPartialTelemetry, "state/thrusters/telemetry", self.thrusterTelemetryCB, qos_profile_system_default)
+
+        #publish to active controllers whether motion is enabled
+        self.motionEnabledPub = self.create_publisher(Bool, "controller/motion_enabled", qos_profile=qos_profile_system_default)
 
         #thruster solver parameters
         self.setThrusterSolverParamsClient = self.create_client(SetParameters, f"{self.thrusterSolverName}/set_parameters")
@@ -318,6 +327,13 @@ class controllerOverseer(Node):
                     if self.activeThrusters[i] == False:
                         self.activeThrusters[i] = True
                         adjustWeights = True
+
+            #check if the boards are enebaled
+            if not (msg.disabled_flags == 0):  
+                self.escPowerStopsLow += 1    
+            else:
+                self.escPowerStopsHigh = 0 
+
         else:
             for i, esc in enumerate(msg.esc_telemetry):
                 if not esc.thruster_ready:
@@ -329,9 +345,27 @@ class controllerOverseer(Node):
                         self.activeThrusters[i + 4] = True
                         adjustWeights = True
 
+            #check if the boards are enebaled
+            if not (msg.disabled_flags == 0):  
+                self.escPowerStopsHigh += 1  
+            else:
+                self.escPowerStopsHigh = 0     
+
         #adjust the weights of the thruster solver if anything has changed
         if(adjustWeights):
             self.adjustThrusterWeights()
+
+        motionMsg = Bool()
+        #check if the boards are enebaled
+        if self.escPowerStopsLow > ESC_POWER_STOP_TOLERANCE or self.escPowerStopsHigh > ESC_POWER_STOP_TOLERANCE:
+            #publish disabled message
+            motionMsg = False
+        else:
+
+            motionMsg.data = True
+            #publish enabled message
+        
+        self.motionEnabledPub(motionMsg)
 
     def setThrusterModeCB(self, msg:Int16):
         #change the thruster mode
