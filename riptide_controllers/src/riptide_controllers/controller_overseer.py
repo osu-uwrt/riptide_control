@@ -36,6 +36,8 @@ ESC_POWER_TIMEOUT = 2
 
 PARAMETER_SCALE = 1000000
 
+ACTIVE_CONTROLLER_NAMES = ["PID", "SMC"]
+
 #
 # THRUSTER SOLVER PARAM NAMES
 #
@@ -46,6 +48,7 @@ THRUSTER_SOLVER_INDIVIDUAL_LIMIT_PARAM = "talos_indiv_lim"
 THRUSTER_SOLVER_SCALING_PARAM = "thruster_solver_scaling_parameters"
 THRUSTER_SOLVER_FORCE_RPM_COEFFICENTS_PARAM = "talos_force_curve_coefficents"
 THRUSTER_SOLVER_DISABLE_WEIGHTS = "thruster_solver_disable_weight"
+THRUSTER_SOLVER_ACTIVE_FORCE_MASK = "active_force_mask"
 
 #
 # SMC PARAM NAMES
@@ -60,6 +63,7 @@ ACTIVE_CONTROLLER_ROTATIONAL_INERTIAS_PARAM = "talos_rotational_inertias"
 ACTIVE_CONTROLLER_LAMBDA_PARAM = "talos_lambda"
 ACTIVE_CONTROLLER_ETA_0_PARAM = "talos_Eta_Order_0"
 ACTIVE_CONTROLLER_ETA_1_PARAM = "talos_Eta_Order_1"
+ACTIVE_CONTROLLER_VELOCITY_CURVE_PARAMS_PARAM = "talos_velocity_curve_params"
 ACTIVE_CONTROLLER_VMAX_PARAM = "talos_vMax"
 ACTIVE_CONTROLLER_AMAX_PARAM = "talos_aMax"
 ACTIVE_CONTROLLER_JAMX_PARAM = "talos_jMax"
@@ -111,9 +115,13 @@ class controllerOverseer(Node):
         self.declare_parameter("thruster_solver_node_name", "")
         self.thrusterSolverName = self.get_parameter("thruster_solver_node_name").value
 
-        #get thruster solver node name
-        self.declare_parameter("active_controller_node_name", "")
-        self.activeControllerName = self.get_parameter("active_controller_node_name").value
+        #get pid node name
+        self.declare_parameter("pid_model_name", "PID")
+        self.pidName = self.get_parameter("pid_model_name").value
+        
+        #get smc node name
+        self.declare_parameter("smc_model_name", "SMC")
+        self.smcName = self.get_parameter("smc_model_name").value
 
         self.declare_parameter(FF_PUBLISH_PARAM, False)
 
@@ -142,9 +150,6 @@ class controllerOverseer(Node):
         #thruster solver parameters
         self.setThrusterSolverParamsClient = self.create_client(SetParameters, f"{self.thrusterSolverName}/set_parameters")
 
-        #active controller parameters
-        self.setActiveControllerParamsClient = self.create_client(SetParameters, f"{self.activeControllerName}/set_parameters")
-
         #thruster mode
         self.create_subscription(Int16, "thrusterSolver/thrusterState", self.setThrusterModeCB, qos_profile_system_default)
 
@@ -170,7 +175,8 @@ class controllerOverseer(Node):
         self.repubSrvThruster = self.create_service(Trigger, "controller_overseer/update_ts_params", self.repubThrusterSolverParamsCb)
 
         #timestamps to prevent spamming of param repub
-        self.lastRepubActiveTime = self.get_clock().now()
+        self.lastRepubPIDTime = self.get_clock().now()
+        self.lastRepubSMCTime = self.get_clock().now()
         self.lastRepubThrusterTime = self.get_clock().now()
 
         #declare transform
@@ -189,7 +195,8 @@ class controllerOverseer(Node):
         self.solverActive = False
 
         #is the SMC controller active
-        self.activeActive = False
+        self.pidActive = False
+        self.smcActive = False
 
         #attempt to set the wrench matrix in the thruster solver
         self.create_timer(1.0, self.checkIfSimulinkActive)
@@ -278,6 +285,9 @@ class controllerOverseer(Node):
         #read in solver limit params
         self.systemThrustLimit = thruster_solver_info["system_thrust_limit"]
         self.individualThrustLimit = thruster_solver_info["individual_thrust_limit"]
+        
+        #read in solver mask param
+        self.activeTwistMask = thruster_solver_info["active_force_mask"]
 
         #read in ff properties
         self.talos_mass = config_file["mass"]
@@ -294,8 +304,11 @@ class controllerOverseer(Node):
         self.talos_eta_0_values = config_file["controller"]["SMC"]["SMC_params"]["eta_order_0"]
         self.talos_eta_1_values = config_file["controller"]["SMC"]["SMC_params"]["eta_order_1"]
         self.talos_lambda_values = config_file["controller"]["SMC"]["SMC_params"]["lambda"]
-
-        #motion generation params
+        
+        #gravity well params (replacing motion profiles)
+        self.talos_velocity_curve_params = config_file["controller"]["SMC"]["SMC_params"]["velocity_curve_params"]
+        
+        #motion generation params (unused. TODO: DELETE)
         self.talos_vmax_values = config_file["controller"]["SMC"]["motion_profile_params"]["max_velocity"]
         self.talos_amax_values = config_file["controller"]["SMC"]["motion_profile_params"]["max_acceleration"]
         self.talos_jmax_values = config_file["controller"]["SMC"]["motion_profile_params"]["max_jerk"]
@@ -490,10 +503,14 @@ class controllerOverseer(Node):
         #attempt to set the wrench matrix in the simulink node
 
         foundSolver = False
-        foundActiveControl = False
+        foundPid = False
+        foundSmc = False
 
         thrusterSolverSetParamName = f"{self.thrusterSolverName}/set_parameters"
-        activeControllerSetParamName = f"{self.activeControllerName}/set_parameters"
+
+
+        pidSetParamName = f"{self.pidName}/set_parameters"
+        smcSetParamName = f"{self.smcName}/set_parameters"
 
         #see if the matlab node is running
         for nodeName in get_node_names(node=self):
@@ -504,9 +521,13 @@ class controllerOverseer(Node):
                 thrusterSolverSetParamName = f"{nodeName.full_name}/set_parameters"
 
             #check the active controller
-            if self.activeControllerName in nodeName.name:
-                foundActiveControl = True
-                activeControllerSetParamName = f"{nodeName.full_name}/set_parameters"
+            if self.pidName in nodeName.name:
+                foundPid = True
+                pidSetParamName = f"{nodeName.full_name}/set_parameters"
+                
+            if self.smcName in nodeName.name:
+                foundSmc = True
+                smcSetParamName = f"{nodeName.full_name}/set_parameters"
 
 
         if(self.solverActive != foundSolver):
@@ -527,20 +548,34 @@ class controllerOverseer(Node):
                 #cancel the publishing
                 self.pubTimer.cancel()
 
-        if(self.activeActive != foundActiveControl):
-            if(foundActiveControl):
+        if(self.pidActive != foundPid):
+            if(foundPid):
                 #active control has come online
-                self.get_logger().info(f"Setting parameters using service {activeControllerSetParamName}")
-                self.setActiveControllerParamsClient = self.create_client(SetParameters, activeControllerSetParamName)
-                self.paramTimerActive = self.create_timer(1.0, self.setActiveParams)
+                self.get_logger().info(f"Setting parameters using service {pidSetParamName}")
+                self.setActiveControllerParamsClient = self.create_client(SetParameters, pidSetParamName)
+                self.paramTimerPID = self.create_timer(1.0, self.setPIDParams)
 
-                self.get_logger().info("Found Active Controller!")
+                self.get_logger().info("Found PID!")
             else:
                 #lost thruster solver
-                self.get_logger().error("Lost Active Controller!")
+                self.get_logger().error("Lost PID!")
 
                 #cancel the set default params operation
-                self.paramTimerActive.cancel()
+                self.paramTimerPID.cancel()
+        
+        if(self.smcActive != foundSmc):
+            if(foundSmc):
+                self.get_logger().info(f"Setting parameters using service {smcSetParamName}")
+                self.setActiveControllerParamsClient = self.create_client(SetParameters, smcSetParamName)
+                self.paramTimerSMC = self.create_timer(1.0, self.setSMCParams)
+
+                self.get_logger().info("Found SMC!")
+            else:
+                #lost thruster solver
+                self.get_logger().error("Lost SMC!")
+
+                #cancel the set default params operation
+                self.paramTimerSMC.cancel()
 
 
         if not (self.get_parameter(FF_PUBLISH_PARAM).value):
@@ -574,7 +609,8 @@ class controllerOverseer(Node):
 
         #update wether or not the solver and active control has been found
         self.solverActive = foundSolver
-        self.activeActive = foundActiveControl
+        self.pidActive = foundPid
+        self.smcActive = foundSmc
 
     def setSolverParams(self):
         self.get_logger().info("Setting Thruster Solver Default Parameters")
@@ -637,10 +673,19 @@ class controllerOverseer(Node):
         param5 = Parameter()
         param5.value = val5
         param5.name = THRUSTER_SOLVER_FORCE_RPM_COEFFICENTS_PARAM
+        
+        #twist masks
+        val6 = ParameterValue()
+        val6.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val6.integer_array_value = self.activeTwistMask #THIS IS NOT SCALED! IT DOES NOT MAKE SENSE TO
+        
+        param6 = Parameter()
+        param6.value = val6
+        param6.name = THRUSTER_SOLVER_ACTIVE_FORCE_MASK
 
         #setup service request
         request = SetParameters.Request()
-        request.parameters = [param, param1, param2, param3, param4, param5]
+        request.parameters = [param, param1, param2, param3, param4, param5, param6]
 
         self.future = self.setThrusterSolverParamsClient.call_async(request)
 
@@ -723,7 +768,7 @@ class controllerOverseer(Node):
         for value in self.talos_eta_1_values:
             int_values.append(int(value * PARAMETER_SCALE))
 
-        #SMC ETA 0
+        #SMC ETA 1
         val = ParameterValue()
         val.type = ParameterType.PARAMETER_INTEGER_ARRAY
         val.integer_array_value = int_values
@@ -745,15 +790,28 @@ class controllerOverseer(Node):
         param8 = Parameter()
         param8.value = val
         param8.name = ACTIVE_CONTROLLER_LAMBDA_PARAM
+        
+        #SMC gravity well parameters
+        int_values = []
+        for value in self.talos_velocity_curve_params:
+            int_values.append(int(value * PARAMETER_SCALE))
+        
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+        
+        param9 = Parameter()
+        param9.value = val
+        param9.name = ACTIVE_CONTROLLER_VELOCITY_CURVE_PARAMS_PARAM
 
         #mass
         val = ParameterValue()
         val.type = ParameterType.PARAMETER_INTEGER
         val.integer_value = int(self.talos_mass * PARAMETER_SCALE)
 
-        param9 = Parameter()
-        param9.value = val
-        param9.name = ACTIVE_CONTROLLER_MASS_PARAM
+        param10 = Parameter()
+        param10.value = val
+        param10.name = ACTIVE_CONTROLLER_MASS_PARAM
 
         #scale and int
         int_values = []
@@ -765,9 +823,9 @@ class controllerOverseer(Node):
         val.type = ParameterType.PARAMETER_INTEGER_ARRAY
         val.integer_array_value = int_values
 
-        param10 = Parameter()
-        param10.value = val
-        param10.name = ACTIVE_CONTROLLER_ROTATIONAL_INERTIAS_PARAM
+        param11 = Parameter()
+        param11.value = val
+        param11.name = ACTIVE_CONTROLLER_ROTATIONAL_INERTIAS_PARAM
 
         #scale and int
         int_values = []
@@ -779,9 +837,9 @@ class controllerOverseer(Node):
         val.type = ParameterType.PARAMETER_INTEGER_ARRAY
         val.integer_array_value = int_values
 
-        param11 = Parameter()
-        param11.value = val
-        param11.name = ACTIVE_CONTROLLER_VMAX_PARAM
+        param12 = Parameter()
+        param12.value = val
+        param12.name = ACTIVE_CONTROLLER_VMAX_PARAM
 
         #scale and int
         int_values = []
@@ -793,9 +851,9 @@ class controllerOverseer(Node):
         val.type = ParameterType.PARAMETER_INTEGER_ARRAY
         val.integer_array_value = int_values
 
-        param12 = Parameter()
-        param12.value = val
-        param12.name = ACTIVE_CONTROLLER_AMAX_PARAM
+        param13 = Parameter()
+        param13.value = val
+        param13.name = ACTIVE_CONTROLLER_AMAX_PARAM
 
         #scale and int
         int_values = []
@@ -807,31 +865,31 @@ class controllerOverseer(Node):
         val.type = ParameterType.PARAMETER_INTEGER_ARRAY
         val.integer_array_value = int_values
 
-        param13 = Parameter()
-        param13.value = val
-        param13.name = ACTIVE_CONTROLLER_JAMX_PARAM
+        param14 = Parameter()
+        param14.value = val
+        param14.name = ACTIVE_CONTROLLER_JAMX_PARAM
         
         #radial function count
         val = ParameterValue()
         val.type = ParameterType.PARAMETER_INTEGER
         val.integer_value = int(self.talos_radial_function_count * PARAMETER_SCALE)
 
-        param14 = Parameter()
-        param14.value = val
-        param14.name = ACTIVE_CONTROLLER_RADIAL_FUNC_COUNT_PARAM
+        param15 = Parameter()
+        param15.value = val
+        param15.name = ACTIVE_CONTROLLER_RADIAL_FUNC_COUNT_PARAM
 
         #mass
         val = ParameterValue()
         val.type = ParameterType.PARAMETER_INTEGER
         val.integer_value = int(PARAMETER_SCALE)
 
-        param15 = Parameter()
-        param15.value = val
-        param15.name = ACTIVE_CONTROLLER_SCALING_PARAM
+        param16 = Parameter()
+        param16.value = val
+        param16.name = ACTIVE_CONTROLLER_SCALING_PARAM
 
         #creste request to call the set parameters service
         request = SetParameters.Request()
-        request.parameters = [param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11, param12, param13, param14, param15]
+        request.parameters = [param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11, param12, param13, param14, param15, param16]
         return request
     
     
@@ -975,26 +1033,23 @@ class controllerOverseer(Node):
         request.parameters = [param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11]
         return request
     
-
-    def setActiveParams(self):
-        self.get_logger().info("Setting Active Controller Default Parameters")
-        #load in paramters to the active controller
-
-        request = None
-        if(self.activeControllerName == "SMC"):
-            request = self.getSMCSetParamRequest()
-        elif(self.activeControllerName == "PID"):
-            request = self.getPIDSetParamRequest()
-        
-        if(request is None):
-            self.get_logger().error(f"Internal error! Cannot set parameters for control model {self.activeControllerName} because it does not have a paramter function.")
-            return
-
-        #call set parameters service
+    
+    def setPIDParams(self):
+        self.get_logger().info("Setting PID Default Parameters")
+        request = self.getPIDSetParamRequest()
         self.future = self.setActiveControllerParamsClient.call_async(request)
 
         #cancel the time that loads in paramters - don't spam reload
-        self.paramTimerActive.cancel()
+        self.paramTimerPID.cancel()
+        
+    
+    def setSMCParams(self):
+        self.get_logger().info("Setting SMC Default Parameters")
+        request = self.getSMCSetParamRequest()
+        self.future = self.setActiveControllerParamsClient.call_async(request)
+
+        #cancel the time that loads in paramters - don't spam reload
+        self.paramTimerSMC.cancel()
     
     
     def repubSrvResponse(self, response: Trigger.Response, success: bool, msg: str):
@@ -1017,7 +1072,6 @@ class controllerOverseer(Node):
             self.generateThrusterForceMatrix(self.thruster_info, self.com)
             setFunc()
             
-            self.lastRepubActiveTime = currentTime
             return self.repubSrvResponse(response, True, "Parameters loaded successfully.")
         
         return self.repubSrvResponse(
@@ -1028,16 +1082,35 @@ class controllerOverseer(Node):
 
     def repubActiveParamsCb(self, request: Trigger.Request, response: Trigger.Response):
         self.get_logger().info("Received request to reload the Active Parameters")
-        if(self.activeActive):
+        
+        ret = Trigger.Response()
+        
+        if(self.pidActive):
             #set the parameters if there has been at least 5 seconds since the last set 
             currentTime = self.get_clock().now()
-            response = self.repubParamsCbGeneric(currentTime, self.lastRepubActiveTime, self.setActiveParams, response)
+            response = self.repubParamsCbGeneric(currentTime, self.lastRepubPIDTime, self.setPIDParams, response)
             if(response.success):
-                self.lastRepubActiveTime = currentTime
+                self.lastRepubPIDTime = currentTime
+                ret.message += "PID Reload Successful"
+            else:
+                ret.message += f"PID Reload failed: {response.message}"
+        else:
+            ret.message += "PID Offline"
             
-            return response
+        ret.message += ", "
         
-        return self.repubSrvResponse(response, False, "Failed to reload Active Params; the Active Controller is not active!")
+        if(self.smcActive):
+            currentTime = self.get_clock().now()
+            response = self.repubParamsCbGeneric(currentTime, self.lastRepubSMCTime, self.setSMCParams, response)
+            if(response.success):
+                self.lastRepubSMCTime = currentTime
+                ret.message += "SMC Reload Successful"
+            else:
+                ret.message += f"SMC Reload failed: {response.message}"
+        else:
+            ret.message += "SMC Offline"
+            
+        return ret
 
 
     def repubThrusterSolverParamsCb(self, request: Trigger.Request, response: Trigger.Response):
@@ -1093,7 +1166,8 @@ class controllerOverseer(Node):
 
             if(self.pubRPMMsg is not None):
                 self.rpmCommandPub.publish(self.pubRPMMsg)
-
+                
+                
 def main(args=None):
     rclpy.init(args=args)
 
