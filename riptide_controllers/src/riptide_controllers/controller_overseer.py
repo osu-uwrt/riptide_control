@@ -897,6 +897,7 @@ class controllerOverseer(Node):
         #SET P GAINS
         int_values = []
         for value in self.talos_p_gains:
+            self.get_logger().info(F"APPENDING P VALUE {value}")
             int_values.append(int(value * PARAMETER_SCALE))
         
         val = ParameterValue()
