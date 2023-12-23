@@ -45,8 +45,8 @@ print(f"Detected models root as {MODELS_ROOT}")
 #
 
 ARCHITECTURE_CONFIGS = {
-    "x86" : os.path.join(MODELS_ROOT, "x86_cfg.m"),
-    "arm" : os.path.join(MODELS_ROOT, "arm_cfg.m")
+    "x86" : "x86_cfg",
+    "arm" : "arm_cfg"
 }
 
 def determine_system_cfg(machine: str):
@@ -89,19 +89,12 @@ def execute_command(cmd: 'list[str]', cwd: str):
         raise RuntimeError(f"Command {cmdstr} returned with non-zero exit code {proc.returncode}")
 
 
-def generate_packages(models_select: 'list[str]', models_ignore: 'list[str]', configs_select: 'list[str]', configs_ignore: 'list[str]'):
-    matlab_cmd_args = []    
-        
-    if len(models_select) > 0:
-        matlab_cmd_args += ["'--models-select'"] + wrap_entries(get_abs_paths(models_select), "'")
-    elif len(models_ignore) > 0:
-        matlab_cmd_args += ["'--models-ignore'"] + wrap_entries(get_abs_paths(models_ignore), "'")
+def generate_packages(models: 'list[str]', configs: 'list[str]'):
+    # "wrap" model and config names with quotation marks for matlab
+    wrapped_models = [f"\"{model}\"" for model in models]
+    wrapped_configs = [f"\"{config}\"" for config in configs]
     
-    if len(configs_select) > 0:
-        matlab_cmd_args += ["'--configs-select'"] + wrap_entries(get_abs_paths(configs_select), "'")
-    elif len(configs_ignore) > 0:
-        matlab_cmd_args += ["'--configs-ignore'"] + wrap_entries(get_abs_paths(configs_ignore), "'")
-    
+    matlab_cmd_args = [f"[{','.join(wrapped_models)}]", f"[{','.join(wrapped_configs)}]"]
     matlab_cmd = ",".join(matlab_cmd_args)
     bash_cmd = ["matlab", "-batch", f"generate_cpp_packages({matlab_cmd})"]
 
@@ -119,12 +112,11 @@ def archive_packages(archives_dir: str):
 
 def download_packages(
     url: str, 
+    assume_yes: bool,
     local_config: str, 
     deploy_config: str,
-    models_select: 'list[str]',
-    models_ignore: 'list[str]',
-    configs_select: 'list[str]',
-    configs_ignore: 'list[str]'
+    models: 'list[str]',
+    configs: 'list[str]'
 ):
     local_config_name = get_object_name_from_file(local_config)
     deploy_config_name = get_object_name_from_file(deploy_config)
@@ -135,49 +127,20 @@ def download_packages(
     ensure_not_directory_exists(generated_output_directory)
     ensure_directory_exists(generated_output_directory)
     
-    # find packages to install
-    model_files = glob.glob(os.path.join(MODELS_ROOT, "**/*.slx"), recursive=True)
-    model_names = get_object_names_from_files(model_files)
-    
-    models_select_names = get_object_names_from_files(models_select)
-    models_ignore_names = get_object_names_from_files(models_ignore)
-    configs_select_names = get_object_names_from_files(configs_select)
-    configs_ignore_names = get_object_names_from_files(configs_ignore)
-    
-    #filter out models based on models_select and models_ignore
-    if len(models_select) > 0:
-        model_names = list_intersection(model_names, models_select_names)
-    elif len(models_ignore) > 0:
-        model_names = list_difference(model_names, models_ignore_names)
-    
-    print(f"Discovered downloadable models: {model_names}")
-    
-    #determine configs
-    cfg_names = [local_config_name]
-    if deploy_config_name != local_config_name:
-        cfg_names.append(deploy_config_name)
-    
-    #filter out configs based on configs_select and configs_ignore
-    if len(configs_select) > 0:
-        cfg_names = list_intersection(cfg_names, configs_select_names)
-    elif len(configs_ignore) > 0:
-        cfg_names = list_difference(cfg_names, configs_ignore_names)
-        
-    print(f"Using configurations: {cfg_names}")
-    
-    if not yesNoPrompt("Proceed with download?"):
+    if not yesNoPrompt("Proceed with download?", assume_yes):
         print("Not proceeding with operation.")
         exit(0)
         
     # perform download
-    for model in model_names:
-        for cfg in cfg_names:
+    for model in models:
+        for cfg in configs:
             try:
                 download_single_package(url, model, cfg, generated_output_directory)
             except KeyboardInterrupt: #needed otherwise wget might go on a rampage because it becomes uninterruptable
                 exit()
             except:
-                print(f"Failed to Download model: {model} with config {cfg}. Please ensure the model exists!", file=sys.stderr)
+                print(f"Failed to Download model: {model} with config {cfg}. Please ensure the model exists!" + \
+                      f"it should be listed as an asset at the link {url}", file=sys.stderr)
 
 
 def download_single_package(url, model, config, output_dir):
@@ -186,9 +149,9 @@ def download_single_package(url, model, config, output_dir):
     execute_command(["wget", asset_url], cwd=output_dir)
 
 
-def handle_local_packages(local_config: str, local_dir: str, no_build: bool):
+def handle_local_packages(local_config: str, local_dir: str, with_build: bool):
     print(f"Storing local packages ({os.path.basename(local_config)}) in {local_dir} and " + \
-        f"{'not building' if no_build else 'building'}")
+        f"{'building' if with_build else 'not building'}")
     
     local_dir_container = os.path.dirname(local_dir)
     if not os.path.exists(local_dir_container):
@@ -197,7 +160,7 @@ def handle_local_packages(local_config: str, local_dir: str, no_build: bool):
     
     handle_packages_generic(local_config, local_dir)
     
-    if not no_build:
+    if with_build:
         # figure out where to run the build. If the directory is within UWRT_ROOT/development/software/src, then 
         # the build will be run in UWRT_ROOT/developement/software. Otherwise, the build will happen in place
         build_dir = local_dir
@@ -216,9 +179,9 @@ def handle_local_packages(local_config: str, local_dir: str, no_build: bool):
         execute_command(cmd, build_dir)
 
 
-def handle_deploy_packages(deploy_config: str, deploy_dir: str, no_deploy: bool, deploy_target: str):
+def handle_deploy_packages(deploy_config: str, deploy_dir: str, with_deploy: bool, deploy_target: str):
     print(f"Storing deploy packages ({os.path.basename(deploy_config)}) in {deploy_dir} and " + \
-        f"{'not deploying' if no_deploy else 'deploying'} to {deploy_target}")
+        f"{'deploying' if with_deploy else 'not deploying'} to {deploy_target}")
 
     deploy_dir_container = os.path.dirname(deploy_dir)
     if not os.path.exists(deploy_dir_container):
@@ -227,7 +190,7 @@ def handle_deploy_packages(deploy_config: str, deploy_dir: str, no_deploy: bool,
     
     handle_packages_generic(deploy_config, deploy_dir)
     
-    if not no_deploy:
+    if with_deploy:
         # figure out where to run the deploy. If the directory is within UWRT_ROOT/release/src, then 
         # the build will be run in UWRT_ROOT/developement/software. Otherwise, the build will happen in place
         
@@ -267,7 +230,7 @@ def ping_device(name: str):
         return False
 
 
-def yesNoPrompt(question: str):
+def yesNoPrompt(question: str, assume_yes: bool):
     if assume_yes:
         return True
     
@@ -299,19 +262,19 @@ def get_object_names_from_files(files):
     return names
 
 
-def ensure_extension_for_file(cfg_file: str, extension: str):
-    if not cfg_file.endswith(extension):
-        return cfg_file + extension
+# def ensure_extension_for_file(cfg_file: str, extension: str):
+#     if not cfg_file.endswith(extension):
+#         return cfg_file + extension
     
-    return cfg_file
+#     return cfg_file
 
 
-def ensure_extensions_for_files(files: 'list[str]', extension: str):
-    resolved = []
-    for file in files:
-        resolved.append(ensure_extension_for_file(file, extension))
+# def ensure_extensions_for_files(files: 'list[str]', extension: str):
+#     resolved = []
+#     for file in files:
+#         resolved.append(ensure_extension_for_file(file, extension))
     
-    return resolved
+#     return resolved
 
 
 def filter_list(lis, filt):
@@ -346,34 +309,34 @@ def unpack_archives(src: str, files: 'list[str]', dst: str):
         os.remove(dst_name)
     
 
-def find_files(files: 'list[str]'):
-    paths = files
-    for i in range(0, len(paths)):
-        if not os.path.exists(paths[i]):
-            #file is not relative to root or cwd, look recursively in models
-            model_relative_path_recursive = os.path.join(MODELS_ROOT, "**", paths[i])
-            possible_paths_recursive = glob.glob(model_relative_path_recursive)
+# def find_files(files: 'list[str]'):
+#     paths = files
+#     for i in range(0, len(paths)):
+#         if not os.path.exists(paths[i]):
+#             #file is not relative to root or cwd, look recursively in models
+#             model_relative_path_recursive = os.path.join(MODELS_ROOT, "**", paths[i])
+#             possible_paths_recursive = glob.glob(model_relative_path_recursive)
             
-            model_relative_path_nonrecursive = os.path.join(MODELS_ROOT, paths[i])
-            possible_paths_nonrecursive = glob.glob(model_relative_path_nonrecursive)
+#             model_relative_path_nonrecursive = os.path.join(MODELS_ROOT, paths[i])
+#             possible_paths_nonrecursive = glob.glob(model_relative_path_nonrecursive)
             
-            possible_paths = possible_paths_recursive + possible_paths_nonrecursive
+#             possible_paths = possible_paths_recursive + possible_paths_nonrecursive
             
-            if len(possible_paths) > 1:
-                #multiple possible files
-                msg = f"Name {files[i]} names multiple possible candidates ({possible_paths}). Please specify a more specific name."
-                print(msg, file=sys.stderr)
-                raise ValueError(msg)
-            elif len(possible_paths) == 0:
-                #no possible files
-                msg = f"Name {files[i]} does not specify an existing file within the models directory, or relative to the current directory or root."
-                print(msg, file=sys.stderr)
-                raise ValueError(msg)
+#             if len(possible_paths) > 1:
+#                 #multiple possible files
+#                 msg = f"Name {files[i]} names multiple possible candidates ({possible_paths}). Please specify a more specific name."
+#                 print(msg, file=sys.stderr)
+#                 raise ValueError(msg)
+#             elif len(possible_paths) == 0:
+#                 #no possible files
+#                 msg = f"Name {files[i]} does not specify an existing file within the models directory, or relative to the current directory or root."
+#                 print(msg, file=sys.stderr)
+#                 raise ValueError(msg)
 
-            #one possible file
-            paths[i] = possible_paths[0]
+#             #one possible file
+#             paths[i] = possible_paths[0]
     
-    return paths
+#     return paths
                 
 
 def get_abs_paths(paths: 'list[str]'):
@@ -410,64 +373,63 @@ def parse_args():
                             "Then, unless otherwise specified by the --no-build and --no-deploy flags, the program will " + \
                             "invoke Colcon to build the local packages and deploy the deployable ones."
     )
-        
-    parser.add_argument("--models-select", action="store", default=[], nargs="+",
-                        help="Select specific models to build. Models not specified after this flag will not be built. " + \
-                            "This flag takes precedence over --models-ignore. If neither --models-ignore or --models-select " + \
-                            "are used, then all packages will be built")
     
-    parser.add_argument("--models-ignore", action="store", default=[], nargs="+",
-                        help="Select specific models NOT to build. If --models-select is used, this flag will be ignored")
-    
-    parser.add_argument("--configs-select", action="store", default=[], nargs="+",
-                        help="Select specific confurations to use when building the models. Configs not specified after " + \
-                            "this flag will not be used. This flag takes precedence over --configs-ignore. If neither " + \
-                            "--configs-ignore or --configs-select are used, then all configs will be used")
-    
-    parser.add_argument("--configs-ignore", action="store", default=[],  nargs="+",
-                        help="Select specific configs NOT to build. If --configs-select is used, this flag will be ignored")
-    
-    parser.add_argument("--local-config", action="store", default=DEFAULT_LOCAL_CONFIG,
-                        help="Sets the config that generates code runnable by the local machine. If allowed, code generated " + \
-                            "with this config will be automatically transferred to the local-dir and built.")
-    
-    parser.add_argument("--deploy-config", action = "store", default=DEFAULT_DEPLOY_CONFIG,
-                        help="Sets the config that generates code runnable by the robot. If allowed, code generated with " + \
-                            "this config will be automatically transferred to the deploy-dir and built")
-
-    parser.add_argument("--no-process-local", action="store_true",
-                        help="If specified, local packages will not be unpacked and built")
-    
-    parser.add_argument("--no-process-deploy", action="store_true",
-                        help="If specified, deploy packages will not be unpacked and built")
-    
-    parser.add_argument("--no-build", action="store_true",
-                        help="If specified, the program will unpack the local packages but it will not attempt to build them")
-    
-    parser.add_argument("--no-deploy", action="store_true",
-                        help="If specified, the program will unpack the deploy packages but it will not attempt to deploy them")
-    
-    parser.add_argument("--archives-dir", action="store", default=DEFAULT_ARCHIVE_DIR,
-                        help="The path to the directory in which to store the tar archives containing the generated packages")
-    
-    parser.add_argument("--local-dir", action="store", default=DEFAULT_LOCAL_DIR,
-                        help="The path to the directory in which to store the local packages (packages which are runnable by the " + \
-                            "local machine)")
-
-    parser.add_argument("--deploy-dir", action="store", default=DEFAULT_DEPLOY_DIR,
-                        help="The path to the directory in which to store the deployable packages (packages which are runnable by " + \
-                            "the robot)")
-    
-    parser.add_argument("--deploy-target", action="store", default=DEFAULT_ROBOT_NAME,
-                        help="Specifies the name of the target to deploy the deployable packages to")
+    parser.add_argument("--test", action="store_true")
     
     parser.add_argument("-y", "--assume-yes", action="store_true",
                         help="Assume yes on all prompts")
     
-    parser.add_argument("--test", action="store_true")
+    process_parser = argparse.ArgumentParser(add_help=False)
+        
+    process_parser.add_argument("--models-select", action="store", default=[], nargs="+",
+                        help="Select specific models to build. Models not specified after this flag will not be built. " + \
+                            "This flag takes precedence over --models-ignore. If neither --models-ignore or --models-select " + \
+                            "are used, then all packages will be built")
     
-    #this is a kind of hacky way to get around the nargs issue (i.e --models-select tries to eat the task like "generate_packages" like its a model name)
-    parser.add_argument("--do-task", action="store_true", help="Use to specify the task after using a flag like --models-select")
+    process_parser.add_argument("--models-ignore", action="store", default=[], nargs="+",
+                        help="Select specific models NOT to build. If --models-select is used, this flag will be ignored")
+    
+    process_parser.add_argument("--configs-select", action="store", default=[], nargs="+",
+                        help="Select specific confurations to use when building the models. Configs not specified after " + \
+                            "this flag will not be used. This flag takes precedence over --configs-ignore. If neither " + \
+                            "--configs-ignore or --configs-select are used, then all configs will be used")
+    
+    process_parser.add_argument("--configs-ignore", action="store", default=[],  nargs="+",
+                        help="Select specific configs NOT to build. If --configs-select is used, this flag will be ignored")
+    
+    process_parser.add_argument("--local-config", action="store", default=DEFAULT_LOCAL_CONFIG,
+                        help="Sets the config that generates code runnable by the local machine. If allowed, code generated " + \
+                            "with this config will be automatically transferred to the local-dir and built.")
+    
+    process_parser.add_argument("--deploy-config", action = "store", default=DEFAULT_DEPLOY_CONFIG,
+                        help="Sets the config that generates code runnable by the robot. If allowed, code generated with " + \
+                            "this config will be automatically transferred to the deploy-dir and built")
+
+    process_parser.add_argument("--no-process-local", action="store_true",
+                        help="If specified, local packages will not be unpacked and built")
+    
+    process_parser.add_argument("--no-process-deploy", action="store_true",
+                        help="If specified, deploy packages will not be unpacked and built")
+    
+    process_parser.add_argument("--build", action="store_true",
+                        help="If specified, the program will unpack the local packages but it will not attempt to build them")
+    
+    process_parser.add_argument("--deploy", action="store_true",
+                        help="If specified, the program will unpack the deploy packages but it will not attempt to deploy them")
+    
+    process_parser.add_argument("--archives-dir", action="store", default=DEFAULT_ARCHIVE_DIR,
+                        help="The path to the directory in which to store the tar archives containing the generated packages")
+    
+    process_parser.add_argument("--local-dir", action="store", default=DEFAULT_LOCAL_DIR,
+                        help="The path to the directory in which to store the local packages (packages which are runnable by the " + \
+                            "local machine)")
+
+    process_parser.add_argument("--deploy-dir", action="store", default=DEFAULT_DEPLOY_DIR,
+                        help="The path to the directory in which to store the deployable packages (packages which are runnable by " + \
+                            "the robot)")
+    
+    process_parser.add_argument("--deploy-target", action="store", default=DEFAULT_ROBOT_NAME,
+                        help="Specifies the name of the target to deploy the deployable packages to")
     
     #
     # SUBPARSERS
@@ -476,13 +438,13 @@ def parse_args():
     
     #GENERATE_PACKAGES SUBPARSER
     
-    generate_subparser = subparsers.add_parser(GENERATE_PACKAGES_TASK_NAME, help="Generate Colcon packages from Simulink models")
+    generate_subparser = subparsers.add_parser(GENERATE_PACKAGES_TASK_NAME, parents=[ process_parser ], help="Generate Colcon packages from Simulink models")
     
     generate_subparser.add_argument("--no-archive", action="store_true",
                         help="If specified, the generated archives will not be stored")
     
     #DOWNLOAD_PACKAGES SUBPARSER
-    download_subparser = subparsers.add_parser(DOWNLOAD_PACKAGES_TASK_NAME, help="Download released packages from the Internet")
+    download_subparser = subparsers.add_parser(DOWNLOAD_PACKAGES_TASK_NAME, parents=[ process_parser ], help="Download released packages from the Internet")
     
     download_subparser.add_argument("--from-url", action="store", default=DEFAULT_DOWNLOAD_LATEST_URL,
                                     help="Specifies the URL to download the asset from.")
@@ -495,7 +457,7 @@ def parse_args():
     delete_subparser = subparsers.add_parser(DELETE_PACKAGES_TASK_NAME, help="Delete packages from the local and deploy directories")
     
     #PROCESS_CACHED SUBPARSER
-    process_subparser = subparsers.add_parser(PROCESS_CACHED_TASK_NAME, help="Process cached packages were already downloaded or generated")
+    process_subparser = subparsers.add_parser(PROCESS_CACHED_TASK_NAME, parents=[ process_parser ], help="Process cached packages that were already downloaded or generated")
     
     return parser.parse_args()
 
@@ -505,26 +467,43 @@ def test(name):
     print(f"{name} is present" if good else f"{name} NOT present")
 
 
-def main():
-    global assume_yes
-    
+def main():    
     args = parse_args()
     
     if args.test:
         test(args.deploy_target)
         exit(0)
-        
-    assume_yes = args.assume_yes
     
-    models_select = find_files(ensure_extensions_for_files(args.models_select, ".slx"))
-    models_ignore = find_files(ensure_extensions_for_files(args.models_ignore, ".slx"))
-    configs_select = find_files(ensure_extensions_for_files(args.configs_select, ".m"))
-    configs_ignore = find_files(ensure_extensions_for_files(args.configs_ignore, ".m"))
-    local_config = ensure_extension_for_file(args.local_config, ".m")
-    deploy_config = ensure_extension_for_file(args.deploy_config, ".m")
+    #
+    # filter out models based on models_select and models_ignore
+    #
+    
+    #glob all models not in the referenced_models directory
+    model_files = glob.glob(os.path.join(MODELS_ROOT, "[![referenced_models]**/*.slx"), recursive=True)
+    model_names = get_object_names_from_files(model_files)
+    
+    if len(args.models_select) > 0:
+        model_names = list_intersection(model_names, args.models_select)
+    elif len(args.models_ignore) > 0:
+        model_names = list_difference(model_names, args.models_ignore)
+    
+    print(f"Processing models: {model_names}")
+    
+    #determine configs
+    cfg_names = [args.local_config]
+    if args.deploy_config != args.local_config:
+        cfg_names.append(args.deploy_config)
+    
+    #filter out configs based on configs_select and configs_ignore
+    if len(args.configs_select) > 0:
+        cfg_names = list_intersection(cfg_names, args.configs_select)
+    elif len(args.configs_ignore) > 0:
+        cfg_names = list_difference(cfg_names, args.configs_ignore)
+        
+    print(f"Processing configurations: {cfg_names}")
     
     if args.task == GENERATE_PACKAGES_TASK_NAME:
-        generate_packages(models_select, models_ignore, configs_select, configs_ignore)
+        generate_packages(model_names, cfg_names)
         
         if not args.no_archive:
             archive_packages(os.path.abspath(args.archives_dir))
@@ -542,24 +521,24 @@ def main():
         
         download_packages(
             download_url, 
-            local_config, 
-            deploy_config,
-            models_select,
-            models_ignore,
-            configs_select,
-            configs_ignore)
+            args.local_config, 
+            args.deploy_config,
+            args.models_select,
+            args.models_ignore,
+            args.configs_select,
+            args.configs_ignore)
     
     if not args.no_process_local:
         handle_local_packages(
-            local_config,
+            args.local_config,
             os.path.abspath(args.local_dir),
-            args.no_build)
+            args.build)
     
     if not args.no_process_deploy:
         handle_deploy_packages(
-            deploy_config,
+            args.deploy_config,
             os.path.abspath(args.deploy_dir),
-            args.no_deploy,
+            args.deploy,
             args.deploy_target)
 
 
