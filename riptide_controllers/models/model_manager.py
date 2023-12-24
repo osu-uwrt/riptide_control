@@ -2,7 +2,7 @@
 
 #
 # UWRT controller MATLAB model manager. 
-# handles code generation and download of all simulink models in all configurations.
+# handles code generation, download, and other general management of all simulink models in all configurations.
 #
 
 import argparse
@@ -12,6 +12,7 @@ import subprocess
 import platform
 import shutil
 import glob
+import re
 
 #
 # Figure out location of the models in the src tree. This may be weird because we may be running out of the install tree
@@ -72,14 +73,28 @@ DEFAULT_DEPLOY_DIR = os.path.join(UWRT_ROOT, "release", "src", "controller_model
 DEFAULT_DOWNLOAD_LATEST_URL = "https://github.com/osu-uwrt/riptide_control/releases/latest/download/"
 DEFAULT_DOWNLOAD_VERSION_URL = "https://github.com/osu-uwrt/riptide_control/releases/download/"
 
-#cmdline consts
+#list of file patterns that are okay to delete when cleaning the workspace
+#these should all be in the gitignore.
+#all paths are evaluated relative to MODELS_ROOT
+CLEANABLE_FILE_PATTERNS = [
+    "**/+bus_conv_fcns",
+    "**/*_ert_rtw",
+    "**/slprj",
+    "**/src",
+    "**/*.slxc",
+    "**/build_ros2_model.sh",
+    "**/generated_models",
+    "**/*.tgz",
+    "**/codegen",
+    "**/*.mex*"
+]
+
+#cmdline names
 GENERATE_PACKAGES_TASK_NAME = "generate_packages"
 DOWNLOAD_PACKAGES_TASK_NAME = "download_packages"
 DELETE_PACKAGES_TASK_NAME   = "delete_packages"
+CLEAN_WORKSPACE_TASK_NAME   = "clean_workspace"
 PROCESS_CACHED_TASK_NAME    = "process_cached"
-
-
-assume_yes = False
 
 
 def execute_command(cmd: 'list[str]', cwd: str):
@@ -103,20 +118,13 @@ def generate_packages(models: 'list[str]', configs: 'list[str]'):
     execute_command(bash_cmd, cwd=MODELS_ROOT)
 
 
-def archive_packages(archives_dir: str):
-    print(f"Archiving packages in directory {archives_dir}")
-    generated_output_directory = os.path.join(MODELS_ROOT, "generated_models")
-    ensure_not_directory_exists(archives_dir)
-    shutil.copytree(generated_output_directory, archives_dir)
-
-
 def download_packages(
     url: str, 
-    assume_yes: bool,
     local_config: str, 
     deploy_config: str,
     models: 'list[str]',
-    configs: 'list[str]'
+    configs: 'list[str]',
+    assume_yes: bool
 ):
     local_config_name = get_object_name_from_file(local_config)
     deploy_config_name = get_object_name_from_file(deploy_config)
@@ -140,8 +148,94 @@ def download_packages(
                 exit()
             except:
                 print(f"Failed to Download model: {model} with config {cfg}. Please ensure the model exists!" + \
-                      f"it should be listed as an asset at the link {url}", file=sys.stderr)
+                      f"Tt should be listed as an asset at the link {url}", file=sys.stderr)
 
+
+def delete_packages(
+    packages: 'list[str]', 
+    exclude_archive: bool,
+    archives_dir: str, 
+    exclude_local: bool,
+    local_dir: str, 
+    exclude_deploy: bool,
+    deploy_dir: str, 
+    assume_yes: bool
+):
+    def print_delete_summary(to_delete: 'list[str]', category: str):
+        print(f"Deleting from {category}:")
+        print_list(to_delete)
+        print()
+    
+    (delete_archive, delete_local, delete_deploy) = resolve_archives_to_delete(
+        packages,
+        exclude_archive,
+        archives_dir,
+        exclude_local,
+        local_dir,
+        exclude_deploy,
+        deploy_dir
+    )
+    
+    print_delete_summary(delete_archive, "archive")
+    print_delete_summary(delete_local, "local")
+    print_delete_summary(delete_deploy, "deploy")
+        
+    #remove if user consents
+    if yesNoPrompt("Continue?", assume_yes):
+        print("Deleting")
+        for name in delete_archive + delete_local + delete_deploy:
+            #expect file
+            remove_file_or_directory(os.path.join(archives_dir, name))
+    else:
+        print("Not deleting")
+
+
+def clean_workspace(archives_dir: str, local_dir: str, deploy_dir: str, no_delete_packages: bool, assume_yes: bool):
+    # list will keep track of absolute path of items to delete
+    to_delete = []
+    
+    #change into models directory to avoid hitting items outside of there
+    os.chdir(MODELS_ROOT)
+    
+    # add package items if not specified otherwise
+    if not no_delete_packages:
+        (delete_archive, delete_local, delete_deploy) = resolve_archives_to_delete(
+            [],
+            False,
+            archives_dir,
+            False,
+            local_dir,
+            False,
+            deploy_dir)
+
+        to_delete += delete_archive + delete_local + delete_deploy
+    
+    #add glob files
+    for pattern in CLEANABLE_FILE_PATTERNS:
+        items = glob.glob(pattern, recursive=True)
+        for item in items:
+            to_delete.append(os.path.abspath(item))
+    
+    #print a summary of what we will do
+    print("The clean operation will result in the following items being deleted:")
+    print_list(to_delete)
+    print()
+    
+    if yesNoPrompt("Continue?", assume_yes):
+        print("Deleting")
+        for item in to_delete:
+            if os.path.exists(item):
+                remove_file_or_directory(item)
+    else:
+        print("Not deleting")
+
+
+def archive_packages(archives_dir: str):
+    print(f"Archiving packages in directory {archives_dir}")
+    generated_output_directory = os.path.join(MODELS_ROOT, "generated_models")
+    ensure_not_directory_exists(archives_dir)
+    shutil.copytree(generated_output_directory, archives_dir)
+    
 
 def download_single_package(url, model, config, output_dir):
     asset_name = model + "_" + config + ".tgz"
@@ -222,6 +316,73 @@ def handle_packages_generic(config: str, dir: str):
     unpack_archives(generated_output_directory, archive_names, dir)
 
 
+def resolve_archives_to_delete(
+    packages: 'list[str]', 
+    exclude_archive: bool,
+    archives_dir: str, 
+    exclude_local: bool,
+    local_dir: str, 
+    exclude_deploy: bool,
+    deploy_dir: str, 
+):
+    packages_snake = [title_to_snake(package) for package in packages]
+    
+    def resolve_files_to_delete(dir: str, packages: 'list[str]', exclude: bool, include_build_install: bool, ws_base_dir: str):
+        to_delete = [] #contains absolute paths of items to be deleted
+        if not exclude:
+            dir_contents = os.listdir(dir)
+            for file_name in dir_contents:
+                if len(packages) > 0:
+                    for package in packages:
+                            if file_name.startswith(package):
+                                to_delete.append(os.path.join(dir, file_name))
+                else:
+                    to_delete.append(os.path.join(dir, file_name))
+            
+            # delete the package from the build and install directories if necessary
+            if include_build_install:
+                delete_tmp = to_delete.copy() #avoid infinite loop
+                for path in delete_tmp:
+                    file_name = os.path.basename(path)
+                    build_path = os.path.join(ws_base_dir, "build", file_name)
+                    install_path = os.path.join(ws_base_dir, "install", file_name)
+                    
+                    if os.path.exists(build_path):
+                        to_delete.append(build_path)
+                    
+                    if os.path.exists(install_path):
+                        to_delete.append(install_path)
+            
+        return to_delete
+    
+    #figure out where workspace bases are for local and deploy
+    local_ws_dir = local_dir
+    software_dir = os.path.join(UWRT_ROOT, "development", "software")
+    if software_dir in local_dir:
+        local_ws_dir = software_dir
+    
+    deploy_ws_dir = deploy_dir
+    release_dir = os.path.join(UWRT_ROOT, "release")
+    if release_dir in deploy_dir:
+        deploy_ws_dir = release_dir
+    
+    #figure out what to delete out of archive directory
+    delete_from_archive = resolve_files_to_delete(archives_dir, packages, exclude_archive, False, "")
+    delete_from_local = resolve_files_to_delete(local_dir, packages_snake, exclude_local, True, local_ws_dir)
+    delete_from_deploy = resolve_files_to_delete(deploy_dir, packages_snake, exclude_deploy, True, deploy_ws_dir)
+    
+    return (delete_from_archive, delete_from_local, delete_from_deploy)
+
+
+# function taken from this answer and adapted a bit:
+# https://stackoverflow.com/questions/1175208/elegant-python-function-to-convert-camelcase-to-snake-case
+#
+# this is helpful for learning regexes:
+# https://docs.python.org/3/library/re.html
+def title_to_snake(title: str):
+    return re.sub(r'(?<!^)(?<=[a-z])(?=[A-Z]|[0-9])', '_', title).lower()
+
+
 def ping_device(name: str):
     try:
         execute_command(["ping", "-W0.25", "-i0.25", "-c4", name], os.getcwd())
@@ -234,7 +395,7 @@ def yesNoPrompt(question: str, assume_yes: bool):
     if assume_yes:
         return True
     
-    yes_no = input(question + " [y/n?]: ")
+    yes_no = input(question + " [y/n]: ")
     return yes_no.lower() == "y" or len(yes_no) == 0
 
 
@@ -244,8 +405,15 @@ def ensure_directory_exists(dir: str):
 
 
 def ensure_not_directory_exists(dir: str):
-    if os.path.exists(dir):
+    if os.path.exists(dir) and os.path.isdir(dir):
         shutil.rmtree(dir)
+
+
+def remove_file_or_directory(path: str):
+    if os.path.isdir(path):
+        shutil.rmtree(path)
+    else:
+        os.remove(path)
 
 
 def get_object_name_from_file(file):
@@ -260,21 +428,6 @@ def get_object_names_from_files(files):
         names.append(get_object_name_from_file(file))
     
     return names
-
-
-# def ensure_extension_for_file(cfg_file: str, extension: str):
-#     if not cfg_file.endswith(extension):
-#         return cfg_file + extension
-    
-#     return cfg_file
-
-
-# def ensure_extensions_for_files(files: 'list[str]', extension: str):
-#     resolved = []
-#     for file in files:
-#         resolved.append(ensure_extension_for_file(file, extension))
-    
-#     return resolved
 
 
 def filter_list(lis, filt):
@@ -306,38 +459,13 @@ def unpack_archives(src: str, files: 'list[str]', dst: str):
         execute_command(tar_cmd, cwd=dst)
         
         #remove archive
-        os.remove(dst_name)
-    
+        remove_file_or_directory(dst_name)
 
-# def find_files(files: 'list[str]'):
-#     paths = files
-#     for i in range(0, len(paths)):
-#         if not os.path.exists(paths[i]):
-#             #file is not relative to root or cwd, look recursively in models
-#             model_relative_path_recursive = os.path.join(MODELS_ROOT, "**", paths[i])
-#             possible_paths_recursive = glob.glob(model_relative_path_recursive)
-            
-#             model_relative_path_nonrecursive = os.path.join(MODELS_ROOT, paths[i])
-#             possible_paths_nonrecursive = glob.glob(model_relative_path_nonrecursive)
-            
-#             possible_paths = possible_paths_recursive + possible_paths_nonrecursive
-            
-#             if len(possible_paths) > 1:
-#                 #multiple possible files
-#                 msg = f"Name {files[i]} names multiple possible candidates ({possible_paths}). Please specify a more specific name."
-#                 print(msg, file=sys.stderr)
-#                 raise ValueError(msg)
-#             elif len(possible_paths) == 0:
-#                 #no possible files
-#                 msg = f"Name {files[i]} does not specify an existing file within the models directory, or relative to the current directory or root."
-#                 print(msg, file=sys.stderr)
-#                 raise ValueError(msg)
 
-#             #one possible file
-#             paths[i] = possible_paths[0]
-    
-#     return paths
-                
+def print_list(lis: list):
+    for item in lis:
+        print(f"  {item}")
+           
 
 def get_abs_paths(paths: 'list[str]'):
     abs_paths = []
@@ -379,31 +507,46 @@ def parse_args():
     parser.add_argument("-y", "--assume-yes", action="store_true",
                         help="Assume yes on all prompts")
     
-    process_parser = argparse.ArgumentParser(add_help=False)
-        
-    process_parser.add_argument("--models-select", action="store", default=[], nargs="+",
+    select_parser = argparse.ArgumentParser(add_help=False)
+    
+    select_parser.add_argument("--models-select", action="store", default=[], nargs="+",
                         help="Select specific models to build. Models not specified after this flag will not be built. " + \
                             "This flag takes precedence over --models-ignore. If neither --models-ignore or --models-select " + \
                             "are used, then all packages will be built")
     
-    process_parser.add_argument("--models-ignore", action="store", default=[], nargs="+",
+    select_parser.add_argument("--models-ignore", action="store", default=[], nargs="+",
                         help="Select specific models NOT to build. If --models-select is used, this flag will be ignored")
     
-    process_parser.add_argument("--configs-select", action="store", default=[], nargs="+",
+    select_parser.add_argument("--configs-select", action="store", default=[], nargs="+",
                         help="Select specific confurations to use when building the models. Configs not specified after " + \
                             "this flag will not be used. This flag takes precedence over --configs-ignore. If neither " + \
                             "--configs-ignore or --configs-select are used, then all configs will be used")
     
-    process_parser.add_argument("--configs-ignore", action="store", default=[],  nargs="+",
+    select_parser.add_argument("--configs-ignore", action="store", default=[],  nargs="+",
                         help="Select specific configs NOT to build. If --configs-select is used, this flag will be ignored")
     
-    process_parser.add_argument("--local-config", action="store", default=DEFAULT_LOCAL_CONFIG,
+    select_parser.add_argument("--local-config", action="store", default=DEFAULT_LOCAL_CONFIG,
                         help="Sets the config that generates code runnable by the local machine. If allowed, code generated " + \
                             "with this config will be automatically transferred to the local-dir and built.")
     
-    process_parser.add_argument("--deploy-config", action = "store", default=DEFAULT_DEPLOY_CONFIG,
+    select_parser.add_argument("--deploy-config", action = "store", default=DEFAULT_DEPLOY_CONFIG,
                         help="Sets the config that generates code runnable by the robot. If allowed, code generated with " + \
                             "this config will be automatically transferred to the deploy-dir and built")
+    
+    dir_parser = argparse.ArgumentParser(add_help=False)
+    
+    dir_parser.add_argument("--archives-dir", action="store", default=DEFAULT_ARCHIVE_DIR,
+                        help="The path to the directory in which to store the tar archives containing the generated packages")
+    
+    dir_parser.add_argument("--local-dir", action="store", default=DEFAULT_LOCAL_DIR,
+                        help="The path to the directory in which to store the local packages (packages which are runnable by the " + \
+                            "local machine)")
+
+    dir_parser.add_argument("--deploy-dir", action="store", default=DEFAULT_DEPLOY_DIR,
+                        help="The path to the directory in which to store the deployable packages (packages which are runnable by " + \
+                            "the robot)")
+    
+    process_parser = argparse.ArgumentParser(add_help=False, parents=[ select_parser, dir_parser ])
 
     process_parser.add_argument("--no-process-local", action="store_true",
                         help="If specified, local packages will not be unpacked and built")
@@ -416,17 +559,6 @@ def parse_args():
     
     process_parser.add_argument("--deploy", action="store_true",
                         help="If specified, the program will unpack the deploy packages but it will not attempt to deploy them")
-    
-    process_parser.add_argument("--archives-dir", action="store", default=DEFAULT_ARCHIVE_DIR,
-                        help="The path to the directory in which to store the tar archives containing the generated packages")
-    
-    process_parser.add_argument("--local-dir", action="store", default=DEFAULT_LOCAL_DIR,
-                        help="The path to the directory in which to store the local packages (packages which are runnable by the " + \
-                            "local machine)")
-
-    process_parser.add_argument("--deploy-dir", action="store", default=DEFAULT_DEPLOY_DIR,
-                        help="The path to the directory in which to store the deployable packages (packages which are runnable by " + \
-                            "the robot)")
     
     process_parser.add_argument("--deploy-target", action="store", default=DEFAULT_ROBOT_NAME,
                         help="Specifies the name of the target to deploy the deployable packages to")
@@ -450,96 +582,127 @@ def parse_args():
                                     help="Specifies the URL to download the asset from.")
     
     download_subparser.add_argument("--from-release", action="store", default="latest",
-                                    help="specifies the github release from which to download the packages. Cannot be used with --from-url")
+                                    help="Specifies the github release from which to download the packages. Cannot be used with --from-url")
     
     #DELETE_PACKAGES SUBPARSER
-    #TODO IMPLEMENT
-    delete_subparser = subparsers.add_parser(DELETE_PACKAGES_TASK_NAME, help="Delete packages from the local and deploy directories")
+    delete_subparser = subparsers.add_parser(DELETE_PACKAGES_TASK_NAME, parents=[ dir_parser ], help="Delete packages from the local and deploy directories")
+    
+    delete_subparser.add_argument("packages", action="store", nargs="*",
+                                  help="specifies the packages to delete")
+    
+    delete_subparser.add_argument("--exclude-archive", action="store_true",
+                                  help="Exclude the archive directory when finding files to delete")
+
+    delete_subparser.add_argument("--exclude-local", action="store_true",
+                                  help="Exclude the local directory when finding files to delete")
+
+    delete_subparser.add_argument("--exclude-deploy", action="store_true",
+                                  help="Exclude the deploy directory when finding files to delete")
+
+    #CLEAN_WORKSPACE SUBPARSER
+    clean_subparser = subparsers.add_parser(CLEAN_WORKSPACE_TASK_NAME, parents=[ dir_parser ], help="Clean workspace by deleting gitignored files and built packages")
+    
+    clean_subparser.add_argument("--no-delete-packages", action="store_true", 
+                                 help="If specified, does not delete code generated from models (what delete_packages normally does)")
     
     #PROCESS_CACHED SUBPARSER
     process_subparser = subparsers.add_parser(PROCESS_CACHED_TASK_NAME, parents=[ process_parser ], help="Process cached packages that were already downloaded or generated")
     
     return parser.parse_args()
 
-
-def test(name):
-    good = ping_device(name)
-    print(f"{name} is present" if good else f"{name} NOT present")
-
-
 def main():    
     args = parse_args()
     
-    if args.test:
-        test(args.deploy_target)
-        exit(0)
-    
-    #
-    # filter out models based on models_select and models_ignore
-    #
-    
-    #glob all models not in the referenced_models directory
-    model_files = glob.glob(os.path.join(MODELS_ROOT, "[![referenced_models]**/*.slx"), recursive=True)
-    model_names = get_object_names_from_files(model_files)
-    
-    if len(args.models_select) > 0:
-        model_names = list_intersection(model_names, args.models_select)
-    elif len(args.models_ignore) > 0:
-        model_names = list_difference(model_names, args.models_ignore)
-    
-    print(f"Processing models: {model_names}")
-    
-    #determine configs
-    cfg_names = [args.local_config]
-    if args.deploy_config != args.local_config:
-        cfg_names.append(args.deploy_config)
-    
-    #filter out configs based on configs_select and configs_ignore
-    if len(args.configs_select) > 0:
-        cfg_names = list_intersection(cfg_names, args.configs_select)
-    elif len(args.configs_ignore) > 0:
-        cfg_names = list_difference(cfg_names, args.configs_ignore)
+    if args.task in [GENERATE_PACKAGES_TASK_NAME, DOWNLOAD_PACKAGES_TASK_NAME, PROCESS_CACHED_TASK_NAME, DELETE_PACKAGES_TASK_NAME, CLEAN_WORKSPACE_TASK_NAME]:
+        if args.task == DELETE_PACKAGES_TASK_NAME:
+            delete_packages(
+                args.packages,
+                args.exclude_archive,
+                args.archives_dir,
+                args.exclude_local,
+                args.local_dir,
+                args.exclude_deploy,
+                args.deploy_dir,
+                args.assume_yes)
+            
+        if args.task == CLEAN_WORKSPACE_TASK_NAME:
+            clean_workspace(
+                args.archives_dir,
+                args.local_dir,
+                args.deploy_dir,
+                args.no_delete_packages,
+                args.assume_yes)
         
-    print(f"Processing configurations: {cfg_names}")
-    
-    if args.task == GENERATE_PACKAGES_TASK_NAME:
-        generate_packages(model_names, cfg_names)
-        
-        if not args.no_archive:
-            archive_packages(os.path.abspath(args.archives_dir))
-    
-    if args.task == DOWNLOAD_PACKAGES_TASK_NAME:
-        #determine url to download from
-        if args.from_url != DEFAULT_DOWNLOAD_LATEST_URL and args.from_release != "latest":
-            #both --from-url and --from-release were specified. This is a no-no
-            print("--from-url and --from-release cannot both be specified.")
-            exit(1)
-        
-        download_url = args.from_url
-        if args.from_release != "latest":
-            download_url = os.path.join(DEFAULT_DOWNLOAD_VERSION_URL, args.from_release)
-        
-        download_packages(
-            download_url, 
-            args.local_config, 
-            args.deploy_config,
-            args.models_select,
-            args.models_ignore,
-            args.configs_select,
-            args.configs_ignore)
-    
-    if not args.no_process_local:
-        handle_local_packages(
-            args.local_config,
-            os.path.abspath(args.local_dir),
-            args.build)
-    
-    if not args.no_process_deploy:
-        handle_deploy_packages(
-            args.deploy_config,
-            os.path.abspath(args.deploy_dir),
-            args.deploy,
-            args.deploy_target)
+        if args.task in [GENERATE_PACKAGES_TASK_NAME, DOWNLOAD_PACKAGES_TASK_NAME, PROCESS_CACHED_TASK_NAME]:
+            # these options use the select parser
+            
+            #
+            # filter out models based on models_select and models_ignore
+            #
+            
+            #glob all models not in the referenced_models directory
+            model_files = glob.glob(os.path.join(MODELS_ROOT, "[!referenced_models]**/*.slx"), recursive=True)
+            model_names = get_object_names_from_files(model_files)
+            
+            if len(args.models_select) > 0:
+                model_names = list_intersection(model_names, args.models_select)
+            elif len(args.models_ignore) > 0:
+                model_names = list_difference(model_names, args.models_ignore)
+            
+            print(f"Processing models: {model_names}")
+            
+            #determine configs
+            cfg_names = [args.local_config]
+            if args.deploy_config != args.local_config:
+                cfg_names.append(args.deploy_config)
+            
+            #filter out configs based on configs_select and configs_ignore
+            if len(args.configs_select) > 0:
+                cfg_names = list_intersection(cfg_names, args.configs_select)
+            elif len(args.configs_ignore) > 0:
+                cfg_names = list_difference(cfg_names, args.configs_ignore)
+                
+            print(f"Processing configurations: {cfg_names}")
+            
+            if args.task in [GENERATE_PACKAGES_TASK_NAME, DOWNLOAD_PACKAGES_TASK_NAME, PROCESS_CACHED_TASK_NAME]:
+                #these options use the process parser
+                if args.task == GENERATE_PACKAGES_TASK_NAME:
+                    generate_packages(model_names, cfg_names)
+                    
+                    if not args.no_archive:
+                        archive_packages(os.path.abspath(args.archives_dir))
+                
+                elif args.task == DOWNLOAD_PACKAGES_TASK_NAME:
+                    #determine url to download from
+                    if args.from_url != DEFAULT_DOWNLOAD_LATEST_URL and args.from_release != "latest":
+                        #both --from-url and --from-release were specified. This is a no-no
+                        print("--from-url and --from-release cannot both be specified.")
+                        exit(1)
+                    
+                    download_url = args.from_url
+                    if args.from_release != "latest":
+                        download_url = os.path.join(DEFAULT_DOWNLOAD_VERSION_URL, args.from_release)
+                    
+                    download_packages(
+                        download_url,
+                        args.local_config, 
+                        args.deploy_config,
+                        model_names,
+                        cfg_names,
+                        args.assume_yes)
+                
+                if not args.no_process_local:
+                    handle_local_packages(
+                        args.local_config,
+                        os.path.abspath(args.local_dir),
+                        args.build)
+                
+                if not args.no_process_deploy:
+                    handle_deploy_packages(
+                        args.deploy_config,
+                        os.path.abspath(args.deploy_dir),
+                        args.deploy,
+                        args.deploy_target)
 
 
 if __name__ == "__main__":
