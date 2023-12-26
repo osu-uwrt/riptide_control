@@ -550,7 +550,7 @@ class controllerOverseer(Node):
             if(foundPid):
                 #active control has come online
                 self.get_logger().info(f"Setting parameters using service {pidSetParamName}")
-                self.setActiveControllerParamsClient = self.create_client(SetParameters, pidSetParamName)
+                self.setPidParamsClient = self.create_client(SetParameters, pidSetParamName)
                 self.paramTimerPID = self.create_timer(1.0, self.setPIDParams)
 
                 self.get_logger().info("Found PID!")
@@ -564,7 +564,7 @@ class controllerOverseer(Node):
         if(self.smcActive != foundSmc):
             if(foundSmc):
                 self.get_logger().info(f"Setting parameters using service {smcSetParamName}")
-                self.setActiveControllerParamsClient = self.create_client(SetParameters, smcSetParamName)
+                self.setSmcParamsClient = self.create_client(SetParameters, smcSetParamName)
                 self.paramTimerSMC = self.create_timer(1.0, self.setSMCParams)
 
                 self.get_logger().info("Found SMC!")
@@ -905,6 +905,8 @@ class controllerOverseer(Node):
         param1.value = val
         param1.name = ACTIVE_CONTROLLER_PID_P_GAINS_PARAM
         
+        self.get_logger().info(f"P Gains: {self.talos_p_gains}, int values: {int_values}")
+        
 
         #SET I GAINS
         int_values = []
@@ -1035,8 +1037,8 @@ class controllerOverseer(Node):
     def setPIDParams(self):
         self.get_logger().info("Setting PID Default Parameters")
         request = self.getPIDSetParamRequest()
-        self.future = self.setActiveControllerParamsClient.call_async(request)
-
+        self.future = self.setPidParamsClient.call_async(request)
+        
         #cancel the time that loads in paramters - don't spam reload
         self.paramTimerPID.cancel()
         
@@ -1044,7 +1046,7 @@ class controllerOverseer(Node):
     def setSMCParams(self):
         self.get_logger().info("Setting SMC Default Parameters")
         request = self.getSMCSetParamRequest()
-        self.future = self.setActiveControllerParamsClient.call_async(request)
+        self.future = self.setSmcParamsClient.call_async(request)
 
         #cancel the time that loads in paramters - don't spam reload
         self.paramTimerSMC.cancel()

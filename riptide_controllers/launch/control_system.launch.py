@@ -4,7 +4,7 @@ from launch_ros.actions import PushRosNamespace, Node
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch.conditions import IfCondition
 
-DEFAULT_ACTIVE_CONTROL_MODEL = "SMC"
+DEFAULT_ACTIVE_CONTROL_MODEL = "hybrid"
 THRUSTER_SOLVER_NAME = "thruster_solver"
 
 def get_smc_launch():
@@ -29,11 +29,15 @@ def launch_active_control(context, *args, **kwargs):
     active_control_enabled = LaunchConfiguration("active_control_enabled").perform(context)
     active_control_model = LaunchConfiguration("active_control_model").perform(context)
     
+    print(f"Active control model set to: {active_control_model}")
+    
     if active_control_enabled == "True":
         if active_control_model == "SMC":
             return [get_smc_launch()]
         elif active_control_model == "PID":
             return [get_pid_launch()]
+        elif active_control_model == "hybrid":
+            return [get_smc_launch(), get_pid_launch()]
     
     print("-----------------------------------------------------------------")
     print("Active control model either unknown or disabled. Not launching.")
