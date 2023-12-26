@@ -492,8 +492,6 @@ class controllerOverseer(Node):
         for weight in self.thrusterWeights:
             weights.append(int(weight * PARAMETER_SCALE))
 
-        # self.get_logger().info(str(weights))
-
         msg.data = weights
 
         #publish weights
@@ -897,7 +895,6 @@ class controllerOverseer(Node):
         #SET P GAINS
         int_values = []
         for value in self.talos_p_gains:
-            self.get_logger().info(F"APPENDING P VALUE {value}")
             int_values.append(int(value * PARAMETER_SCALE))
         
         val = ParameterValue()
