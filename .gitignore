@@ -135,7 +135,7 @@ dmypy.json
 +bus_conv_fcns/
 *_ert_rtw
 slprj/
-*/models/src/
+**/models/src/
 *.slxc
 build_ros2_model.sh
 generated_models/
