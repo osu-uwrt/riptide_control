@@ -2,7 +2,7 @@
 
 #
 # UWRT controller MATLAB model manager. 
-# handles code generation, download, and other general management of all simulink models in all configurations.
+# handles code generation, download, and other general management of matlab and all simulink models in all configurations.
 #
 
 import argparse
@@ -89,11 +89,15 @@ CLEANABLE_FILE_PATTERNS = [
     "**/*.mex*"
 ]
 
+SIMULINK_PROJECT_NAME = "Riptide_control_models.prj"
+
 #cmdline names
 GENERATE_PACKAGES_TASK_NAME = "generate_packages"
+REFRESH_MSGS_TASK_NAME      = "refresh_custom_msg_support"
 DOWNLOAD_PACKAGES_TASK_NAME = "download_packages"
 DELETE_PACKAGES_TASK_NAME   = "delete_packages"
 CLEAN_WORKSPACE_TASK_NAME   = "clean_workspace"
+OPEN_PROJECT_TASK_NAME    = "open_project"
 PROCESS_CACHED_TASK_NAME    = "process_cached"
 
 
@@ -116,6 +120,13 @@ def generate_packages(models: 'list[str]', configs: 'list[str]'):
     cmdstr = " ".join(bash_cmd)
     print(f"Running command {cmdstr}")
     execute_command(bash_cmd, cwd=MODELS_ROOT)
+
+
+def refresh_custom_messages():
+    cmd = ["matlab", "-batch", "refresh_custom_msgs"]
+    cmdstr = " ".join(cmd)
+    print(f"Running command {cmdstr}")
+    execute_command(cmd, cwd=MODELS_ROOT)
 
 
 def download_packages(
@@ -190,12 +201,23 @@ def delete_packages(
         print("Not deleting")
 
 
-def clean_workspace(archives_dir: str, local_dir: str, deploy_dir: str, no_delete_packages: bool, assume_yes: bool):
+def clean_workspace(archives_dir: str, local_dir: str, deploy_dir: str, full_clean: bool, no_delete_packages: bool, assume_yes: bool):
     # list will keep track of absolute path of items to delete
     to_delete = []
     
     #change into models directory to avoid hitting items outside of there
     os.chdir(MODELS_ROOT)
+    
+    #full clean with user consent if necessary
+    if full_clean:
+        print("Specifying --full-clean will result in custom message support being deleted. This can be regenerated with the command: \n" + \
+              f"  ros2 run riptide_controllers2 model_manager.py {REFRESH_MSGS_TASK_NAME}.\n")
+        if yesNoPrompt("Include custom message support files in clean?", assume_yes):
+            to_delete.append(os.path.expanduser("~/osu-uwrt/matlab/custom_msgs"))
+        else:
+            print("Custom message support will NOT be cleaned as a result of this operation.")
+        
+        print()
     
     # add package items if not specified otherwise
     if not no_delete_packages:
@@ -228,6 +250,13 @@ def clean_workspace(archives_dir: str, local_dir: str, deploy_dir: str, no_delet
                 remove_file_or_directory(item)
     else:
         print("Not deleting")
+
+
+def open_project():
+    cmd = ["matlab", "-r", f"openProject(\"{SIMULINK_PROJECT_NAME}\")"]
+    cmdstr = " ".join(cmd)
+    print(f"Running command {cmdstr}")
+    execute_command(cmd, cwd=MODELS_ROOT)
 
 
 def archive_packages(archives_dir: str):
@@ -575,6 +604,9 @@ def parse_args():
     generate_subparser.add_argument("--no-archive", action="store_true",
                         help="If specified, the generated archives will not be stored")
     
+    #REFRESH_CUSTOM_MSGS SUBPARSER
+    refresh_subparser = subparsers.add_parser(REFRESH_MSGS_TASK_NAME, help="Refresh MATLAB support for custom ROS message types")
+    
     #DOWNLOAD_PACKAGES SUBPARSER
     download_subparser = subparsers.add_parser(DOWNLOAD_PACKAGES_TASK_NAME, parents=[ process_parser ], help="Download released packages from the Internet")
     
@@ -602,8 +634,14 @@ def parse_args():
     #CLEAN_WORKSPACE SUBPARSER
     clean_subparser = subparsers.add_parser(CLEAN_WORKSPACE_TASK_NAME, parents=[ dir_parser ], help="Clean workspace by deleting gitignored files and built packages")
     
+    clean_subparser.add_argument("--full-clean", action="store_true",
+                                 help="If specified, important items like custom message support files will be deleted.")
+    
     clean_subparser.add_argument("--no-delete-packages", action="store_true", 
                                  help="If specified, does not delete code generated from models (what delete_packages normally does)")
+    
+    #OPEN_PROJECT SUBPARSER
+    open_subparser = subparsers.add_parser(OPEN_PROJECT_TASK_NAME, help="Open the project in MATLAB")
     
     #PROCESS_CACHED SUBPARSER
     process_subparser = subparsers.add_parser(PROCESS_CACHED_TASK_NAME, parents=[ process_parser ], help="Process cached packages that were already downloaded or generated")
@@ -613,7 +651,11 @@ def parse_args():
 def main():    
     args = parse_args()
     
-    if args.task in [GENERATE_PACKAGES_TASK_NAME, DOWNLOAD_PACKAGES_TASK_NAME, PROCESS_CACHED_TASK_NAME, DELETE_PACKAGES_TASK_NAME, CLEAN_WORKSPACE_TASK_NAME]:
+    if args.task == REFRESH_MSGS_TASK_NAME:
+        refresh_custom_messages()
+    elif args.task == OPEN_PROJECT_TASK_NAME:
+        open_project()
+    elif args.task in [GENERATE_PACKAGES_TASK_NAME, DOWNLOAD_PACKAGES_TASK_NAME, PROCESS_CACHED_TASK_NAME, DELETE_PACKAGES_TASK_NAME, CLEAN_WORKSPACE_TASK_NAME]:
         if args.task == DELETE_PACKAGES_TASK_NAME:
             delete_packages(
                 args.packages,
@@ -630,6 +672,7 @@ def main():
                 args.archives_dir,
                 args.local_dir,
                 args.deploy_dir,
+                args.full_clean,
                 args.no_delete_packages,
                 args.assume_yes)
         
