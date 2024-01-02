@@ -205,9 +205,15 @@ def handle_local_packages(local_config: str, local_dir: str, no_build: bool):
         if software_dir in local_dir:
             print(f"Local directory detected in software directory. Building in software directory")
             build_dir = software_dir
+        
+        #read off directory names to figure out the names of the packages to build
+        pkgs = os.listdir(local_dir)
+        cmd = ["colcon", "build"]
+        if len(pkgs) > 0:
+            cmd += ["--packages-select"] + pkgs
             
         print(f"Building models in directory {build_dir}")
-        execute_command(["colcon", "build"], build_dir)
+        execute_command(cmd, build_dir)
 
 
 def handle_deploy_packages(deploy_config: str, deploy_dir: str, no_deploy: bool, deploy_target: str):
@@ -231,9 +237,15 @@ def handle_deploy_packages(deploy_config: str, deploy_dir: str, no_deploy: bool,
             if rel_dir in deploy_dir:
                 print(f"Local directory detected in release directory. Deploying from release directory")
                 cmd_dir = rel_dir
-                
+            
+            #read off directory names to figure out which packages to deploy
+            pkgs = os.listdir(deploy_dir)
+            cmd = ["colcon", "deploy", deploy_target]
+            if len(pkgs) > 0:
+                cmd += ["--packages-select"] + pkgs
+            
             print(f"Building models in directory {cmd_dir}")
-            execute_command(["colcon", "deploy", deploy_target], cmd_dir)
+            execute_command(cmd, cmd_dir)
         else:
             print(f"{deploy_target} not detected on the local network. Not deploying")
 

@@ -70,7 +70,6 @@ def generate_launch_description():
                         "vehicle_config": "",  # Leave empty to let the node discover it
                         "robot": LaunchConfiguration("robot"),
                         "thruster_solver_node_name": THRUSTER_SOLVER_NAME,
-                        "active_controller_node_name": LaunchConfiguration("active_control_model")
                     }
                 ],
                 output="screen"
