@@ -135,8 +135,13 @@ dmypy.json
 +bus_conv_fcns/
 *_ert_rtw
 slprj/
-*/models/src/
+
+#ignores any generated packages that may be wondering about
+*/models/**/src/
+
 *.slxc
+*.slx.autosave
+*.slx.original
 build_ros2_model.sh
 generated_models/
 *.tgz
