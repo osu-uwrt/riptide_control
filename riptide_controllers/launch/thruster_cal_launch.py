@@ -36,13 +36,20 @@ def generate_launch_description():
 
             launch_ros.actions.Node(
                 package="riptide_controllers2",
-                executable="calibrate_thruster",
+                executable="calibrate_thruster.py",
                 name="calibrate_thruster",
                 output="screen",
                 parameters=[
                     {"vehicle_config": config},
                     {"robot": robot},
                 ]
+            ),
+            
+            launch_ros.actions.Node(
+                package="riptide_controllers2",
+                executable="load_cell_reader.py",
+                name="load_cell_reader",
+                output="screen",
             ),
         ], scoped=True)
     ])
