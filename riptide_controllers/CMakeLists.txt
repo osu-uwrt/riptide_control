@@ -20,34 +20,7 @@ find_package(tf2_ros REQUIRED)
 
 # grab c++ includes
 include_directories(include/riptide_controllers2)
-
-# #Build executable
-# add_executable(controller src/riptide_controllers2/main.cpp)
-
-# #Define a variable with all dependencies
-# set(deps 
-#   rclcpp
-#   riptide_msgs2
-#   geometry_msgs
-#   sensor_msgs
-#   tf2_geometry_msgs
-#   rclpy
-#   geometry_msgs
-#   control_toolbox
-#   tf2
-#   tf2_ros
-# )
-
-# # Link deps
-# ament_target_dependencies(controller ${deps})
-
-# #Install executables
-# install(TARGETS controller
-#   DESTINATION lib/${PROJECT_NAME}
-# )
-
 add_library(motion_profiler SHARED src/riptide_controllers/main.cpp)
-
 install(TARGETS motion_profiler
   DESTINATION lib)
 
