@@ -137,7 +137,7 @@ dmypy.json
 slprj/
 
 #ignores any generated packages that may be wondering about
-*/models/**/src/
+**/models/**/src/
 
 *.slxc
 *.slx.autosave
