@@ -11,3 +11,12 @@ Riptide Controllers supports controlling an over acutated vehicle by first compu
 
 ## riptide_teleop
 Riptide Teleop supports both the keyboard teleop twist node as well as the standard ros joy node as control interfaces for commanding the vehicle while underway. This operation mode generally requires the vehicle to be tethered to an operator computer topside.
+
+## Launch 
+Run PID in loop:
+
+ros2 launch riptide_controllers2 control_system.launch.py robot:=talos active_control_model:=PID PID_enabled:=false
+
+Run PID built:
+
+ros2 launch riptide_controllers2 control_system.launch.py robot:=talos active_control_model:=PID PID_enabled:=true

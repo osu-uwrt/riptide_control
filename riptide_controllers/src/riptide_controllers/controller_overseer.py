@@ -23,14 +23,24 @@ from riptide_msgs2.msg import DshotPartialTelemetry, DshotCommand
 from nav_msgs.msg import Odometry
 from rcl_interfaces.srv import SetParameters
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
-from std_msgs.msg import Int16, Int32MultiArray, Float32MultiArray
+from std_msgs.msg import Int16, Int32MultiArray, Float32MultiArray, Bool
+from std_srvs.srv import Trigger
 from geometry_msgs.msg import Twist
 from rclpy.time import Time
 
 ERROR_PATIENCE = 1.0
 
+#the number of frames the escs can be powered off before clearing acculators
+ESC_POWER_STOP_TOLERANCE = 2
+ESC_POWER_TIMEOUT = 2
+
 PARAMETER_SCALE = 1000000
 
+ACTIVE_CONTROLLER_NAMES = ["PID", "SMC"]
+
+#
+# THRUSTER SOLVER PARAM NAMES
+#
 THRUSTER_SOLVER_WRENCH_MATRIX_PARAM = "talos_wrenchmat"
 THRUSTER_SOLVER_WEIGHT_MATRIX_TOPIC = "controller/solver_weights"
 THRUSTER_SOLVER_SYSTEM_LIMIT_PARAM = "talos_sys_lim"
@@ -38,9 +48,46 @@ THRUSTER_SOLVER_INDIVIDUAL_LIMIT_PARAM = "talos_indiv_lim"
 THRUSTER_SOLVER_SCALING_PARAM = "thruster_solver_scaling_parameters"
 THRUSTER_SOLVER_FORCE_RPM_COEFFICENTS_PARAM = "talos_force_curve_coefficents"
 THRUSTER_SOLVER_DISABLE_WEIGHTS = "thruster_solver_disable_weight"
+THRUSTER_SOLVER_ACTIVE_FORCE_MASK = "active_force_mask"
+
+#
+# SMC PARAM NAMES
+# 
+ACTIVE_CONTROLLER_DRAG_COEFFICENTS_PARAM = "talos_drag_coefficents"
+ACTIVE_CONTROLLER_ANGULAR_REGEN_PARAM = "talos_angular_regeneration_threshhold"
+ACTIVE_CONTROLLER_LINEAR_REGEN_PARAM = "talos_linear_regeneration_threshhold"
+ACTIVE_CONTROLLER_ANGULAR_STATIONKEEP_PARAM = "talos_angular_stationkeep_threshold"
+ACTIVE_CONTROLLER_LINEAR_STATIONKEEP_PARAM = "talos_linear_stationkeep_threshold"
+ACTIVE_CONTROLLER_MASS_PARAM = "talos_mass"
+ACTIVE_CONTROLLER_ROTATIONAL_INERTIAS_PARAM = "talos_rotational_inertias"
+ACTIVE_CONTROLLER_LAMBDA_PARAM = "talos_lambda"
+ACTIVE_CONTROLLER_ETA_0_PARAM = "talos_Eta_Order_0"
+ACTIVE_CONTROLLER_ETA_1_PARAM = "talos_Eta_Order_1"
+ACTIVE_CONTROLLER_VELOCITY_CURVE_PARAMS_PARAM = "talos_velocity_curve_params"
+ACTIVE_CONTROLLER_VMAX_PARAM = "talos_vMax"
+ACTIVE_CONTROLLER_AMAX_PARAM = "talos_aMax"
+ACTIVE_CONTROLLER_JAMX_PARAM = "talos_jMax"
+ACTIVE_CONTROLLER_RADIAL_FUNC_COUNT_PARAM = "talos_radial_function_count"
+ACTIVE_CONTROLLER_SCALING_PARAM = "parameter_scaling_factor"
+
+#
+# PID PARAM NAMES
+#
+ACTIVE_CONTROLLER_PID_P_GAINS_PARAM = "pid_PGains"
+ACTIVE_CONTROLLER_PID_I_GAINS_PARAM = "pid_IGains"
+ACTIVE_CONTROLLER_PID_D_GAINS_PARAM = "pid_DGains"
+ACTIVE_CONTROLLER_PID_P_SURFACE_GAINS_PARAM = "pid_P_surface_gains"
+ACTIVE_CONTROLLER_PID_I_SURFACE_GAINS_PARAM = "pid_I_surface_gains"
+ACTIVE_CONTROLLER_PID_D_SURFACE_GAINS_PARAM = "pid_D_surface_gains"
+ACTIVE_CONTROLLER_PID_MAX_CONTROLS = "pid_max_control"
+ACTIVE_CONTROLLER_PID_SURFACE_GAIN_FLOOR = "pid_surface_gain_floor"
+ACTIVE_CONTROLLER_PID_SURFACE_GAIN_BUFFER = "pid_surface_gain_buffer"
+ACTIVE_CONTROLLER_PID_RESET_THRESHOLD_PARAM = "pid_reset_threshold"
+ACTIVE_CONTROLLER_PID_SCALING_FACTOR_PARAM = "pid_scaling_parameters"
 
 FF_PUBLISH_PARAM = "disable_native_ff"
 FF_TOPIC_NAME = "controller/FF_body_force"
+ACTIVE_CONTROL_FORCE_TOPIC_NAME = "/talos/controller/active_body_force"
 
 RPM_PUBLISH_PERIOD = .02
 WEIGHTS_FORCE_UPDATE_PERIOD = 1
@@ -50,10 +97,13 @@ G = 9.8067
 #manages parameters for the controller / thruster solver
 class controllerOverseer(Node):
 
+    escPowerStopsLow = 0
+    escPowerStopsHigh = 0
+
     def __init__(self):
         super().__init__("controllerOverseer")
 
-        #get robot name 
+        #get robot name
         self.declare_parameter("robot", "")
         self.robotName = self.get_parameter("robot").value
 
@@ -65,58 +115,21 @@ class controllerOverseer(Node):
         self.declare_parameter("thruster_solver_node_name", "")
         self.thrusterSolverName = self.get_parameter("thruster_solver_node_name").value
 
+        #get pid node name
+        self.declare_parameter("pid_model_name", "PID")
+        self.pidName = self.get_parameter("pid_model_name").value
+        
+        #get smc node name
+        self.declare_parameter("smc_model_name", "SMC")
+        self.smcName = self.get_parameter("smc_model_name").value
+
         self.declare_parameter(FF_PUBLISH_PARAM, False)
 
-        if(config_path == ''):
-            #remove before running on robot
-            config_path = os.path.join(get_package_share_directory("riptide_descriptions2"), "config", "talos.yaml")
+        #read in yaml
+        self.readInRobotYaml()
 
-            #self.get_logger().fatal("Controller Overseer: cannot find vehicle configuration file!")
-
-        #open configuration file
-        with open(config_path, "r") as config:
-            config_file = yaml.safe_load(config)
-
-        #read in kill plane height
-        self.killPlane = config_file["controller_overseer"]["thruster_kill_plane"]
-
-        #read in thruster pose data
-        thruster_info = config_file['thrusters']
-
-        #read in com data
-        com = config_file["com"]
-
-        #generate the thruster effect matrix
-        self.thrusterEffects = np.zeros(shape=(8,6))
-        for i, thruster in enumerate(thruster_info):
-            pose = np.array(thruster["pose"])
-
-            #calculate the force vector generated by the thruster
-            forceVector = np.matmul(euler_matrix(pose[3], pose[4], pose[5])[:3, :3], np.array([1,0,0]))
-            positionFromCOM = pose[:3] - com
-            torque = np.cross(positionFromCOM[:3], forceVector)
-
-            #insert into thruster effect matrix
-            self.thrusterEffects[i] = [forceVector[0], forceVector[1], forceVector[2], torque[0], torque[1], torque[2]]
-
-        #read in coefficents
-        thruster_solver_info = config_file["thruster_solver"]
-        self.forceToRPMCoefficents = thruster_solver_info["force_to_rpm_coefficents"]
-
-        #read in weight info
-        self.defaultWeight = thruster_solver_info["default_weight"]
-        self.surfaceWeight = thruster_solver_info["surfaced_weight"]
-        self.disabledWeight = thruster_solver_info["disable_weight"]
-        self.lowDowndraftWeight = thruster_solver_info["low_downdraft_weight"]
-
-        #read in solver limit params
-        self.systemThrustLimit = thruster_solver_info["system_thrust_limit"]
-        self.individualThrustLimit = thruster_solver_info["individual_thrust_limit"]
-
-        #read in ff properties
-        self.talos_mass = config_file["mass"]
-        self.talos_COM = config_file["com"]
-        self.talos_base_wrench = config_file["controller"]["feed_forward"]["base_wrench"]
+        #generate thruster force matrix
+        self.generateThrusterForceMatrix(self.thruster_info, self.com)
 
         #default thruster weights and working thrusters
         self.activeThrusters = [True, True, True, True, True, True, True, True]
@@ -130,7 +143,10 @@ class controllerOverseer(Node):
 
         #thruster telemetry
         self.create_subscription(DshotPartialTelemetry, "state/thrusters/telemetry", self.thrusterTelemetryCB, qos_profile_system_default)
-        
+
+        #publish to active controllers whether motion is enabled
+        self.motionEnabledPub = self.create_publisher(Bool, "controller/motion_enabled", qos_profile=qos_profile_system_default)
+
         #thruster solver parameters
         self.setThrusterSolverParamsClient = self.create_client(SetParameters, f"{self.thrusterSolverName}/set_parameters")
 
@@ -153,8 +169,17 @@ class controllerOverseer(Node):
 
         #pub ff force
         self.ffPub = self.create_publisher(Twist, FF_TOPIC_NAME, qos_profile_system_default)
+        
+        #services to republish params
+        self.repubSrvActive = self.create_service(Trigger, "controller_overseer/update_active_params", self.repubActiveParamsCb)
+        self.repubSrvThruster = self.create_service(Trigger, "controller_overseer/update_ts_params", self.repubThrusterSolverParamsCb)
 
-        #declare transform 
+        #timestamps to prevent spamming of param repub
+        self.lastRepubPIDTime = self.get_clock().now()
+        self.lastRepubSMCTime = self.get_clock().now()
+        self.lastRepubThrusterTime = self.get_clock().now()
+
+        #declare transform
         self.tfBuffer = Buffer()
         self.tfListener = TransformListener(self.tfBuffer, self)
 
@@ -168,6 +193,10 @@ class controllerOverseer(Node):
 
         #is the thrusterSolver active
         self.solverActive = False
+
+        #is the SMC controller active
+        self.pidActive = False
+        self.smcActive = False
 
         #attempt to set the wrench matrix in the thruster solver
         self.create_timer(1.0, self.checkIfSimulinkActive)
@@ -184,11 +213,126 @@ class controllerOverseer(Node):
         self.enabled = True
         self.publishingFF = True
 
+        #a timer to ensure that the active controllers stop if telemtry stops publishing!
+        self.escPowerCheckTimer = self.create_timer(ESC_POWER_TIMEOUT, self.escPowerTimeout)
+
+    def generateThrusterForceMatrix(self, thruster_info, com):
+        #generate the thruster effect matrix
+        self.thrusterEffects = np.zeros(shape=(8,6))
+        for i, thruster in enumerate(thruster_info):
+            pose = np.array(thruster["pose"])
+
+            #calculate the force vector generated by the thruster
+            forceVector = np.matmul(euler_matrix(pose[3], pose[4], pose[5])[:3, :3], np.array([1,0,0]))
+            positionFromCOM = pose[:3] - com
+            torque = np.cross(positionFromCOM[:3], forceVector)
+
+            #insert into thruster effect matrix
+            self.thrusterEffects[i] = [forceVector[0], forceVector[1], forceVector[2], torque[0], torque[1], torque[2]]
+
+    def readInRobotYaml(self):
+        #reload in file from scratch just incase the target yaml has changed
+        configPath = self.get_parameter("vehicle_config").value
+        if(configPath == ''):
+            # Try to locate the source directory, and use that configuration file directly
+            descriptions_share_dir = get_package_share_directory("riptide_descriptions2")
+
+            robot_config_subpath = os.path.join("config", self.robotName + ".yaml")
+
+            # Set fallback config path if we can't find the one in source
+            configPath = os.path.join(descriptions_share_dir, robot_config_subpath)
+
+            # Try to locate the share directory
+            dir_split = os.path.normpath(descriptions_share_dir).split(os.sep)
+            if 'install' in dir_split:
+                colcon_root = '/'.join(dir_split[:dir_split.index('install')])
+                colcon_source_dir = os.path.join(colcon_root, "src")
+
+                # List of possible paths we should check for a config file
+                possible_paths = [
+                    os.path.join(colcon_source_dir, "riptide_core", "riptide_descriptions", robot_config_subpath),
+                    os.path.join(colcon_source_dir, "riptide_descriptions", robot_config_subpath),
+                ]
+
+                for path_check in possible_paths:
+                    if os.path.exists(path_check):
+                        configPath = path_check
+                        self.get_logger().info(f"Discovered source directory, overriding descriptions to use '{configPath}'")
+                        break
+
+        with open(configPath, "r") as config:
+            config_file = yaml.safe_load(config)
+
+        #read in kill plane height
+        self.killPlane = config_file["controller_overseer"]["thruster_kill_plane"]
+
+        #read in thruster pose data
+        self.thruster_info = config_file['thrusters']
+
+        #read in com data
+        self.com = config_file["com"]
+
+        #read in coefficents
+        thruster_solver_info = config_file["thruster_solver"]
+        self.forceToRPMCoefficents = thruster_solver_info["force_to_rpm_coefficents"]
+
+        #read in weight info
+        self.defaultWeight = thruster_solver_info["default_weight"]
+        self.surfaceWeight = thruster_solver_info["surfaced_weight"]
+        self.disabledWeight = thruster_solver_info["disable_weight"]
+        self.lowDowndraftWeight = thruster_solver_info["low_downdraft_weight"]
+
+        #read in solver limit params
+        self.systemThrustLimit = thruster_solver_info["system_thrust_limit"]
+        self.individualThrustLimit = thruster_solver_info["individual_thrust_limit"]
+        
+        #read in solver mask param
+        self.activeTwistMask = thruster_solver_info["active_force_mask"]
+
+        #read in ff properties
+        self.talos_mass = config_file["mass"]
+        self.talos_COM = config_file["com"]
+        self.talos_base_wrench = config_file["controller"]["feed_forward"]["base_wrench"]
+        self.talos_rotational_inertias = config_file["inertia"]
+
+        #SMC specific parameters
+        self.talos_drag_coefficents = config_file["controller"]["SMC"]["damping"]
+        self.talos_angular_regen = config_file["controller"]["SMC"]["SMC_params"]["angular_regeneration_threshold"]
+        self.talos_linear_regen = config_file["controller"]["SMC"]["SMC_params"]["linear_regeneration_threshold"]
+        self.talos_angular_stationkeep = config_file["controller"]["SMC"]["SMC_params"]["angular_stationkeep_threshold"]
+        self.talos_linear_stationkeep = config_file["controller"]["SMC"]["SMC_params"]["linear_stationkeep_threshold"]
+        self.talos_eta_0_values = config_file["controller"]["SMC"]["SMC_params"]["eta_order_0"]
+        self.talos_eta_1_values = config_file["controller"]["SMC"]["SMC_params"]["eta_order_1"]
+        self.talos_lambda_values = config_file["controller"]["SMC"]["SMC_params"]["lambda"]
+        
+        #gravity well params (replacing motion profiles)
+        self.talos_velocity_curve_params = config_file["controller"]["SMC"]["SMC_params"]["velocity_curve_params"]
+        
+        #motion generation params (unused. TODO: DELETE)
+        self.talos_vmax_values = config_file["controller"]["SMC"]["motion_profile_params"]["max_velocity"]
+        self.talos_amax_values = config_file["controller"]["SMC"]["motion_profile_params"]["max_acceleration"]
+        self.talos_jmax_values = config_file["controller"]["SMC"]["motion_profile_params"]["max_jerk"]
+        self.talos_radial_function_count = config_file["controller"]["SMC"]["motion_profile_params"]["radial_function_count"]
+        
+        #PID specific parameters
+        self.talos_p_gains = config_file["controller"]["PID"]["p_gains"]
+        self.talos_i_gains = config_file["controller"]["PID"]["i_gains"]
+        self.talos_d_gains = config_file["controller"]["PID"]["d_gains"]        
+        self.talos_p_surface_gains = config_file["controller"]["PID"]["p_surface_gains"]
+        self.talos_i_surface_gains = config_file["controller"]["PID"]["i_surface_gains"]
+        self.talos_d_surface_gains = config_file["controller"]["PID"]["d_surface_gains"]
+        self.talos_max_control = config_file["controller"]["PID"]["max_control_threshholds"]
+        self.talos_surface_gain_floor = config_file["controller"]["PID"]["surface_gain_floor"]
+        self.talos_surface_gain_buffer = config_file["controller"]["PID"]["surface_gain_buffer"]
+        self.talos_pid_reset_threshold = config_file["controller"]["PID"]["reset_threshold"]
 
 
     def thrusterTelemetryCB(self, msg: DshotPartialTelemetry):
         #wether or not the thrusterSolverweigths need adjusted
         adjustWeights = False
+
+        #restart the timeout
+        self.escPowerCheckTimer.reset()
 
         # which thrusters - groups of 4
         if(msg.start_thruster_num == 0):
@@ -203,6 +347,13 @@ class controllerOverseer(Node):
                     if self.activeThrusters[i] == False:
                         self.activeThrusters[i] = True
                         adjustWeights = True
+
+            #check if the boards are enebaled
+            if not (msg.disabled_flags == 0):  
+                self.escPowerStopsLow += 1    
+            else:
+                self.escPowerStopsLow = 0 
+
         else:
             for i, esc in enumerate(msg.esc_telemetry):
                 if not esc.thruster_ready:
@@ -214,9 +365,38 @@ class controllerOverseer(Node):
                         self.activeThrusters[i + 4] = True
                         adjustWeights = True
 
+            #check if the boards are enebaled
+            if not (msg.disabled_flags == 0):  
+                self.escPowerStopsHigh += 1  
+            else:
+                self.escPowerStopsHigh = 0     
+
         #adjust the weights of the thruster solver if anything has changed
         if(adjustWeights):
             self.adjustThrusterWeights()
+
+        motionMsg = Bool()
+        #check if the boards are enebaled
+        if self.escPowerStopsLow > ESC_POWER_STOP_TOLERANCE or self.escPowerStopsHigh > ESC_POWER_STOP_TOLERANCE:
+            #publish disabled message
+            motionMsg.data = False
+
+            self.get_logger().warn("Recieving disabled flags from ESC!")
+        else:
+
+            motionMsg.data = True
+            #publish enabled message
+        
+        self.motionEnabledPub.publish(motionMsg)
+
+    def escPowerTimeout(self):
+        #timeout for if the escs go to long without publishing telemerty
+        self.get_logger().warn("Not recieving thruster telemtry!")
+
+        motionMsg = Bool()
+        motionMsg.data = False
+        self.motionEnabledPub.publish(motionMsg)
+
 
     def setThrusterModeCB(self, msg:Int16):
         #change the thruster mode
@@ -230,9 +410,9 @@ class controllerOverseer(Node):
 
             #update the weights
             self.adjustThrusterWeights()
-        
+
     def odometryCB(self, msg):
-        #check if thrusters are submerged - everytime odom is updated - just using as a frequency 
+        #check if thrusters are submerged - everytime odom is updated - just using as a frequency
 
         #start the start time on first cb
         if(self.startTime is None):
@@ -248,20 +428,20 @@ class controllerOverseer(Node):
                 #if thruster is above the kill plane
                 if pos.transform.translation.z < self.killPlane:
                     submerged[i] = True
-                            
+
             if not (np.array_equal(submerged, self.submerdgedThrusters)):
                 #if a different thruster combo is submerdged, adjust, the weights
                 self.submerdgedThrusters = submerged
                 self.adjustThrusterWeights()
-                
+
         except Exception as ex:
             if(self.get_clock().now().to_msg().sec >= ERROR_PATIENCE + self.startTime.to_msg().sec):
                 self.get_logger().error("Thruster Position Lookup failed with exception: " + str(ex))
-        
+
     def adjustThrusterWeights(self):
         #TODO add weight values into descriptions
 
-        #number of active thrusters 
+        #number of active thrusters
         activeThrusterCount = 0
         submerdgedThrusters = 0
 
@@ -282,7 +462,7 @@ class controllerOverseer(Node):
             else:
                 #if a thruster is inactive - raise the cost of "using" thruster
                 self.thrusterWeights[i] = self.disabledWeight
-        
+
         if(activeThrusterCount <= 6):
             #if system is not full actuated, it cannot be optimized, very high rpms / force can be requested
             #for the safety of the system, this will autodisable robot (probably)
@@ -292,10 +472,10 @@ class controllerOverseer(Node):
             self.enabled = False
         else:
             self.enabled = True
-            
+
         if(submerdgedThrusters >= 8):
             #take into account control modes only if all actuators are working
-            
+
             if(self.thrusterMode == 2):
                 #apply low downdraft
                 self.thrusterWeights[4] = self.lowDowndraftWeight
@@ -310,7 +490,7 @@ class controllerOverseer(Node):
         #scale and round all weights
         weights = []
         for weight in self.thrusterWeights:
-            weights.append(int(weight * PARAMETER_SCALE))   
+            weights.append(int(weight * PARAMETER_SCALE))
 
         # self.get_logger().info(str(weights))
 
@@ -323,16 +503,32 @@ class controllerOverseer(Node):
         #attempt to set the wrench matrix in the simulink node
 
         foundSolver = False
-        foundFF = False
-        
+        foundPid = False
+        foundSmc = False
+
         thrusterSolverSetParamName = f"{self.thrusterSolverName}/set_parameters"
+
+
+        pidSetParamName = f"{self.pidName}/set_parameters"
+        smcSetParamName = f"{self.smcName}/set_parameters"
 
         #see if the matlab node is running
         for nodeName in get_node_names(node=self):
 
+            #check the thruster solver
             if self.thrusterSolverName in nodeName.name:
                 foundSolver = True
                 thrusterSolverSetParamName = f"{nodeName.full_name}/set_parameters"
+
+            #check the active controller
+            if self.pidName in nodeName.name:
+                foundPid = True
+                pidSetParamName = f"{nodeName.full_name}/set_parameters"
+                
+            if self.smcName in nodeName.name:
+                foundSmc = True
+                smcSetParamName = f"{nodeName.full_name}/set_parameters"
+
 
         if(self.solverActive != foundSolver):
             if(foundSolver):
@@ -351,6 +547,36 @@ class controllerOverseer(Node):
 
                 #cancel the publishing
                 self.pubTimer.cancel()
+
+        if(self.pidActive != foundPid):
+            if(foundPid):
+                #active control has come online
+                self.get_logger().info(f"Setting parameters using service {pidSetParamName}")
+                self.setActiveControllerParamsClient = self.create_client(SetParameters, pidSetParamName)
+                self.paramTimerPID = self.create_timer(1.0, self.setPIDParams)
+
+                self.get_logger().info("Found PID!")
+            else:
+                #lost thruster solver
+                self.get_logger().error("Lost PID!")
+
+                #cancel the set default params operation
+                self.paramTimerPID.cancel()
+        
+        if(self.smcActive != foundSmc):
+            if(foundSmc):
+                self.get_logger().info(f"Setting parameters using service {smcSetParamName}")
+                self.setActiveControllerParamsClient = self.create_client(SetParameters, smcSetParamName)
+                self.paramTimerSMC = self.create_timer(1.0, self.setSMCParams)
+
+                self.get_logger().info("Found SMC!")
+            else:
+                #lost thruster solver
+                self.get_logger().error("Lost SMC!")
+
+                #cancel the set default params operation
+                self.paramTimerSMC.cancel()
+
 
         if not (self.get_parameter(FF_PUBLISH_PARAM).value):
             #publish the ff
@@ -380,11 +606,13 @@ class controllerOverseer(Node):
 
             self.ffPub.publish(msg)
 
-        
-        #update wether or not the solver has been found
-        self.solverActive = foundSolver
 
-    def setSolverParams(self):   
+        #update wether or not the solver and active control has been found
+        self.solverActive = foundSolver
+        self.pidActive = foundPid
+        self.smcActive = foundSmc
+
+    def setSolverParams(self):
         self.get_logger().info("Setting Thruster Solver Default Parameters")
 
         #make the thruster effect matrix 1-D
@@ -445,10 +673,19 @@ class controllerOverseer(Node):
         param5 = Parameter()
         param5.value = val5
         param5.name = THRUSTER_SOLVER_FORCE_RPM_COEFFICENTS_PARAM
+        
+        #twist masks
+        val6 = ParameterValue()
+        val6.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val6.integer_array_value = self.activeTwistMask #THIS IS NOT SCALED! IT DOES NOT MAKE SENSE TO
+        
+        param6 = Parameter()
+        param6.value = val6
+        param6.name = THRUSTER_SOLVER_ACTIVE_FORCE_MASK
 
         #setup service request
         request = SetParameters.Request()
-        request.parameters = [param, param1, param2, param3, param4, param5]
+        request.parameters = [param, param1, param2, param3, param4, param5, param6]
 
         self.future = self.setThrusterSolverParamsClient.call_async(request)
 
@@ -461,11 +698,441 @@ class controllerOverseer(Node):
             elif(self.pubTimer.is_canceled()):
                 self.pubTimer = self.create_timer(RPM_PUBLISH_PERIOD, self.pubCB)
 
+
+    def getSMCSetParamRequest(self):
+                #drag coefficents
+        int_values = []
+        for value in self.talos_drag_coefficents:
+            int_values.append(int(value * PARAMETER_SCALE))
+
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param1 = Parameter()
+        param1.value = val
+        param1.name = ACTIVE_CONTROLLER_DRAG_COEFFICENTS_PARAM
+
+        #angular regen
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = int(self.talos_angular_regen * PARAMETER_SCALE)
+
+        param2 = Parameter()
+        param2.value = val
+        param2.name = ACTIVE_CONTROLLER_ANGULAR_REGEN_PARAM
+
+        #linear regen
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = int(self.talos_linear_regen * PARAMETER_SCALE)
+
+        param3 = Parameter()
+        param3.value = val
+        param3.name = ACTIVE_CONTROLLER_LINEAR_REGEN_PARAM
+        
+        #angular stationkeep
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = int(self.talos_angular_stationkeep * PARAMETER_SCALE)
+
+        param4 = Parameter()
+        param4.value = val
+        param4.name = ACTIVE_CONTROLLER_ANGULAR_STATIONKEEP_PARAM
+
+        #linear stationkeep
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = int(self.talos_linear_stationkeep * PARAMETER_SCALE)
+
+        param5 = Parameter()
+        param5.value = val
+        param5.name = ACTIVE_CONTROLLER_LINEAR_STATIONKEEP_PARAM
+
+        #scale and int
+        int_values = []
+        for value in self.talos_eta_0_values:
+            int_values.append(int(value * PARAMETER_SCALE))
+
+        #SMC ETA 0
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param6 = Parameter()
+        param6.value = val
+        param6.name = ACTIVE_CONTROLLER_ETA_0_PARAM
+
+        #scale and int
+        int_values = []
+        for value in self.talos_eta_1_values:
+            int_values.append(int(value * PARAMETER_SCALE))
+
+        #SMC ETA 1
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param7 = Parameter()
+        param7.value = val
+        param7.name = ACTIVE_CONTROLLER_ETA_1_PARAM
+
+        #scale and int
+        int_values = []
+        for value in self.talos_lambda_values:
+            int_values.append(int(value * PARAMETER_SCALE))
+
+        #SMC lambda
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param8 = Parameter()
+        param8.value = val
+        param8.name = ACTIVE_CONTROLLER_LAMBDA_PARAM
+        
+        #SMC gravity well parameters
+        int_values = []
+        for value in self.talos_velocity_curve_params:
+            int_values.append(int(value * PARAMETER_SCALE))
+        
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+        
+        param9 = Parameter()
+        param9.value = val
+        param9.name = ACTIVE_CONTROLLER_VELOCITY_CURVE_PARAMS_PARAM
+
+        #mass
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = int(self.talos_mass * PARAMETER_SCALE)
+
+        param10 = Parameter()
+        param10.value = val
+        param10.name = ACTIVE_CONTROLLER_MASS_PARAM
+
+        #scale and int
+        int_values = []
+        for value in self.talos_rotational_inertias:
+            int_values.append(int(value * PARAMETER_SCALE))
+
+        #angular interias
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param11 = Parameter()
+        param11.value = val
+        param11.name = ACTIVE_CONTROLLER_ROTATIONAL_INERTIAS_PARAM
+
+        #scale and int
+        int_values = []
+        for value in self.talos_vmax_values:
+            int_values.append(int(value * PARAMETER_SCALE))
+
+        #angular interias
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param12 = Parameter()
+        param12.value = val
+        param12.name = ACTIVE_CONTROLLER_VMAX_PARAM
+
+        #scale and int
+        int_values = []
+        for value in self.talos_amax_values:
+            int_values.append(int(value * PARAMETER_SCALE))
+
+        #angular interias
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param13 = Parameter()
+        param13.value = val
+        param13.name = ACTIVE_CONTROLLER_AMAX_PARAM
+
+        #scale and int
+        int_values = []
+        for value in self.talos_jmax_values:
+            int_values.append(int(value * PARAMETER_SCALE))
+
+        #angular interias
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param14 = Parameter()
+        param14.value = val
+        param14.name = ACTIVE_CONTROLLER_JAMX_PARAM
+        
+        #radial function count
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = int(self.talos_radial_function_count * PARAMETER_SCALE)
+
+        param15 = Parameter()
+        param15.value = val
+        param15.name = ACTIVE_CONTROLLER_RADIAL_FUNC_COUNT_PARAM
+
+        #mass
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = int(PARAMETER_SCALE)
+
+        param16 = Parameter()
+        param16.value = val
+        param16.name = ACTIVE_CONTROLLER_SCALING_PARAM
+
+        #creste request to call the set parameters service
+        request = SetParameters.Request()
+        request.parameters = [param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11, param12, param13, param14, param15, param16]
+        return request
+    
+    
+    def getPIDSetParamRequest(self):
+        #SET P GAINS
+        int_values = []
+        for value in self.talos_p_gains:
+            self.get_logger().info(F"APPENDING P VALUE {value}")
+            int_values.append(int(value * PARAMETER_SCALE))
+        
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param1 = Parameter()
+        param1.value = val
+        param1.name = ACTIVE_CONTROLLER_PID_P_GAINS_PARAM
+        
+
+        #SET I GAINS
+        int_values = []
+        for value in self.talos_i_gains:
+            int_values.append(int(value * PARAMETER_SCALE))
+        
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param2 = Parameter()
+        param2.value = val
+        param2.name = ACTIVE_CONTROLLER_PID_I_GAINS_PARAM
+        
+
+        #SET D GAINS
+        int_values = []
+        for value in self.talos_d_gains:
+            int_values.append(int(value * PARAMETER_SCALE))
+        
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param3 = Parameter()
+        param3.value = val
+        param3.name = ACTIVE_CONTROLLER_PID_D_GAINS_PARAM
+        
+
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = int(self.talos_pid_reset_threshold * PARAMETER_SCALE)
+
+        param4 = Parameter()
+        param4.value = val
+        param4.name = ACTIVE_CONTROLLER_PID_RESET_THRESHOLD_PARAM
+        
+
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = int(PARAMETER_SCALE)
+
+        param5 = Parameter()
+        param5.value = val
+        param5.name = ACTIVE_CONTROLLER_PID_SCALING_FACTOR_PARAM
+
+
+        #Procces P Surface Gains
+        int_values = []
+        for value in self.talos_p_surface_gains:
+            int_values.append(int(value * PARAMETER_SCALE))
+
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param6 = Parameter()
+        param6.value = val
+        param6.name = ACTIVE_CONTROLLER_PID_P_SURFACE_GAINS_PARAM
+
+
+        #Procces D Surface Gains
+        int_values = []
+        for value in self.talos_d_surface_gains:
+            int_values.append(int(value * PARAMETER_SCALE))
+
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param7 = Parameter()
+        param7.value = val
+        param7.name = ACTIVE_CONTROLLER_PID_D_SURFACE_GAINS_PARAM
+
+
+        #Procces I Surface Gains
+        int_values = []
+        for value in self.talos_i_surface_gains:
+            int_values.append(int(value * PARAMETER_SCALE))
+
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param8 = Parameter()
+        param8.value = val
+        param8.name = ACTIVE_CONTROLLER_PID_I_SURFACE_GAINS_PARAM
+
+
+        #Procces Max controls
+        int_values = []
+        for value in self.talos_max_control:
+            int_values.append(int(value * PARAMETER_SCALE))
+
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+        val.integer_array_value = int_values
+
+        param9 = Parameter()
+        param9.value = val
+        param9.name = ACTIVE_CONTROLLER_PID_MAX_CONTROLS
+
+
+        #Set the surface gain floor
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = int(PARAMETER_SCALE * self.talos_surface_gain_floor)
+
+        param10 = Parameter()
+        param10.value = val
+        param10.name = ACTIVE_CONTROLLER_PID_SURFACE_GAIN_FLOOR
+
+
+        #set the surface gain buffer
+        val = ParameterValue()
+        val.type = ParameterType.PARAMETER_INTEGER
+        val.integer_value = int(PARAMETER_SCALE * self.talos_surface_gain_buffer)
+
+        param11 = Parameter()
+        param11.value = val
+        param11.name = ACTIVE_CONTROLLER_PID_SURFACE_GAIN_BUFFER
+        
+        request = SetParameters.Request()
+        request.parameters = [param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11]
+        return request
+    
+    
+    def setPIDParams(self):
+        self.get_logger().info("Setting PID Default Parameters")
+        request = self.getPIDSetParamRequest()
+        self.future = self.setActiveControllerParamsClient.call_async(request)
+
+        #cancel the time that loads in paramters - don't spam reload
+        self.paramTimerPID.cancel()
+        
+    
+    def setSMCParams(self):
+        self.get_logger().info("Setting SMC Default Parameters")
+        request = self.getSMCSetParamRequest()
+        self.future = self.setActiveControllerParamsClient.call_async(request)
+
+        #cancel the time that loads in paramters - don't spam reload
+        self.paramTimerSMC.cancel()
+    
+    
+    def repubSrvResponse(self, response: Trigger.Response, success: bool, msg: str):
+        if(success):
+            self.get_logger().info(msg)
+        else:
+            self.get_logger().error(msg)
+        
+        response = Trigger.Response()
+        response.success = success
+        response.message = msg
+        return response
+
+    
+    def repubParamsCbGeneric(self, currentTime: Time, lastRepubTime: Time, setFunc, response: Trigger.Response):
+        elapsedSinceLastRepub = currentTime - lastRepubTime
+        if(elapsedSinceLastRepub.to_msg().sec > 5):
+            self.get_logger().info("Preparing to reload parameters! Rereading Yaml!")
+            self.readInRobotYaml()
+            self.generateThrusterForceMatrix(self.thruster_info, self.com)
+            setFunc()
+            
+            return self.repubSrvResponse(response, True, "Parameters loaded successfully.")
+        
+        return self.repubSrvResponse(
+            response,
+            False, 
+            "Not loading parameters because they were loaded less than 5 seconds ago!")
+
+
+    def repubActiveParamsCb(self, request: Trigger.Request, response: Trigger.Response):
+        self.get_logger().info("Received request to reload the Active Parameters")
+        
+        ret = Trigger.Response()
+        
+        if(self.pidActive):
+            #set the parameters if there has been at least 5 seconds since the last set 
+            currentTime = self.get_clock().now()
+            response = self.repubParamsCbGeneric(currentTime, self.lastRepubPIDTime, self.setPIDParams, response)
+            if(response.success):
+                self.lastRepubPIDTime = currentTime
+                ret.message += "PID Reload Successful"
+            else:
+                ret.message += f"PID Reload failed: {response.message}"
+        else:
+            ret.message += "PID Offline"
+            
+        ret.message += ", "
+        
+        if(self.smcActive):
+            currentTime = self.get_clock().now()
+            response = self.repubParamsCbGeneric(currentTime, self.lastRepubSMCTime, self.setSMCParams, response)
+            if(response.success):
+                self.lastRepubSMCTime = currentTime
+                ret.message += "SMC Reload Successful"
+            else:
+                ret.message += f"SMC Reload failed: {response.message}"
+        else:
+            ret.message += "SMC Offline"
+            
+        return ret
+
+
+    def repubThrusterSolverParamsCb(self, request: Trigger.Request, response: Trigger.Response):
+        self.get_logger().info("Received request to reload the Solver parameters")
+        if(self.solverActive):
+            #set the parameters if there has been at least 5 seconds since the last set
+            currentTime = self.get_clock().now()
+            response = self.repubParamsCbGeneric(currentTime, self.lastRepubThrusterTime, self.setSolverParams, response)
+            if(response.success):
+                self.lastRepubThrusterTime = currentTime
+            
+            return response
+        
+        return self.repubSrvResponse(response, False, "Failed to reload Solver params; the Thruster Solver is not active!")
+        
+
     #remove once matlab publishes to correct message
     def forceRepublishCb(self, msg:Int32MultiArray):
         #the message to republish to
         pub_msg = Float32MultiArray()
-                
+
         if(len(msg.data) == 8):
             for datum in msg.data:
                 #scale by .000001
@@ -481,7 +1148,7 @@ class controllerOverseer(Node):
     def rpmRepublishCb(self, msg:Int32MultiArray):
         #the message to republish to
         pub_msg = DshotCommand()
-        
+
         if(len(msg.data) == 8):
             for i, datum in enumerate(msg.data):
                 #scale by .000001
@@ -500,7 +1167,8 @@ class controllerOverseer(Node):
 
             if(self.pubRPMMsg is not None):
                 self.rpmCommandPub.publish(self.pubRPMMsg)
-
+                
+                
 def main(args=None):
     rclpy.init(args=args)
 
@@ -511,4 +1179,4 @@ def main(args=None):
 if __name__ == '__main__':
     main()
 
-            
+

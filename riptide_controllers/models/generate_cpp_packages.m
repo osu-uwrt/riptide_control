@@ -60,8 +60,7 @@ function generate_cpp_packages(varargin)
     model_mode = MODE_ALL;
     config_mode = MODE_ALL;
 
-    % fullfile expands to absolute path, trim_string_array removes empty
-    % strings
+    % trim_string_array removes empty strings
     selected_models = make_absolute(trim_string_array(argument_matrix(1, :)));
     ignored_models = make_absolute(trim_string_array(argument_matrix(2, :)));
     selected_configs = make_absolute(trim_string_array(argument_matrix(3, :)));

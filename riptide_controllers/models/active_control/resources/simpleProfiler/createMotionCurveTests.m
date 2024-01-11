@@ -1,0 +1,316 @@
+clear;
+
+%set up inputs
+setPoint1 = [4;.2;0;0;0;0;1];
+currentWorldFramePosition1 = [0;0;0;0;0;0;1];
+currentVelocities1 = [0;0;0;0;0;0];
+
+%m/s ..ss ...sss
+vMax1 = [.5;.5;.5;.1;.1;.1];
+aMax1 = [.1;.1;.1;.02;.02;.02];
+jMax1 = [.1;.1;.1;.02;.02;.02];
+
+%how many functions to fit with
+functionCount = 21;
+
+%call the curve generator
+[m, r, est] = createMotionCurves(setPoint1, currentWorldFramePosition1, currentVelocities1, vMax1, aMax1, jMax1, functionCount);
+
+%grab fit curve function
+addpath("../Radial Curve Fitter Demo/")
+
+
+%plot results
+for i=1:6
+    t = linspace(0, 1, 1000);
+    y = evalCurve(m(i, :), t);
+    figure(i);
+    plot(t, y);
+end
+
+disp(r)
+disp(est)
+
+
+%actual function to be ran in motion planning block
+function [motionPlanningCoefficents, R2, tEst] = createMotionCurves(setPoint, currentWorldFramePosition, currentVelocities, vMax, aMax, jMax, functionCount)
+    %change quaternion bas orentation into euler based
+    %remember ros2 quat
+
+    setOrientationEul = quat2eul([setPoint(7), setPoint(4), setPoint(5), setPoint(6)]);
+    posOrientationEul = quat2eul([currentWorldFramePosition(7), currentWorldFramePosition(4), currentWorldFramePosition(5), currentWorldFramePosition(6)]);
+
+    set = [setPoint(1); setPoint(2); setPoint(3); setOrientationEul(1); setOrientationEul(2); setOrientationEul(3)];
+    pos = [currentWorldFramePosition(1); currentWorldFramePosition(2); currentWorldFramePosition(3); posOrientationEul(1); posOrientationEul(2); posOrientationEul(3)];
+
+    %ignore second order effects and assume bidirectional symetry
+
+    %determine which path  - dof - will take the longest to complete
+    times = zeros(6, 1);
+    for i = 1:6
+        if(set(i) == pos(i))
+            % there is no movement required
+            times(i) = 0;
+
+        else
+            %gotta move
+           
+            %get distance needed to travel
+            distance = abs(set(i) - pos(i));
+
+            %ramp up to max acceleration
+            jTime = aMax(i) / jMax(i);
+            jDist = jTime^3 * jMax(i) / 6;
+            jVel = jTime^2 * jMax(i) / 2;
+
+            if(jDist * 2 > distance)
+                %total distance is less than the distance required to jamp
+                %up to max accel
+
+                times(i) = ((distance / 2) * 6 / jMax(i)) ^ (1/3) * 2;
+            else
+                %accelerate at max until max velocity achieved
+                 aTime = (vMax(i) - jVel) / aMax(i);
+                 aDist = aMax(i) * aTime ^ 2 / 2 + jVel * aTime;
+
+                 if((aDist + jDist) > distance / 2)
+                    %distance taken to reach max velocity is greater than
+                    %the distance needed to travel
+
+                    %2 to account for accel and decel
+                    times(i) = 2 * (jTime + (-jVel + sqrt(jVel^2 + 2 * aMax(i) * (distance / 2 - jDist))) / aMax(i));
+                 else
+                    %will achieve max velocity
+                    times(i) = 2 * (aTime + jTime + (distance / 2 - jDist - aDist) / vMax(i));
+                 end
+            end
+        end
+    end
+
+    %the duration of all the curve should be the longest minumum time
+    dur = max(times);
+    
+    samplePoints = 10000;
+    points = zeros(6, samplePoints);
+
+    %time points
+    tVals = linspace(0, dur, samplePoints);
+
+
+    
+    %go through a get the sample points for each curve
+    for i=1:6
+        if(pos(i) == set(i))
+            %no movement required
+
+            for t = 1:samplePoints
+                points(i, t) = set(i);
+            end
+        
+        else
+            %get movement sign - accounted for zero case above
+            sign = (set(i) - pos(i)) / abs(set(i) - pos(i));
+           
+            %get distance needed to travel
+            distance = abs(set(i) - pos(i));
+
+            %ramp up to max acceleration
+            jTime = aMax(i) / jMax(i);
+            jDist = jTime^3 * jMax(i) / 6;
+            jVel = jTime^2 * jMax(i) / 2;
+
+            if(distance / 2 < jDist)
+                %distance needed to reach max accel > distance needed to
+                %travel
+                
+                %determine the constant jerk needed
+                j = (distance / 2) * 6 / ((dur / 2) ^ 3);
+
+                posVals = zeros(1, samplePoints);
+                posVals(1:(samplePoints / 2)) = tVals(1:(samplePoints / 2)) .^ 3 .* j ./ 6;
+                posVals((samplePoints / 2 + 1):samplePoints) = distance - (abs(dur - tVals((samplePoints / 2 + 1):samplePoints))) .^ 3 .* j ./ 6;
+
+                points(i, :) = posVals * sign;
+            else
+                if((distance / 2) < jDist + (dur / 2 - jTime) * jVel)
+                    %gotta use above algorithm
+
+                    %determine the constant jerk needed
+                    j = (distance / 2) * 6 / ((dur / 2) ^ 3);
+    
+                    posVals = zeros(1, samplePoints);
+                    posVals(1:(samplePoints / 2)) = tVals(1:(samplePoints / 2)) .^ 3 .* j ./ 6;
+                    posVals((samplePoints / 2 + 1):samplePoints) = distance - (abs(dur - tVals((samplePoints / 2 + 1):samplePoints))) .^ 3 .* j ./ 6;
+    
+                    points(i, :) = posVals * sign;
+                else
+                    % need to accelerate more
+
+                    %calculate the max velocity
+                    a = 1 / (2 * aMax(i));
+                    b = (jVel / (aMax(i)) - (dur / 2 - jTime));
+                    c = (-3 * jVel^2 / (2 * aMax(i)) - 2 * jVel * (dur / 2 - jTime) + (distance / 2 - jDist));
+
+                    %calculate max v
+                    v = (-b + sqrt(b^2 - 4 * a *c)) / (2 * a);
+
+                    %ensure v doesn't exceed max
+                    if(v > vMax(i))
+                        v = vMax(i);
+                    end
+
+                    %time spent in acceleration
+                    aTime = (v - jVel) / aMax(i);
+                    aDist = aTime ^2 * aMax(i) / 2 + aTime * jVel;
+
+                    disp(v);
+
+                    %get sample points on curve
+                    tVals = linspace(0, dur, samplePoints);
+                    posVals = zeros(1, samplePoints);
+
+                    for t = 1:(samplePoints / 2)
+                        %loop through each time
+
+                        if(tVals(t) < jTime)
+                           
+                            %following max jerk curve
+                            posVals(t) = tVals(t) ^ 3 / 6 * jMax(i);
+                        elseif(tVals(t) < aTime + jTime)
+
+                            % follow max acceleration curve
+                            posVals(t) = (tVals(t) - jTime) ^ 2 * aMax(i) / 2 + (tVals(t) - jTime) * jVel + jDist;
+                        else
+                            %follow steady velocity curve
+                            posVals(t) = aDist + jDist + (tVals(t) - jTime - aTime) * v;
+                        end
+                    end
+                    
+                    %curve is radially symetrical
+                    for t = (samplePoints / 2 + 1):samplePoints
+                        posVals(t) = distance - posVals(samplePoints - t + 1);
+                    end
+             
+                    points(i, :) = posVals .* sign;
+                end
+            end
+        end
+    end
+
+%     display plots out of profiler
+%     figure(1);
+%     plot(tVals, points(1,:), tVals, points(2,:), tVals, points(3, :))
+%     title("Linear Profiles")
+%     legend("x-axis", "y-axis", "z-axis")
+%     figure(2);
+%     title("Angular Profiles")
+%     plot(tVals, points(4,:), tVals, points(5,:), tVals, points(6, :))
+%     legend("x-axis", "y-axis", "z-axis")
+
+    motionPlanningCoefficents = zeros(6, functionCount);
+    R2 = zeros(6,1);
+    %fit curves
+    for dof=1:6
+        yVals = points(dof, :);
+
+        co = zeros(functionCount, 1);
+
+        %tVals - x-axis values - in case of motion profiles time
+        %yVals - y-aixs values
+        %functionCount - number of functions to use - odd number recommended
+    
+        %determine period of radial function
+        period = tVals(end) - tVals(1);
+        
+        %calculate offsets for functions
+        offsets = linspace(-pi(), pi() - 2*pi()/functionCount, functionCount);
+
+        %add dummy points to stay in place before and after ...
+        beforeTVals = linspace(tVals(1) - period *.05, tVals(1), floor(length(tVals) * .05));
+        afterTVals = linspace(tVals(end), tVals(end) + period * .05, floor(length(tVals) * .05));
+        tValsMod = [beforeTVals, tVals, afterTVals];
+
+        %add dummy yVals
+        beforeYVals = linspace(yVals(1), yVals(1), length(yVals) * .05);
+        afterYVals = linspace(yVals(end), yVals(end), length(yVals) * .05);
+        yValsMod = [beforeYVals, yVals, afterYVals];
+        
+        %calculate curve stats
+        avgValue = sum(yValsMod) / length(yValsMod);
+        MAD = sum(abs(avgValue - yValsMod)) / length(yValsMod);
+        maxDisplacement = max(yValsMod) - min(yValsMod);
+
+        if(MAD == 0)
+            %brute force -- flexes arm because strong with the brute force
+            fakeTimeValues = linspace(0, pi, length(tValsMod));
+            for ft = 1:length(tValsMod)
+                %spoof in a small disturbance
+                yValsMod(ft) = yValsMod(ft) + .001 * sin(fakeTimeValues(ft));
+            end
+
+            MAD = sum(abs(avgValue - yValsMod)) / length(yValsMod);
+        end
+
+        %optomizationConstants
+        residualError = .01;
+        stepError = .0000001;
+
+        if(maxDisplacement < .01)
+            %if moving less than a cm -- increase tolerance
+            residualError = 1;
+            stepError = .00001;
+        end
+        
+        %generate linearized effect matrix
+        A = zeros(length(tValsMod), functionCount);
+        for m = 1:length(tValsMod)
+            for n = 1:functionCount
+            
+                A(m,n) = (sin(pi() / (2 * period) * tValsMod(m) + offsets(n)))^9;
+        
+            end
+        end
+        
+        residuals = transpose(yValsMod) + 1000;
+
+        
+        %iterate until under min error
+        while(norm(residuals) / length(tValsMod) / MAD > residualError)
+            %initial guess and error
+            co = rand([functionCount, 1]) * maxDisplacement;
+            residuals = A * co - transpose(yValsMod);
+        
+            %calculate inital error
+            error = norm(residuals) / length(tValsMod);
+            previousError = norm(residuals + 10) / length(tValsMod);
+        
+            %iterate until minimization is no loner effective
+            while(abs(error - previousError) > stepError)
+        
+                %minimize residuals
+                ders = zeros(functionCount,1 );
+        
+                for i = 1:functionCount
+                    ders(i) = sum(A(:, i) .* residuals) / length(tValsMod);
+                end
+                
+                co = co - ders(:) / functionCount;
+                
+                residuals = A * co - transpose(yValsMod);
+        
+                %calculate error
+                previousError = error;
+                error = norm(residuals) / length(tValsMod) / MAD;        
+            end
+            R2(dof) = error;
+        end
+
+        motionPlanningCoefficents(dof, :) = co;
+
+    end
+    
+    %estimated time
+    tEst = tVals(end);
+
+end
+

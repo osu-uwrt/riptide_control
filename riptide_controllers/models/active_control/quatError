@@ -1,0 +1,25 @@
+function normalizedError = fcn(currentPos, setPoint)
+
+normalizedError = zeros(1,6);
+normalized = zeros(1,6);
+
+normalized(1) = currentPos(1) - setPoint(1);
+normalized(2) = currentPos(2) - setPoint(2);
+normalized(3) = currentPos(3) - setPoint(3);
+
+%matlab quat
+sQ = setPoint(7);
+vQ = [setPoint(4), setPoint(5), setPoint(6)];
+sQI = currentPos(7);
+vQI = [-currentPos(4), -currentPos(5), -currentPos(6)];
+
+%error quat -- mutliply these
+errorQuat = [sQ * sQI - dot(vQ, vQI), sQ * vQI + sQI * vQ + cross(vQ,  vQI)];
+errorEul = quat2eul(errorQuat);
+
+normalized(4) = errorEul(1);
+normalized(5) = errorEul(2);
+normalized(6) = errorEul(3);
+
+
+normalizedError = normalized;
