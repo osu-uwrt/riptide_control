@@ -4,13 +4,13 @@
 #include <linux/can.h>
 #include <linux/can/raw.h>
 #include <net/if.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include "send_thruster_cmd.h"
 
 #define CAN_INTERFACE_NAME "can0"
 #define CAN_ID_ESC_BOARD0 2

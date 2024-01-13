@@ -1161,8 +1161,8 @@ class controllerOverseer(Node):
     def pubCB(self):
         #publish rpms
         if(self.enabled):
-            if(self.pubForceMsg is not None):
-                self.forceCommandPub.publish(self.pubForceMsg)
+            # if(self.pubForceMsg is not None):
+            #     self.forceCommandPub.publish(self.pubForceMsg)
 
             if(self.pubRPMMsg is not None):
                 self.rpmCommandPub.publish(self.pubRPMMsg)
