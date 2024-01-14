@@ -50,6 +50,7 @@ static void report_init_error(const char* func_name, int err_val) {
             func_name, strerror(err_val), err_val);
 }
 
+
 static void report_tx_error(const char* func_name, int err_val) {
     fprintf(stderr, "[send_thruster_cmd_canbus] Failed to transmit! Function '%s' failed with error: %s (%d)\n",
             func_name, strerror(err_val), err_val);
@@ -118,9 +119,18 @@ static void populate_can_frame(struct can_frame *frame, int client_id, int16_t c
 }
 
 int send_thruster_cmd_canbus(int16_t cmds[8]) {
-    if (socket_fd < 0) {
+    if(socket_fd == -2)
+    {
+        return 0;
+    }
+    
+    if (socket_fd == -1) {
         int err = init_can_socket();
-        if (err) return err;
+        if (err) 
+        {
+            socket_fd = -2;
+            return err;
+        }
     }
 
     // Send commands to board 0

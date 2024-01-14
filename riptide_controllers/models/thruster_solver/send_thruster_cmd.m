@@ -12,7 +12,7 @@ function send_thruster_cmd(cmds)
         
         errno = coder.ceval(SELECTED_COMMAND_FUNCTION_NAME, int16(cmds));
         if errno ~= 0
-            error("Could not invoke %s. Failed with errno %d", ...
+            warning("Could not invoke %s. Failed with errno %d", ...
                 SELECTED_COMMAND_FUNCTION_NAME, errno);
         end
     end
