@@ -1,5 +1,5 @@
 function cs = arm_cfg()
-% MATLAB function for configuration set generated on 14-Jan-2024 13:33:13
+% MATLAB function for configuration set generated on 16-Jan-2024 21:39:20
 % MATLAB version: 9.14.0.2337262 (R2023a) Update 5
 
 cs = Simulink.ConfigSet;
@@ -295,7 +295,7 @@ cs.set_param('RTWUseSimCustomCode', 'off');   % Use the same custom code setting
 cs.set_param('CustomSourceCode', '');   % Additional code
 cs.set_param('CustomHeaderCode', '');   % Include headers
 cs.set_param('CustomInclude', '');   % Include directories
-cs.set_param('CustomSource', '');   % Source files
+cs.set_param('CustomSource', 'thruster_solver/send_thruster_cmd_canbus.c');   % Source files
 cs.set_param('CustomLibrary', '');   % Libraries
 cs.set_param('CustomDefine', '');   % Defines
 cs.set_param('CustomBLASCallback', '');   % Custom BLAS library callback

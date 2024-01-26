@@ -125,6 +125,7 @@ int send_thruster_cmd_canbus(int16_t cmds[8]) {
     }
     
     if (socket_fd == -1) {
+        printf("Initializing CAN socket\n");
         int err = init_can_socket();
         if (err) 
         {
