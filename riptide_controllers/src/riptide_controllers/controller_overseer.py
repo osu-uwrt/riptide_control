@@ -1164,6 +1164,7 @@ class controllerOverseer(Node):
             if(self.pubForceMsg is not None):
                 self.forceCommandPub.publish(self.pubForceMsg)
 
+            #TODO: this needs to run if not on orin
             # if(self.pubRPMMsg is not None):
             #     self.rpmCommandPub.publish(self.pubRPMMsg)
                 
