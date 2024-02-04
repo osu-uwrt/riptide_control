@@ -244,8 +244,8 @@ cs.set_param('SimReservedNameArray', []);   % Reserved names
 cs.set_param('SimUserIncludeDirs', '');   % Include directories
 cs.set_param('SimUserLibraries', '');   % Libraries
 cs.set_param('SimUserDefines', '');   % Defines
-cs.set_param('SimCustomCompilerFlags', '');   % Compiler flags
-cs.set_param('SimCustomLinkerFlags', '');   % Linker flags
+cs.set_param('SimCustomCompilerFlags', '--verbose');   % Compiler flags
+cs.set_param('SimCustomLinkerFlags', '--verbose');   % Linker flags
 cs.set_param('SFSimEnableDebug', 'off');   % Allow setting breakpoints during simulation
 cs.set_param('SFSimEcho', 'on');   % Echo expressions without semicolons
 cs.set_param('SimCtrlC', 'on');   % Break on Ctrl-C
