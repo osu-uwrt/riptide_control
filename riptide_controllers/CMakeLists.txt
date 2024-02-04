@@ -17,6 +17,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(control_toolbox REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(std_msgs REQUIRED)
 
 # grab c++ includes
 include_directories(include/riptide_controllers2)
@@ -48,8 +49,14 @@ include_directories(include/riptide_controllers2)
 
 add_library(motion_profiler SHARED src/riptide_controllers/main.cpp)
 
+add_executable(c_o src/riptide_controllers/controller_overseer.cpp)
+ament_target_dependencies(c_o rclcpp std_msgs rcl_interfaces)
+
+install(TARGETS c_o DESTINATION lib/riptide_controllers2)
+
 install(TARGETS motion_profiler
   DESTINATION lib)
+
 
 # yoink python files
 file(GLOB py_files RELATIVE ${PROJECT_SOURCE_DIR} src/riptide_controllers/*.py)
