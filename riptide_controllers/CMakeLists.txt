@@ -49,11 +49,6 @@ include_directories(include/riptide_controllers2)
 
 add_library(motion_profiler SHARED src/riptide_controllers/main.cpp)
 
-add_executable(c_o src/riptide_controllers/controller_overseer.cpp)
-ament_target_dependencies(c_o rclcpp std_msgs rcl_interfaces)
-
-install(TARGETS c_o DESTINATION lib/riptide_controllers2)
-
 install(TARGETS motion_profiler
   DESTINATION lib)
 
