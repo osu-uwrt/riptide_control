@@ -18,11 +18,19 @@ find_package(control_toolbox REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 
-# grab c++ includes
-include_directories(include/riptide_controllers2)
-add_library(motion_profiler SHARED src/riptide_controllers/main.cpp)
-install(TARGETS motion_profiler
-  DESTINATION lib)
+#Define a variable with all dependencies
+set(deps 
+  rclcpp
+  riptide_msgs2
+  geometry_msgs
+  sensor_msgs
+  tf2_geometry_msgs
+  rclpy
+  geometry_msgs
+  control_toolbox
+  tf2
+  tf2_ros
+)
 
 # yoink python files
 file(GLOB py_files RELATIVE ${PROJECT_SOURCE_DIR} src/riptide_controllers/*.py)
