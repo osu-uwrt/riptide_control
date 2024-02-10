@@ -209,16 +209,16 @@ class RocketLeague(Node):
                         #handle dpad up
 
                         if(event.value == 1):
-                            self.y_nudge = -1.0
-                        elif(self.y_nudge == -1.0):
+                            self.y_nudge = 1.0
+                        elif(self.y_nudge == 1.0):
                             self.y_nudge = 0.0
 
                     case ecodes.BTN_DPAD_RIGHT:
                         #handle dpad up
 
                         if(event.value == 1):
-                            self.y_nudge = 1.0
-                        elif(self.y_nudge == 1.0):
+                            self.y_nudge = -1.0
+                        elif(self.y_nudge == -1.0):
                             self.y_nudge = 0.0      
 
         #pub values
