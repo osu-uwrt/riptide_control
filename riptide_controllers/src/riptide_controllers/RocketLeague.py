@@ -337,7 +337,7 @@ def main(args=None):
 
     rclpy.init(args=args)
 
-    rl = RocketLauge(eventQueue)
+    rl = RocketLeague(eventQueue)
 
     rclpy.spin(rl)
 
