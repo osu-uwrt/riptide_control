@@ -44,7 +44,7 @@ class RocketLeague(Node):
 
         #create pubs
         self.throttle_pub = self.create_publisher(Float32, "/talos/teleop/throttle", qos_profile=qos_profile_sensor_data)
-        self.brake_pub = self.create_publisher(Float32, "/talos/teleop/brake", qos_profile=qos_profile_sensor_data)
+        self.reverse_pub = self.create_publisher(Float32, "/talos/teleop/reverse", qos_profile=qos_profile_sensor_data)
         self.joy_L_X_pub = self.create_publisher(Float32, "/talos/teleop/joy_R_X", qos_profile=qos_profile_sensor_data)
         self.set_point_pub_linear = self.create_publisher(ControllerCommand, "/talos/controller/linear", qos_profile=qos_profile_system_default)
         self.set_point_pub_angular = self.create_publisher(ControllerCommand, "/talos/controller/angular", qos_profile=qos_profile_system_default)
@@ -230,7 +230,7 @@ class RocketLeague(Node):
 
         #brake msg
         msg.data = float(self.left_trigger)
-        self.brake_pub.publish(msg)
+        self.reverse_pub.publish(msg)
 
         #joy_l_x msg
         msg.data = float(self.right_joy_x)
@@ -286,10 +286,6 @@ class RocketLeague(Node):
         self.stunt_trigger_pub.publish(msg)
 
         self.stunt_triggered = False
-
-
-
-
 
 #read controller async callback
 async def read_controller_events():
