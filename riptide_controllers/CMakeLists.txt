@@ -18,19 +18,12 @@ find_package(control_toolbox REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 
-#Define a variable with all dependencies
-set(deps 
-  rclcpp
-  riptide_msgs2
-  geometry_msgs
-  sensor_msgs
-  tf2_geometry_msgs
-  rclpy
-  geometry_msgs
-  control_toolbox
-  tf2
-  tf2_ros
-)
+#thruster test script
+add_executable(thruster_test_canbus models/thruster_solver/send_thruster_cmd_canbus.c)
+target_compile_definitions(thruster_test_canbus PUBLIC ENABLE_THRUSTER_TEST) #enable the thruster test code in send_thruster_cmd_canbus.c
+
+install(TARGETS thruster_test_canbus
+  DESTINATION lib/${PROJECT_NAME})
 
 # yoink python files
 file(GLOB py_files RELATIVE ${PROJECT_SOURCE_DIR} src/riptide_controllers/*.py)
