@@ -123,9 +123,6 @@ class controllerOverseer(Node):
         #odometry filtered
         self.create_subscription(Odometry, "odometry/filtered", self.odometryCB, qos_profile_system_default)
 
-        self.rpmCommandPub = self.create_publisher(DshotCommand, "command/thruster_rpm", qos_profile_system_default)
-        self.forceCommandPub = self.create_publisher(Float32MultiArray, "thruster_forces", qos_profile_system_default)
-
         #pub for thruster weights
         self.weightsPub = self.create_publisher(Int32MultiArray, THRUSTER_SOLVER_WEIGHT_MATRIX_TOPIC, qos_profile_system_default)
 
