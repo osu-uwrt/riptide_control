@@ -20,7 +20,7 @@ from time import sleep
 eventQueue = Queue()
 
 #ROS node def
-class RocketLauge(Node):
+class RocketLeague(Node):
 
     boost_triggered = False
     stunt_triggered = False
@@ -29,7 +29,7 @@ class RocketLauge(Node):
     y_nudge = 0.0
 
     def __init__(self, queue: Queue):
-        super().__init__("RocketLauge")
+        super().__init__("RocketLeague")
 
         self.create_timer(0.033, self.handleEvents)
 
@@ -303,7 +303,7 @@ async def read_controller_events():
 
             #connect a controller
 
-            controllerType = ""  #name of the controller trying to find
+            controllerType = "PLAYSTATION(R)3"  #name of the controller trying to find
 
             devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
 

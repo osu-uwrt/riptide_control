@@ -470,10 +470,18 @@ class controllerOverseer(Node):
         #attempt to set the wrench matrix in the simulink node
 
         #see if the matlab node is running
+        found_thruster_solver = False
+        found_PID = False
+        found_SMC = False
+        found_complete = False
+
         for nodeName in get_node_names(node=self):
 
             #check the thruster solver
             if self.thrusterSolverName in nodeName.name:
+
+                #mark as found!
+                found_thruster_solver = True
 
                 #if the solver previously wasn't active
                 if(not self.solverActive and self.param_set_clear):
@@ -504,6 +512,9 @@ class controllerOverseer(Node):
             #check the active controller
             if self.pidName in nodeName.name:
 
+                #mark as found!
+                found_PID= True
+
                 #if the solver previously wasn't active
                 if(not self.pidActive and self.param_set_clear):
                     #note the pid is active
@@ -530,6 +541,9 @@ class controllerOverseer(Node):
                 
             if self.smcName in nodeName.name:
 
+                #mark as found!
+                found_SMC = True
+
                 #if the solver previously wasn't active
                 if(not self.solverActive and self.param_set_clear):
                     #note the smc is active
@@ -555,6 +569,10 @@ class controllerOverseer(Node):
 
 
             if self.complete_name in nodeName.name:
+
+                #mark as found!
+                found_complete = True
+
                 #if the solver previously wasn't active
                 if(not self.completeActive and self.param_set_clear):
                     #note the solver is active
@@ -576,6 +594,28 @@ class controllerOverseer(Node):
 
                     #set the model's parameters
                     self.set_model_paramters_timer = self.create_timer(0.5, self.setModelParameters)
+
+        if not found_thruster_solver and self.solverActive:
+            #complete is disactive
+            self.solverActive = False
+            self.get_logger().warn("Lost Thruster Solver!")
+
+        if not found_SMC and self.smcActive:
+            #complete is disactive
+            self.smcActive = False
+            self.get_logger().warn("Lost SMC!")
+
+        if not found_PID and self.pidActive:
+            #complete is disactive
+            self.pidActive = False
+            self.get_logger().warn("Lost PID!")
+
+        if not found_complete and self.completeActive:
+            #complete is disactive
+            self.completeActive = False
+            self.get_logger().warn("Lost Complete Controller!")
+
+            
 
 
         if not (self.get_parameter(FF_PUBLISH_PARAM).value):
