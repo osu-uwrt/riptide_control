@@ -615,9 +615,6 @@ class controllerOverseer(Node):
             self.completeActive = False
             self.get_logger().warn("Lost Complete Controller!")
 
-            
-
-
         if not (self.get_parameter(FF_PUBLISH_PARAM).value):
             #publish the ff
 
@@ -711,6 +708,11 @@ class controllerOverseer(Node):
 
                     val.integer_array_value = int_val_array
                     val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+                elif type == '''<class 'bool'>''':
+                    #set boolean parameters
+
+                    val.bool_value = read_value
+                    val.type = ParameterType.PARAMETER_BOOL
 
                 else:
                     self.get_logger().warn(f"Paramter type {type} not handled yet")
