@@ -692,29 +692,28 @@ class controllerOverseer(Node):
             #get parameter type adn value
             read_value, type = self.getParamValue(parameter_name)
             if(not read_value is None):
-                match type:
-                    case '''<class 'int'>''':
-                        #set integer values
-                        val.integer_value = int(PARAMETER_SCALE * read_value)
-                        val.type = ParameterType.PARAMETER_INTEGER                    
+                if type == '''<class 'int'>''':
+                    #set integer values
+                    val.integer_value = int(PARAMETER_SCALE * read_value)
+                    val.type = ParameterType.PARAMETER_INTEGER                    
+                
+                elif type == '''<class 'float'>''':
+                    #set integer values
+                    val.integer_value = int(PARAMETER_SCALE * read_value)
+                    val.type = ParameterType.PARAMETER_INTEGER
                     
-                    case '''<class 'float'>''':
-                        #set integer values
-                        val.integer_value = int(PARAMETER_SCALE * read_value)
-                        val.type = ParameterType.PARAMETER_INTEGER
-                        
-                    case '''<class 'list'>''':
-                        #set integer array values
+                elif type == '''<class 'list'>''':
+                    #set integer array values
 
-                        int_val_array = []
-                        for item in read_value:
-                            int_val_array.append(int(item * PARAMETER_SCALE))
+                    int_val_array = []
+                    for item in read_value:
+                        int_val_array.append(int(item * PARAMETER_SCALE))
 
-                        val.integer_array_value = int_val_array
-                        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+                    val.integer_array_value = int_val_array
+                    val.type = ParameterType.PARAMETER_INTEGER_ARRAY
 
-                    case _:
-                        self.get_logger().warn(f"Paramter type {type} not handled yet")
+                else:
+                    self.get_logger().warn(f"Paramter type {type} not handled yet")
 
                 param.value = val
                 param.name = parameter_name
@@ -734,18 +733,16 @@ class controllerOverseer(Node):
     def getParamValue(self, param_name):
         #check to see if the param is special
         if param_name in SPECIAL_PARAMTERS:
-            match param_name:
-                case "talos_wrenchmat":
+            if param_name == "talos_wrenchmat":
+                #change to 1D array
+                effects_1D = []
+                for column in self.thrusterEffects:
+                    for effect in column:
+                        effects_1D.append(effect)
 
-                    #change to 1D array
-                    effects_1D = []
-                    for column in self.thrusterEffects:
-                        for effect in column:
-                            effects_1D.append(effect)
-
-                    return effects_1D, '''<class 'list'>'''
-                case _:
-                    self.get_logger().warn("Undefine special parameter!")
+                return effects_1D, '''<class 'list'>'''
+            else:
+                self.get_logger().warn("Undefine special parameter!")
 
         #load the paramter value from the config file
         split_path = str.split(param_name, "__")

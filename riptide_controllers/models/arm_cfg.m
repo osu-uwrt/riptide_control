@@ -1,5 +1,5 @@
 function cs = arm_cfg()
-% MATLAB function for configuration set generated on 03-Dec-2023 13:25:01
+% MATLAB function for configuration set generated on 16-Jan-2024 21:39:20
 % MATLAB version: 9.14.0.2337262 (R2023a) Update 5
 
 cs = Simulink.ConfigSet;
@@ -34,7 +34,7 @@ cs.set_param('StopTime', 'inf');   % Stop time
 cs.set_param('SolverName', 'FixedStepAuto');   % Solver
 cs.set_param('SolverType', 'Fixed-step');   % Type
 cs.set_param('SampleTimeConstraint', 'Unconstrained');   % Periodic sample time constraint
-cs.set_param('FixedStep', 'auto');   % Fixed-step size (fundamental sample time)
+cs.set_param('FixedStep', '0.01');   % Fixed-step size (fundamental sample time)
 cs.set_param('EnableFixedStepZeroCrossing', 'off');   % Enable zero-crossing detection for fixed-step simulation
 cs.set_param('ConcurrentTasks', 'off');   % Allow tasks to execute concurrently on target
 cs.set_param('EnableMultiTasking', 'off');   % Treat each discrete rate as a separate task
@@ -239,7 +239,7 @@ cs.set_param('UseModelRefSolver', 'off');   % Use local solver when referencing 
 
 % Simulation Target
 cs.set_param('SimCustomSourceCode', '');   % Additional code
-cs.set_param('SimUserSources', '');   % Source files
+cs.set_param('SimUserSources', 'thruster_solver/send_thruster_cmd_canbus.c');   % Source files
 cs.set_param('SimCustomHeaderCode', '');   % Include headers
 cs.set_param('SimCustomInitializer', '');   % Initialize code
 cs.set_param('SimCustomTerminator', '');   % Terminate code
@@ -295,7 +295,7 @@ cs.set_param('RTWUseSimCustomCode', 'off');   % Use the same custom code setting
 cs.set_param('CustomSourceCode', '');   % Additional code
 cs.set_param('CustomHeaderCode', '');   % Include headers
 cs.set_param('CustomInclude', '');   % Include directories
-cs.set_param('CustomSource', '');   % Source files
+cs.set_param('CustomSource', 'thruster_solver/send_thruster_cmd_canbus.c');   % Source files
 cs.set_param('CustomLibrary', '');   % Libraries
 cs.set_param('CustomDefine', '');   % Defines
 cs.set_param('CustomBLASCallback', '');   % Custom BLAS library callback
@@ -445,7 +445,7 @@ cs.set_param('CovModelRefEnable', 'off');   % Record coverage for referenced mod
 try
   cs_componentCC = CoderTarget.SettingsController;
   cs.attachComponent(cs_componentCC);
-  cs.set_param('CoderTargetData', struct('UseCoderTarget',true,'TargetHardware','Robot Operating System 2 (ROS 2)','ConnectionInfo',struct('TCPIP',struct('IPAddress','ros.codertarget.internal.getExtmodeDeviceAddress(hCS)','Port','17725','Verbose',false,'RunInBackground',true)),'ExtMode',struct('Configuration','TCP/IP'),'RTOS','Linux','RTOSBaseRateTaskPriority','40','Scheduler_interrupt_source',0,'Packaging',struct('MaintainerName','ROS User','MaintainerEmail','ros2user@test.com','License','BSD','Version','1.0.0'),'BoardParameters',struct('DeviceAddress','','Username',''),'Runtime',struct('BuildAction','Build'),'ROS2Install',struct('Folder','/opt/ros/foxy','Workspace','~/ros2_ws'),'ROS',struct('RemoteBuild',true,'ROSTimeStepping',false,'ROSTimeNotification',false,'StepNotify','/step_notify'),'DataVersion','2016.02'));   % CoderTargetData
+  cs.set_param('CoderTargetData', struct('UseCoderTarget',true,'TargetHardware','Robot Operating System 2 (ROS 2)','ConnectionInfo',struct('TCPIP',struct('IPAddress','ros.codertarget.internal.getExtmodeDeviceAddress(hCS)','Port','17725','Verbose',false,'RunInBackground',true)),'ExtMode',struct('Configuration','TCP/IP'),'RTOS','Linux','RTOSBaseRateTaskPriority','40','Scheduler_interrupt_source',0,'Packaging',struct('MaintainerName','ROS User','MaintainerEmail','ros2user@test.com','License','BSD','Version','1.0.0'),'BoardParameters',struct('DeviceAddress','orin','Username','ros'),'Runtime',struct('BuildAction','Build'),'ROS2Install',struct('Folder','/opt/ros/humble','Workspace','/home/ros/colcon_deploy'),'ROS',struct('RemoteBuild',true,'ROSTimeStepping',false,'ROSTimeNotification',false,'StepNotify','/step_notify'),'DataVersion','2016.02'));   % CoderTargetData
 catch ME
   warning('Simulink:ConfigSet:AttachComponentError', '%s', ME.message);
 end

@@ -684,9 +684,17 @@ def main():
             #
             
             #glob all models not in the referenced_models directory
-            model_files = glob.glob(os.path.join(MODELS_ROOT, "[!referenced_models]**/*.slx"), recursive=True)
-            model_names = get_object_names_from_files(model_files)
+            # model_files = glob.glob(os.path.join(MODELS_ROOT, "[!referenced_models]**/*.slx"), recursive=True)
+            model_files = glob.glob(os.path.join(MODELS_ROOT, "**/*.slx"), recursive=True)
             
+            #exclude all models in referenced_models
+            unreferenced_models = []
+            for model_file in model_files:
+                if not "referenced_models" in model_file:
+                    unreferenced_models.append(model_file)
+            
+            model_names = get_object_names_from_files(unreferenced_models)
+                        
             if len(args.models_select) > 0:
                 model_names = list_intersection(model_names, args.models_select)
             elif len(args.models_ignore) > 0:
