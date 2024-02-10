@@ -13,7 +13,7 @@ from riptide_msgs2.msg import ControllerCommand
 from rclpy.qos import qos_profile_sensor_data, qos_profile_system_default
 
 from tf_transformations import quaternion_from_euler
-
+from time import sleep
 
 #Rocket Leauge drive?
 
@@ -288,41 +288,48 @@ class RocketLauge(Node):
         self.stunt_triggered = False
 
 
-# #Register devices
-controller = None
-controllerType = ""  #name of the controller trying to find
-
-for code in ecodes.ecodes.keys():
-    print(code)
-
-devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
-
-for device in devices:
-    print(device.path, device.name, device.phys)
-
-    if(controllerType in device.name):
-        controller = device
-
-        #print device capabilites
-        # print(controller.capabilities(verbose=True))
 
 
-#see if a controler matching the required type was found
-if(controller is None):
-    print(f"Could not find controller of type: {controllerType}. Quitting!")
-    quit()
-else:
-    print(f"Running Rocket Leauge Using: {controller.name}")
 
 #read controller async callback
-async def read_controller_events(device):
-    async for event in device.async_read_loop():
+async def read_controller_events():
 
-        #add events to be handled by queue
-        eventQueue.put(event)
+    controller = None
+
+    while True:
+
+        if controller is None:
+            sleep(5.0)
+
+            #connect a controller
+
+            controllerType = ""  #name of the controller trying to find
+
+            devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
+
+            for device in devices:
+
+                if(controllerType in device.name):
+                    controller = device
+
+                    print("Controller connected: ", device.path, device.name, device.phys)
+
+        else:
+            #controller found
+
+            try:
+                async for event in controller.async_read_loop():
+
+                    #add events to be handled by queue
+                    eventQueue.put(event)
+            except OSError as e:
+                print("Disconnected controller, trying again in 5 seconds.")
+
+                controller = None
+
 
 #start sync
-asyncio.ensure_future(read_controller_events(controller))
+asyncio.ensure_future(read_controller_events())
 loop = asyncio.get_event_loop()
 
 #startup ros node
