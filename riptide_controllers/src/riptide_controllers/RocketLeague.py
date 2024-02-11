@@ -57,8 +57,8 @@ class RocketLeague(Node):
         #parameters
         self.declare_parameter("default_depth", value= 1.0)
         self.declare_parameter("depth_increment", value= 0.1)
-        self.declare_parameter("roll_max", value = .2 )
-        self.declare_parameter("pitch_max", value = .2 )
+        self.declare_parameter("roll_max", value = .5 )
+        self.declare_parameter("pitch_max", value = .5 )
 
         #load in params
         self.load_parameters()
@@ -88,7 +88,7 @@ class RocketLeague(Node):
                 match event.code:
 
                     case ecodes.ABS_X:
-                        self.left_joy_x = (event.value - 128) / 128
+                        self.left_joy_x = -(event.value - 128) / 128
 
                         #apply a deazone 
                         if(abs(self.left_joy_x) < .05):
@@ -104,7 +104,7 @@ class RocketLeague(Node):
                     case ecodes.ABS_Z:
                         self.left_trigger = (event.value) / 255
                     case ecodes.ABS_RX:
-                        self.right_joy_x = (event.value - 128) / 128
+                        self.right_joy_x = -(event.value - 128) / 128
                     case ecodes.ABS_RY:
                         self.right_joy_y = -(event.value - 128) / 128
                     case ecodes.ABS_RZ:

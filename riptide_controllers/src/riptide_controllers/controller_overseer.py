@@ -497,7 +497,7 @@ class controllerOverseer(Node):
                     #the name of the node currently having its params set
                     self.working_model_node_name = "/" + nodeName.name
                     if(nodeName.namespace is not None):
-                        if(nodeName.namespace is not '' or nodeName.namespace is not '/'):
+                        if(nodeName.namespace != '' or nodeName.namespace != '/'):
                             self.working_model_node_name = nodeName.namespace + "/" + nodeName.name
 
                     self.get_logger().info("self.working_model_node_name")
@@ -528,7 +528,7 @@ class controllerOverseer(Node):
                     #the name of the node currently having its params set
                     self.working_model_node_name = "/" + nodeName.name
                     if(nodeName.namespace is not None):
-                        if(nodeName.namespace is not '' or nodeName.namespace is not '/'):
+                        if(nodeName.namespace != '' or nodeName.namespace != '/'):
                             self.working_model_node_name = nodeName.namespace + "/" + nodeName.name
 
                     #the client to set the params of the model
@@ -557,7 +557,7 @@ class controllerOverseer(Node):
                     #the name of the node currently having its params set
                     self.working_model_node_name = "/" + nodeName.name
                     if(nodeName.namespace is not None):
-                        if(nodeName.namespace is not '' or nodeName.namespace is not '/'):
+                        if(nodeName.namespace != '' or nodeName.namespace != '/'):
                             self.working_model_node_name = nodeName.namespace + "/" + nodeName.name
 
                     #the client to set the params of the model
@@ -586,7 +586,7 @@ class controllerOverseer(Node):
                     #the name of the node currently having its params set
                     self.working_model_node_name = "/" + nodeName.name
                     if(nodeName.namespace is not None):
-                        if(nodeName.namespace is not '' and nodeName.namespace is not '/'):
+                        if(nodeName.namespace != '' and nodeName.namespace != '/'):
                             self.working_model_node_name = nodeName.namespace + "/" + nodeName.name
 
                     #the client to set the params of the model
