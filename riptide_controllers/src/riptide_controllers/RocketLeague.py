@@ -1,7 +1,7 @@
 #! /usr/bin/env python3
 
 import evdev
-from evdev import categorize, ecodes
+from evdev import ecodes
 import asyncio
 from queue import Queue
 import rclpy
@@ -17,7 +17,63 @@ from time import sleep
 
 #Rocket Leauge drive?
 
-eventQueue = Queue()
+eventQueue = Queue() # the queue for events
+typeQueue = Queue() # thread saf4e object representing the type of the queue
+
+#controller mappings - dependent on controller
+mappings = {
+    "PLAYSTATION(R)3":{
+        "left_joy_x":ecodes.ABS_X,
+        "left_joy_y":ecodes.ABS_Y,
+        "left_trigger":ecodes.ABS_Z,        
+        "right_joy_x":ecodes.ABS_RX,
+        "right_joy_y":ecodes.ABS_RY,
+        "right_trigger":ecodes.ABS_RZ,
+        "a_btn":ecodes.BTN_A,        
+        "b_btn":ecodes.BTN_B,        
+        "x_btn":ecodes.BTN_X,        
+        "y_btn":ecodes.BTN_Y,
+        "z_btn":ecodes.BTN_Z,
+        "left_bumper":ecodes.BTN_TL,
+        "right_bumper":ecodes.BTN_TR,
+        "left_joy_btn":ecodes.BTN_THUMBL,
+        "right_joy_btn":ecodes.BTN_THUMBR,
+        "dpad_up":ecodes.BTN_DPAD_UP,
+        "dpad_down":ecodes.BTN_DPAD_DOWN,
+        "dpad_left":ecodes.BTN_DPAD_LEFT,
+        "dpad_right":ecodes.BTN_DPAD_RIGHT,
+    },
+    "SHANWAN":{
+        "left_joy_x":ecodes.ABS_X,
+        "left_joy_y":ecodes.ABS_Y,
+        "left_trigger":ecodes.ABS_BRAKE,        
+        "right_joy_x":ecodes.ABS_RX,
+        "right_joy_y":ecodes.ABS_RZ,
+        "right_trigger":ecodes.ABS_GAS,
+        "a_btn":ecodes.BTN_A,        
+        "b_btn":ecodes.BTN_B,        
+        "x_btn":ecodes.BTN_X,        
+        "y_btn":ecodes.BTN_Y,
+        "z_btn":ecodes.BTN_Z,
+        "left_bumper":ecodes.BTN_TL,
+        "right_bumper":ecodes.BTN_TR,
+        "left_joy_btn":ecodes.BTN_THUMBL,
+        "right_joy_btn":ecodes.BTN_THUMBR,
+        "dpad_up":ecodes.BTN_DPAD_UP,
+        "dpad_down":ecodes.BTN_DPAD_DOWN,
+        "dpad_left":ecodes.BTN_DPAD_LEFT,
+        "dpad_right":ecodes.BTN_DPAD_RIGHT,
+    }
+}
+
+#print off keys 
+keys = ecodes.ecodes.keys()
+for key in keys:
+
+    try:
+        print(f"{key}: {ecodes.ecodes[key]}")
+    except:
+        print(f"Failed to find key{key}")
 
 #ROS node def
 class RocketLeague(Node):
@@ -28,12 +84,14 @@ class RocketLeague(Node):
     x_nudge = 0.0
     y_nudge = 0.0
 
-    def __init__(self, queue: Queue):
+    def __init__(self, queue: Queue, typeQueue: Queue):
         super().__init__("RocketLeague")
 
         self.create_timer(0.033, self.handleEvents)
 
         self.event_queue = queue
+        self.type_queue = typeQueue
+        self.controller_type = None
 
         self.left_joy_x = 0
         self.left_joy_y = 0
@@ -77,149 +135,158 @@ class RocketLeague(Node):
     def handleEvents(self):
         #self.get_logger().info("Here")
 
+        #check for a new controller type
+        while not self.type_queue.empty():
+            self.controller_type = self.type_queue.get()
+
+        #don't attempt to handle events without a known controller type
+        if(self.controller_type is None):
+            return
+
         #go through events in queue
         while not self.event_queue.empty():
             event = eventQueue.get()
+
+            print(event.code)
 
             if(event.type == ecodes.EV_ABS):
                 #event is axis
 
                 #map axis and normalize -1 to 1
-                match event.code:
+                if(event.code == mappings[self.controller_type]["left_joy_x"]):
+                    self.left_joy_x = -(event.value - 128) / 128
 
-                    case ecodes.ABS_X:
-                        self.left_joy_x = -(event.value - 128) / 128
+                    #apply a deazone 
+                    if(abs(self.left_joy_x) < .05):
+                        self.left_joy_x = 0
 
-                        #apply a deazone 
-                        if(abs(self.left_joy_x) < .05):
-                            self.left_joy_x = 0
+                elif(event.code == mappings[self.controller_type]["left_joy_y"]):
+                    self.left_joy_y = -(event.value - 128) / 128
 
-                    case ecodes.ABS_Y:
-                        self.left_joy_y = -(event.value - 128) / 128
+                    #apply a deazone 
+                    if(abs(self.left_joy_y) < .05):
+                        self.left_joy_y = 0
 
-                        #apply a deazone 
-                        if(abs(self.left_joy_y) < .05):
-                            self.left_joy_y = 0
+                elif(event.code == mappings[self.controller_type]["left_trigger"]):
+                    self.left_trigger = (event.value) / 255
 
-                    case ecodes.ABS_Z:
-                        self.left_trigger = (event.value) / 255
-                    case ecodes.ABS_RX:
-                        self.right_joy_x = -(event.value - 128) / 128
-                    case ecodes.ABS_RY:
-                        self.right_joy_y = -(event.value - 128) / 128
-                    case ecodes.ABS_RZ:
-                        self.right_trigger = (event.value) / 255
+                elif(event.code == mappings[self.controller_type]["right_joy_x"]):
+                    self.right_joy_x = -(event.value - 128) / 128
+
+                elif(event.code == mappings[self.controller_type]["right_joy_y"]):
+                    self.right_joy_y = -(event.value - 128) / 128
+
+                elif(event.code == mappings[self.controller_type]["right_trigger"]):
+                    self.right_trigger = (event.value) / 255
                 
             elif event.type == ecodes.EV_KEY:
                 #event is a button
-                match event.code:
-                    case ecodes.BTN_A:
-                        #handle X button
+                if(event.code == mappings[self.controller_type]["a_btn"]):
+                    #handle X button
 
-                        self.get_logger().info("1")
-                    case ecodes.BTN_B:
-                        #handle circle button
-                        if(event.value == 1):
-                            if(self.stunt_triggered == False):
-                                #barrel roll
-                                msg = UInt16()
-                                msg.data = 2
-                                self.stunt_trigger_pub.publish(msg)
+                    self.get_logger().info("1")
+                elif(event.code == mappings[self.controller_type]["b_btn"]):
+                    #handle circle button
+                    if(event.value == 1):
+                        if(self.stunt_triggered == False):
+                            #barrel roll
+                            msg = UInt16()
+                            msg.data = 2
+                            self.stunt_trigger_pub.publish(msg)
 
-                                self.stunt_cancel_timer = self.create_timer(1, self.detriggerStunt)
+                            self.stunt_cancel_timer = self.create_timer(1, self.detriggerStunt)
 
-                                self.stunt_triggered = True
+                            self.stunt_triggered = True
 
-                    case ecodes.BTN_X:
-                        #handle triangle button
+                elif(event.code == mappings[self.controller_type]["y_btn"]):
+                    #handle triangle button
 
-                        if(event.value == 1):
-                            if(self.stunt_triggered == False):
-                                #front roll
-                                msg = UInt16()
-                                msg.data = 1
-                                self.stunt_trigger_pub.publish(msg)
+                    if(event.value == 1):
+                        if(self.stunt_triggered == False):
+                            #front roll
+                            msg = UInt16()
+                            msg.data = 1
+                            self.stunt_trigger_pub.publish(msg)
 
-                                self.stunt_cancel_timer = self.create_timer(1, self.detriggerStunt)
+                            self.stunt_cancel_timer = self.create_timer(1, self.detriggerStunt)
 
-                                self.stunt_triggered = True
+                            self.stunt_triggered = True
 
-                    case ecodes.BTN_Y:
-                        #handle square button
-                        self.get_logger().info("4")
-
-
-                    case ecodes.BTN_Z:
-                        #handle A button
-                        self.get_logger().info("5")
+                elif(event.code == mappings[self.controller_type]["x_btn"]):
+                    #handle square button
+                    self.get_logger().info("4")
 
 
-                    case ecodes.BTN_THUMBR:
-                        #handle right joy button
-                        if(event.value == 1):
-                            #handle left bumper button
-                            self.current_target_depth =  self.current_target_depth - self.depth_increment 
+                elif(event.code == mappings[self.controller_type]["z_btn"]):
+                    #handle A button
+                    self.get_logger().info("5")
 
-                    case ecodes.BTN_THUMBL:
-                        #handle left joy button
-                        if(event.value == 1):
-                            self.current_target_depth = self.current_target_depth + self.depth_increment       
+                elif(event.code == mappings[self.controller_type]["right_joy_btn"]):
+                    #handle right joy button
+                    if(event.value == 1):
+                        #handle left bumper button
+                        self.current_target_depth =  self.current_target_depth - self.depth_increment 
 
-                            #don't try to go above zero
-                            if(self.current_target_depth > 0):
-                                self.current_target_depth = 0.0
+                elif(event.code == mappings[self.controller_type]["left_joy_btn"]):
+                    #handle left joy button
+                    if(event.value == 1):
+                        self.current_target_depth = self.current_target_depth + self.depth_increment       
 
-                    case ecodes.BTN_TL:
-                        self.get_logger().info("7")
+                        #don't try to go above zero
+                        if(self.current_target_depth > 0):
+                            self.current_target_depth = 0.0
 
-                    case ecodes.BTN_TR:
-                        #handle right bumper button Int16
-                        #trigger boost
-                        if(event.value == 1):
-                            if(not self.boost_triggered):
-                                #mark boost as triggered
-                                self.boost_triggered = True
+                elif(event.code == mappings[self.controller_type]["left_bumper"]):
+                    self.get_logger().info("7")
 
-                                #pub msg to trigger boost
-                                boost_msg = Bool()
-                                boost_msg.data = True
-                                self.boost_trigger_pub.publish(boost_msg)
+                elif(event.code == mappings[self.controller_type]["right_bumper"]):
+                    #handle right bumper button Int16
+                    #trigger boost
+                    if(event.value == 1):
+                        if(not self.boost_triggered):
+                            #mark boost as triggered
+                            self.boost_triggered = True
 
-                                print(event.value)
+                            #pub msg to trigger boost
+                            boost_msg = Bool()
+                            boost_msg.data = True
+                            self.boost_trigger_pub.publish(boost_msg)
+
+                            print(event.value)
 
 
-                                self.boost_cancel_timer = self.create_timer(5, self.detriggerBoost)
+                            self.boost_cancel_timer = self.create_timer(5, self.detriggerBoost)
 
-                    case ecodes.BTN_DPAD_UP:
-                        #handle dpad up
-                        if(event.value == 1):
-                            self.x_nudge = 1.0
-                        elif(self.x_nudge == 1.0):
-                            self.x_nudge = 0.0
+                elif(event.code == mappings[self.controller_type]["dpad_up"]):
+                    #handle dpad up
+                    if(event.value == 1):
+                        self.x_nudge = 1.0
+                    elif(self.x_nudge == 1.0):
+                        self.x_nudge = 0.0
 
-                    case ecodes.BTN_DPAD_DOWN:
-                        #handle dpad up
+                elif(event.code == mappings[self.controller_type]["dpad_down"]):
+                    #handle dpad down
 
-                        if(event.value == 1):
-                            self.x_nudge = -1.0
-                        elif(self.x_nudge == -1.0):
-                            self.x_nudge = 0.0
+                    if(event.value == 1):
+                        self.x_nudge = -1.0
+                    elif(self.x_nudge == -1.0):
+                        self.x_nudge = 0.0
 
-                    case ecodes.BTN_DPAD_LEFT:
-                        #handle dpad up
+                elif(event.code == mappings[self.controller_type]["dpad_right"]):
+                    #handle dpad left
 
-                        if(event.value == 1):
-                            self.y_nudge = 1.0
-                        elif(self.y_nudge == 1.0):
-                            self.y_nudge = 0.0
+                    if(event.value == 1):
+                        self.y_nudge = 1.0
+                    elif(self.y_nudge == 1.0):
+                        self.y_nudge = 0.0
 
-                    case ecodes.BTN_DPAD_RIGHT:
-                        #handle dpad up
+                elif(event.code == mappings[self.controller_type]["dpad_left"]):
+                    #handle dpad right
 
-                        if(event.value == 1):
-                            self.y_nudge = -1.0
-                        elif(self.y_nudge == -1.0):
-                            self.y_nudge = 0.0      
+                    if(event.value == 1):
+                        self.y_nudge = -1.0
+                    elif(self.y_nudge == -1.0):
+                        self.y_nudge = 0.0      
 
         #pub values
         msg = Float32()
@@ -299,16 +366,17 @@ async def read_controller_events():
 
             #connect a controller
 
-            controllerType = "PLAYSTATION(R)3"  #name of the controller trying to find
+            controllerTypes = ["PLAYSTATION(R)3", "SHANWAN"]  #name of the controller trying to find
 
             devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
 
             for device in devices:
+                for type in controllerTypes:
+                    if(type in device.name):
+                        controller = device
+                        typeQueue.put(type)
 
-                if(controllerType in device.name):
-                    controller = device
-
-                    print("Controller connected: ", device.path, device.name, device.phys)
+                        print("Controller connected: ", device.path, device.name, device.phys)
 
         else:
             #controller found
@@ -333,7 +401,7 @@ def main(args=None):
 
     rclpy.init(args=args)
 
-    rl = RocketLeague(eventQueue)
+    rl = RocketLeague(eventQueue, typeQueue)
 
     rclpy.spin(rl)
 
