@@ -7,7 +7,7 @@ from queue import Queue
 import rclpy
 from rclpy.node import Node
 from threading import Thread
-from std_msgs.msg import Float32, Bool, UInt16
+from std_msgs.msg import Float32, Bool, UInt16, Empty
 from geometry_msgs.msg import Twist
 from riptide_msgs2.msg import ControllerCommand
 from rclpy.qos import qos_profile_sensor_data, qos_profile_system_default
@@ -67,13 +67,13 @@ mappings = {
 }
 
 #print off keys 
-keys = ecodes.ecodes.keys()
-for key in keys:
+# keys = ecodes.ecodes.keys()
+# for key in keys:
 
-    try:
-        print(f"{key}: {ecodes.ecodes[key]}")
-    except:
-        print(f"Failed to find key{key}")
+#     try:
+#         print(f"{key}: {ecodes.ecodes[key]}")
+#     except:
+#         print(f"Failed to find key{key}")
 
 #ROS node def
 class RocketLeague(Node):
@@ -111,6 +111,8 @@ class RocketLeague(Node):
         #action pubs
         self.boost_trigger_pub = self.create_publisher(Bool, "/talos/teleop/trigger_boost", qos_profile=qos_profile_system_default)
         self.stunt_trigger_pub = self.create_publisher(UInt16, "/talos/controller/stunt_state", qos_profile=qos_profile_system_default)
+        self.torpedo_trigger_pub = self.create_publisher(Empty, "/talos/command/simple_torpedo_fire", qos_profile_system_default)
+        self.dropper_trigger_pub = self.create_publisher(Empty, "/talos/command/simple_dropper_fire", qos_profile_system_default)
 
         #parameters
         self.declare_parameter("default_depth", value= 1.0)
@@ -147,7 +149,7 @@ class RocketLeague(Node):
         while not self.event_queue.empty():
             event = eventQueue.get()
 
-            print(event.code)
+            #print(event.code)
 
             if(event.type == ecodes.EV_ABS):
                 #event is axis
@@ -182,9 +184,13 @@ class RocketLeague(Node):
             elif event.type == ecodes.EV_KEY:
                 #event is a button
                 if(event.code == mappings[self.controller_type]["a_btn"]):
-                    #handle X button
+                    #handle X button - droppper
 
-                    self.get_logger().info("1")
+                    if(event.value == 1):
+                        msg = Empty()
+                        self.dropper_trigger_pub.publish(msg)
+
+
                 elif(event.code == mappings[self.controller_type]["b_btn"]):
                     #handle circle button
                     if(event.value == 1):
@@ -213,14 +219,16 @@ class RocketLeague(Node):
                             self.stunt_triggered = True
 
                 elif(event.code == mappings[self.controller_type]["x_btn"]):
-                    #handle square button
-                    self.get_logger().info("4")
+                    #handle square button - trigger torps
+                    if(event.value == 1):
+                        msg = Empty()
+                        self.torpedo_trigger_pub.publish(msg)
 
 
                 elif(event.code == mappings[self.controller_type]["z_btn"]):
-                    #handle A button
-                    self.get_logger().info("5")
+                    #handle A button - trigger marker
 
+                    self.get_logger().info("Congrats, you have found a wild Z button!")
                 elif(event.code == mappings[self.controller_type]["right_joy_btn"]):
                     #handle right joy button
                     if(event.value == 1):
