@@ -2,7 +2,7 @@
 
 import os
 from subprocess import run, PIPE, TimeoutExpired
-
+from collections import deque
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_services_default, qos_profile_system_default
@@ -42,7 +42,7 @@ ACTIVE_CONTROLLER_NAMES = ["PID", "SMC"]
 THRUSTER_SOLVER_WEIGHT_MATRIX_TOPIC = "controller/solver_weights"
 
 #paramters that cannot be pulled from yaml but still need setting
-SPECIAL_PARAMTERS = ["talos_wrenchmat"]
+SPECIAL_PARAMETERS = ["talos_wrenchmat"]
 
 FF_PUBLISH_PARAM = "disable_native_ff"
 FF_TOPIC_NAME = "controller/FF_body_force"
@@ -53,11 +53,213 @@ WEIGHTS_FORCE_UPDATE_PERIOD = 1
 
 G = 9.8067
 
-#manages parameters for the controller / thruster solver
-class controllerOverseer(Node):
 
+"""
+things to test:
+- up/down detection
+- list param works correctly
+- set param works correctly
+- monitored client works correctly
+- service timeout works correctly
+- list param callback works correctly
+- set callback works correctly
+- set param callback works correctly
+
+
+"""
+
+# wrapper class for rclpy service which monitors for timeouts and prevents concurrent operations
+# only one call is allowed at a time as these clients will be used to interact with parameters
+class MonitoredServiceClient():
+    waiting_for_client = False
+    waiting_requests = deque([])
+    
+    def __init__(self, node: rclpy.Node, srv_type: type, srv_name: str):
+        self.node = node
+        self.client = node.create_client(srv_type, srv_name)
+        self.timer = node.create_timer(0.5, self._timer_callback)
+    
+    
+    def schedule_call(self, request, callback):
+        self.waiting_requests.append((request, callback))
+    
+    
+    def _timer_callback(self):
+        current_time = self.node.get_clock().now()
+        if self.waiting_for_client:
+            # check if timed out
+            if current_time - self.srv_start_time.seconds_nanoseconds()[0] >= 3:
+                self.node.get_logger().error(f"Call to service {self.client.srv_name} timed out.")
+                self.client.remove_pending_request(self.active_future)
+                self.waiting_requests.popleft()
+                self.waiting_for_client = False
+        else:
+            if len(self.waiting_requests) == 0:
+                # able to schedule the next thing
+                (request, _) = self.waiting_requests[0]
+                self.active_future = self.client.call_async(request)
+                self.active_future.add_done_callback(self.srv_callback)
+                self.srv_start_time = current_time
+    
+    
+    def srv_callback(self, future: rclpy.Future):
+        #pop queue, call callback
+        (_, callback) = self.waiting_requests.popleft()
+        self.waiting_for_client = False
+        callback(future)
+
+
+#manages an individual simulink model.
+class SimulinkModelNode():
+    model_active = False
+    full_node_name = ""
+    list_param_client = None
+    set_param_client = None
+    
+    
+    def __init__(self, node: 'ControllerOverseer', node_name: str):
+        self.overseer_node = node
+        self.node_name = node_name
+    
+    
+    # checks if the model is active. Handles when model comes up or goes down
+    # IMPORTANT: active_nodes must be a list of the FULL node names (e.g. /talos/...).
+    def check_if_active(self, active_nodes: 'list[str]'):
+        active_model_nodes = [node for node in active_nodes if self.node_name in node]
+        num_active_model_nodes = len(active_model_nodes)
+        if num_active_model_nodes == 0:
+            # no nodes with the expected name. not useful
+            return
+        if num_active_model_nodes > 1:
+            # not useful, but interesting. Print it out
+            self.overseer_node.get_logger().warning(f"Detected {num_active_model_nodes} active nodes with the name {self.node_name}!")
+            return
+
+        self.full_node_name = active_model_nodes[0]
+        
+        # if we got here, then we have a node we can control
+        # if the solver previously wasn't active
+        if not self.model_active and self.param_set_clear: #TODO: is if necessary
+            #note the solver is active
+            
+            self.model_active = True
+
+            #set so no other model can being having its params set
+            self.param_set_clear = False #TODO: eval and remove if necessary
+            
+            self.overseer_node.get_logger().info(f"Found {self.node_name} as {self.full_node_name}!")
+
+            #the client to set the params of the model
+            self.list_param_client = MonitoredServiceClient(self.overseer_node, ListParameters, f"{self.full_node_name}/list_parameters")
+            self.set_param_client = MonitoredServiceClient(self.overseer_node, SetParameters, f"{self.full_node_name}/set_parameters")
+
+
+    # resolves the available parameters on the model and then sets them.
+    def list_and_set_model_parameters(self):
+        self.list_param_client.schedule_call(ListParameters.Request(), self.set_model_parameters_from_list_callback)
+    
+    
+    # sets model parameters from the provided list
+    def set_model_parameters(self, parameters: 'list[str]'):
+        rq = SetParameters.Request()
+        param_array = []
+        
+        for parameter_name in parameters:
+            val = ParameterValue()
+            param = Parameter()
+            
+            #get parameter type and value
+            read_value, type = self.get_param_value(parameter_name)
+            if not read_value is None:
+                if type == int:
+                    #set integer values
+                    val.integer_value = int(PARAMETER_SCALE * read_value)
+                    val.type = ParameterType.PARAMETER_INTEGER                    
+                
+                elif type == float:
+                    #set integer values
+                    val.integer_value = int(PARAMETER_SCALE * read_value)
+                    val.type = ParameterType.PARAMETER_INTEGER
+                    
+                elif type == list:
+                    #set integer array values
+
+                    int_val_array = []
+                    for item in read_value:
+                        int_val_array.append(int(item * PARAMETER_SCALE))
+
+                    val.integer_array_value = int_val_array
+                    val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+                elif type == bool:
+                    #set boolean parameters
+
+                    val.bool_value = read_value
+                    val.type = ParameterType.PARAMETER_BOOL
+
+                else:
+                    self.overseer_node.get_logger().warn(f"Paramter type {type} not handled yet")
+
+                param.value = val
+                param.name = parameter_name
+                param_array.append(param)
+
+                self.overseer_node.get_logger().info(f"Setting {parameter_name} to {val}")
+
+            else:
+                self.overseer_node.get_logger().info(f"Not setting param {parameter_name}, no param found in config file!")
+
+        rq.parameters = param_array
+        self.set_param_client.schedule_call(rq, self.set_parameters_done_callback)
+    
+    
+    # can be used as a list parameters service callback which immediately attempts to set the available parameters
+    def set_model_parameters_from_list_callback(self, future: rclpy.Future):
+        self.set_model_parameters(future.result().names)
+        
+    
+    # callback for when parameter set completes
+    def set_parameters_done_callback(self, future: rclpy.Future):
+        result = future.result()
+        if result.successful:
+            self.overseer_node.get_logger().info(f"Successfully set parameters for {self.node_name}")
+        else:
+            self.overseer_node.get_logger().error(f"Failed to set parameters for {self.node_name}: {result.reason}")
+
+    
+    #gets a parameter value and type from the config
+    def get_param_value(self, param_name):
+        #check to see if the param is special
+        if param_name in SPECIAL_PARAMETERS:
+            if param_name == "talos_wrenchmat":
+                #change to 1D array
+                effects_1D = []
+                for column in self.overseer_node.thrusterEffects:
+                    for effect in column:
+                        effects_1D.append(effect)
+
+                return effects_1D, list
+            else:
+                self.overseer_node.get_logger().warn("Undefine special parameter!")
+
+        #load the parameter value from the config file
+        config_tree = self.overseer_node.configTree
+        split_path = str.split(param_name, "__")
+        try:
+            for part_path in split_path:
+                config_tree = config_tree[part_path]
+        except:
+            return None, None
+        else:
+            #executed when no exception
+            return config_tree, type(config_tree)
+        
+            
+
+#manages parameters for the controller / thruster solver
+class ControllerOverseer(Node):
     escPowerStopsLow = 0
     escPowerStopsHigh = 0
+    configTree = {}
 
     def __init__(self):
         super().__init__("controllerOverseer")
@@ -89,9 +291,9 @@ class controllerOverseer(Node):
 
         #set the member configuration path variable
         self.setConfigPath()
-
-        #read in yaml
-        self.readInRobotYaml()
+        
+        #read config
+        self.readConfig()
 
         #generate thruster force matrix
         self.generateThrusterForceMatrix(self.thruster_info, self.com)
@@ -198,7 +400,7 @@ class controllerOverseer(Node):
         #set the path to the config file
         #reload in file from scratch just incase the target yaml has changed
         self.configPath = self.get_parameter("vehicle_config").value
-        if(self.configPath == ''):
+        if self.configPath == '':
             # Try to locate the source directory, and use that configuration file directly
             descriptions_share_dir = get_package_share_directory("riptide_descriptions2")
 
@@ -224,74 +426,14 @@ class controllerOverseer(Node):
                         self.configPath = path_check
                         self.get_logger().info(f"Discovered source directory, overriding descriptions to use '{self.configPath}'")
                         break
-
-    def readInRobotYaml(self):
-
-        with open(self.configPath, "r") as config:
-            config_file = yaml.safe_load(config)
-
-        #read in kill plane height
-        self.killPlane = config_file["controller_overseer"]["thruster_kill_plane"]
-
-        #read in thruster pose data
-        self.thruster_info = config_file['thrusters']
-
-        #read in com data
-        self.com = config_file["com"]
-
-        #read in coefficents
-        thruster_solver_info = config_file["thruster_solver"]
-        self.forceToRPMCoefficents = thruster_solver_info["force_to_rpm_coefficents"]
-
-        #read in weight info
-        self.defaultWeight = thruster_solver_info["default_weight"]
-        self.surfaceWeight = thruster_solver_info["surfaced_weight"]
-        self.disabledWeight = thruster_solver_info["disable_weight"]
-        self.lowDowndraftWeight = thruster_solver_info["low_downdraft_weight"]
-
-        #read in solver limit params
-        self.systemThrustLimit = thruster_solver_info["system_thrust_limit"]
-        self.individualThrustLimit = thruster_solver_info["individual_thrust_limit"]
-        
-        #read in solver mask param
-        self.activeTwistMask = thruster_solver_info["active_force_mask"]
-
-        #read in ff properties
-        self.talos_mass = config_file["mass"]
-        self.talos_COM = config_file["com"]
-        self.talos_base_wrench = config_file["controller"]["feed_forward"]["base_wrench"]
-        self.talos_rotational_inertias = config_file["inertia"]
-
-        #SMC specific parameters
-        self.talos_drag_coefficents = config_file["controller"]["SMC"]["damping"]
-        self.talos_angular_regen = config_file["controller"]["SMC"]["SMC_params"]["angular_regeneration_threshold"]
-        self.talos_linear_regen = config_file["controller"]["SMC"]["SMC_params"]["linear_regeneration_threshold"]
-        self.talos_angular_stationkeep = config_file["controller"]["SMC"]["SMC_params"]["angular_stationkeep_threshold"]
-        self.talos_linear_stationkeep = config_file["controller"]["SMC"]["SMC_params"]["linear_stationkeep_threshold"]
-        self.talos_eta_0_values = config_file["controller"]["SMC"]["SMC_params"]["eta_order_0"]
-        self.talos_eta_1_values = config_file["controller"]["SMC"]["SMC_params"]["eta_order_1"]
-        self.talos_lambda_values = config_file["controller"]["SMC"]["SMC_params"]["lambda"]
-        
-        #gravity well params (replacing motion profiles)
-        self.talos_velocity_curve_params = config_file["controller"]["SMC"]["SMC_params"]["velocity_curve_params"]
-        
-        #motion generation params (unused. TODO: DELETE)
-        self.talos_vmax_values = config_file["controller"]["SMC"]["motion_profile_params"]["max_velocity"]
-        self.talos_amax_values = config_file["controller"]["SMC"]["motion_profile_params"]["max_acceleration"]
-        self.talos_jmax_values = config_file["controller"]["SMC"]["motion_profile_params"]["max_jerk"]
-        self.talos_radial_function_count = config_file["controller"]["SMC"]["motion_profile_params"]["radial_function_count"]
-        
-        #PID specific parameters
-        self.talos_p_gains = config_file["controller"]["PID"]["p_gains"]
-        self.talos_i_gains = config_file["controller"]["PID"]["i_gains"]
-        self.talos_d_gains = config_file["controller"]["PID"]["d_gains"]        
-        self.talos_p_surface_gains = config_file["controller"]["PID"]["p_surface_gains"]
-        self.talos_i_surface_gains = config_file["controller"]["PID"]["i_surface_gains"]
-        self.talos_d_surface_gains = config_file["controller"]["PID"]["d_surface_gains"]
-        self.talos_max_control = config_file["controller"]["PID"]["max_control_threshholds"]
-        self.talos_surface_gain_floor = config_file["controller"]["PID"]["surface_gain_floor"]
-        self.talos_surface_gain_buffer = config_file["controller"]["PID"]["surface_gain_buffer"]
-        self.talos_pid_reset_threshold = config_file["controller"]["PID"]["reset_threshold"]
+    
+    
+    def readConfig(self):
+        try:
+            with open(self.overseer_node.configPath, "r") as config:
+                self.configTree = yaml.safe_load(config)
+        except:
+            self.get_logger().error("Cannot open config file!")
 
 
     def thrusterTelemetryCB(self, msg: DshotPartialTelemetry):
@@ -302,7 +444,7 @@ class controllerOverseer(Node):
         self.escPowerCheckTimer.reset()
 
         # which thrusters - groups of 4
-        if(msg.start_thruster_num == 0):
+        if msg.start_thruster_num == 0:
             #check wether each thruster is active
             for i, esc in enumerate(msg.esc_telemetry):
                 if not esc.thruster_ready:
@@ -339,7 +481,7 @@ class controllerOverseer(Node):
                 self.escPowerStopsHigh = 0     
 
         #adjust the weights of the thruster solver if anything has changed
-        if(adjustWeights):
+        if adjustWeights:
             self.adjustThrusterWeights()
 
         motionMsg = Bool()
@@ -382,7 +524,7 @@ class controllerOverseer(Node):
         #check if thrusters are submerged - everytime odom is updated - just using as a frequency
 
         #start the start time on first cb
-        if(self.startTime is None):
+        if self.startTime is None:
             self.startTime = self.get_clock().now()
 
         submerged = [False, False, False, False, False, False, False, False]
@@ -402,7 +544,7 @@ class controllerOverseer(Node):
                 self.adjustThrusterWeights()
 
         except Exception as ex:
-            if(self.get_clock().now().to_msg().sec >= ERROR_PATIENCE + self.startTime.to_msg().sec):
+            if self.get_clock().now().to_msg().sec >= ERROR_PATIENCE + self.startTime.to_msg().sec:
                 self.get_logger().error("Thruster Position Lookup failed with exception: " + str(ex))
 
     def adjustThrusterWeights(self):
@@ -414,7 +556,7 @@ class controllerOverseer(Node):
 
         #shutoff inactive thrusters - disabled or broken
         for i, isActive in enumerate(self.activeThrusters):
-            if(isActive):
+            if isActive:
                 activeThrusterCount += 1
 
                 #play around with weights for thrusters above surface
@@ -430,7 +572,7 @@ class controllerOverseer(Node):
                 #if a thruster is inactive - raise the cost of "using" thruster
                 self.thrusterWeights[i] = self.disabledWeight
 
-        if(activeThrusterCount <= 6):
+        if activeThrusterCount <= 6:
             #if system is not full actuated, it cannot be optimized, very high rpms / force can be requested
             #for the safety of the system, this will autodisable robot (probably)
             #remove if PIA
@@ -440,16 +582,16 @@ class controllerOverseer(Node):
         else:
             self.enabled = True
 
-        if(submerdgedThrusters >= 8):
+        if submerdgedThrusters >= 8:
             #take into account control modes only if all actuators are working
 
-            if(self.thrusterMode == 2):
+            if self.thrusterMode == 2:
                 #apply low downdraft
                 self.thrusterWeights[4] = self.lowDowndraftWeight
                 self.thrusterWeights[5] = self.lowDowndraftWeight
 
         #impose disable weight if nessecary
-        if(self.thrusterMode == 0):
+        if self.thrusterMode == 0:
             self.thrusterWeights = [0,0,0,0,0,0,0,0]
 
         msg = Int32MultiArray()
@@ -477,36 +619,7 @@ class controllerOverseer(Node):
 
         for nodeName in get_node_names(node=self):
 
-            #check the thruster solver
-            if self.thrusterSolverName in nodeName.name:
-
-                #mark as found!
-                found_thruster_solver = True
-
-                #if the solver previously wasn't active
-                if(not self.solverActive and self.param_set_clear):
-
-                    #note the solver is active
-                    self.get_logger().info("Found Sovler")
-
-                    self.solverActive = True
-
-                    #set so no other model can being having its params set
-                    self.param_set_clear = False
-
-                    #the name of the node currently having its params set
-                    self.working_model_node_name = "/" + nodeName.name
-                    if(nodeName.namespace is not None):
-                        if(nodeName.namespace != '' or nodeName.namespace != '/'):
-                            self.working_model_node_name = nodeName.namespace + "/" + nodeName.name
-
-                    self.get_logger().info("self.working_model_node_name")
-
-                    #the client to set the params of the model
-                    self.set_param_client = self.create_client(SetParameters, f"{self.working_model_node_name}/set_parameters")
-
-                    #set the model's parameters
-                    self.set_model_paramters_timer = self.create_timer(0.5, self.setModelParameters)
+            
 
 
             #check the active controller
@@ -516,7 +629,7 @@ class controllerOverseer(Node):
                 found_PID= True
 
                 #if the solver previously wasn't active
-                if(not self.pidActive and self.param_set_clear):
+                if not self.pidActive and self.param_set_clear:
                     #note the pid is active
                     self.get_logger().info("Found PID")
 
@@ -527,8 +640,8 @@ class controllerOverseer(Node):
 
                     #the name of the node currently having its params set
                     self.working_model_node_name = "/" + nodeName.name
-                    if(nodeName.namespace is not None):
-                        if(nodeName.namespace != '' or nodeName.namespace != '/'):
+                    if nodeName.namespace is not None:
+                        if nodeName.namespace != '' or nodeName.namespace != '/':
                             self.working_model_node_name = nodeName.namespace + "/" + nodeName.name
 
                     #the client to set the params of the model
@@ -545,7 +658,7 @@ class controllerOverseer(Node):
                 found_SMC = True
 
                 #if the solver previously wasn't active
-                if(not self.solverActive and self.param_set_clear):
+                if not self.solverActive and self.param_set_clear:
                     #note the smc is active
                     self.get_logger().info("Found SMC")
 
@@ -556,8 +669,8 @@ class controllerOverseer(Node):
 
                     #the name of the node currently having its params set
                     self.working_model_node_name = "/" + nodeName.name
-                    if(nodeName.namespace is not None):
-                        if(nodeName.namespace != '' or nodeName.namespace != '/'):
+                    if nodeName.namespace is not None:
+                        if nodeName.namespace != '' or nodeName.namespace != '/':
                             self.working_model_node_name = nodeName.namespace + "/" + nodeName.name
 
                     #the client to set the params of the model
@@ -574,7 +687,7 @@ class controllerOverseer(Node):
                 found_complete = True
 
                 #if the solver previously wasn't active
-                if(not self.completeActive and self.param_set_clear):
+                if not self.completeActive and self.param_set_clear:
                     #note the solver is active
                     self.get_logger().info("Found Complete Controller")
 
@@ -585,8 +698,8 @@ class controllerOverseer(Node):
 
                     #the name of the node currently having its params set
                     self.working_model_node_name = "/" + nodeName.name
-                    if(nodeName.namespace is not None):
-                        if(nodeName.namespace != '' and nodeName.namespace != '/'):
+                    if nodeName.namespace is not None:
+                        if nodeName.namespace != '' and nodeName.namespace != '/':
                             self.working_model_node_name = nodeName.namespace + "/" + nodeName.name
 
                     #the client to set the params of the model
@@ -629,7 +742,7 @@ class controllerOverseer(Node):
             msg.angular.z = self.talos_base_wrench[5]
 
             self.ffPub.publish(msg)
-        elif(self.publishingFF == True):
+        elif self.publishingFF == True:
             #send zero before finishing
             self.publishingFF = False
             msg = Twist()
@@ -644,7 +757,7 @@ class controllerOverseer(Node):
 
     def reloadParams(self, param_name):
         #reload params for a model
-
+        self.readConfig()
         while(not self.param_set_clear):
             #ensure no one else is currently setting parameters
             self.param_set_clear = True
@@ -652,126 +765,22 @@ class controllerOverseer(Node):
 
             self.set_model_paramters_timer = self.create_timer(0.5, self.setModelParameters)
 
-    def setModelParameters(self):
-        #cancel timer that called
-        self.set_model_paramters_timer.cancel()
-
-        result = None
-
-        try:
-            cmd = [f"ros2 service call {self.working_model_node_name}/list_parameters rcl_interfaces/srv/ListParameters"]
-            result = run(cmd, stdout=PIPE, stderr=PIPE, timeout=3, shell=True)
-            #stupid string logic
-        except TimeoutExpired as TE:
-            self.get_logger().info("Timed out service, reattempting")
-            self.set_model_paramters_timer = self.create_timer(3, self.setModelParameters)
-            return
-                
-        try:
-            param_names = str.split(str.split(str.split(str(result), "names=['")[1], "']")[0], "', '")
-
-            self.param_set_timer = self.create_timer(0.1, lambda: self.setParamsFromNames(param_names))
-        except IndexError as e:
-            self.get_logger().error("Failed to parse parms:" + str(result))
-            self.param_set_clear = True
-
-
-    def setParamsFromNames(self, names):
-        #set the paramters using the name path method
-
-        rq = SetParameters.Request()
-        param_array = []
-
-        for parameter_name in names:
-            val = ParameterValue()
-            param = Parameter()
-            
-            #get parameter type adn value
-            read_value, type = self.getParamValue(parameter_name)
-            if(not read_value is None):
-                if type == '''<class 'int'>''':
-                    #set integer values
-                    val.integer_value = int(PARAMETER_SCALE * read_value)
-                    val.type = ParameterType.PARAMETER_INTEGER                    
-                
-                elif type == '''<class 'float'>''':
-                    #set integer values
-                    val.integer_value = int(PARAMETER_SCALE * read_value)
-                    val.type = ParameterType.PARAMETER_INTEGER
-                    
-                elif type == '''<class 'list'>''':
-                    #set integer array values
-
-                    int_val_array = []
-                    for item in read_value:
-                        int_val_array.append(int(item * PARAMETER_SCALE))
-
-                    val.integer_array_value = int_val_array
-                    val.type = ParameterType.PARAMETER_INTEGER_ARRAY
-                elif type == '''<class 'bool'>''':
-                    #set boolean parameters
-
-                    val.bool_value = read_value
-                    val.type = ParameterType.PARAMETER_BOOL
-
-                else:
-                    self.get_logger().warn(f"Paramter type {type} not handled yet")
-
-                param.value = val
-                param.name = parameter_name
-                param_array.append(param)
-
-                self.get_logger().info(f"Setting {parameter_name} to {val}")
-
-            else:
-                self.get_logger().info(f"Not setting param {parameter_name}, no param found in config file!")
-
-        rq.parameters = param_array
-        self.future = self.set_param_client.call_async(rq)
-
-        self.param_set_timer.cancel()
-        self.param_set_clear = True
     
-    def getParamValue(self, param_name):
-        #check to see if the param is special
-        if param_name in SPECIAL_PARAMTERS:
-            if param_name == "talos_wrenchmat":
-                #change to 1D array
-                effects_1D = []
-                for column in self.thrusterEffects:
-                    for effect in column:
-                        effects_1D.append(effect)
 
-                return effects_1D, '''<class 'list'>'''
-            else:
-                self.get_logger().warn("Undefine special parameter!")
 
-        #load the paramter value from the config file
-        split_path = str.split(param_name, "__")
-
-        try:
-            with open(self.configPath, "r") as config:
-                config_tree = yaml.safe_load(config)
-
-                try:
-                    for part_path in split_path:
-                        config_tree = config_tree[part_path]
-                except:
-                    return None, None
-                else:
-                    return config_tree, str(type(config_tree))
-
-        except:
-            self.get_logger().warn("Cannot open config file!")
-            return None, None
+    
+    
+    
                 
                 
 def main(args=None):
     rclpy.init(args=args)
 
-    co = controllerOverseer()
+    co = ControllerOverseer()
 
     rclpy.spin(co)
+    
+    rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
