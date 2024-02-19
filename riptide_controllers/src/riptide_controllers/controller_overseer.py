@@ -74,7 +74,7 @@ class MonitoredServiceClient():
     waiting_for_client = False
     waiting_requests = deque([])
     
-    def __init__(self, node: rclpy.Node, srv_type: type, srv_name: str):
+    def __init__(self, node: Node, srv_type: type, srv_name: str):
         self.node = node
         self.client = node.create_client(srv_type, srv_name)
         self.timer = node.create_timer(0.5, self._timer_callback)
@@ -94,15 +94,15 @@ class MonitoredServiceClient():
                 self.waiting_requests.popleft()
                 self.waiting_for_client = False
         else:
-            if len(self.waiting_requests) == 0:
+            if len(self.waiting_requests) > 0:
                 # able to schedule the next thing
                 (request, _) = self.waiting_requests[0]
                 self.active_future = self.client.call_async(request)
-                self.active_future.add_done_callback(self.srv_callback)
+                self.active_future.add_done_callback(self._srv_callback)
                 self.srv_start_time = current_time
     
     
-    def srv_callback(self, future: rclpy.Future):
+    def _srv_callback(self, future: rclpy.Future):
         #pop queue, call callback
         (_, callback) = self.waiting_requests.popleft()
         self.waiting_for_client = False
@@ -120,96 +120,95 @@ class SimulinkModelNode():
     def __init__(self, node: 'ControllerOverseer', node_name: str):
         self.overseer_node = node
         self.node_name = node_name
-    
+        self.reload_param_service = node.create_service(Trigger, f"controller_overseer/update_{self.node_name}_params".lower(), self.reload_parameters_callback)
+
     
     # checks if the model is active. Handles when model comes up or goes down
     # IMPORTANT: active_nodes must be a list of the FULL node names (e.g. /talos/...).
     def check_if_active(self, active_nodes: 'list[str]'):
         active_model_nodes = [node for node in active_nodes if self.node_name in node]
         num_active_model_nodes = len(active_model_nodes)
-        if num_active_model_nodes == 0:
-            # no nodes with the expected name. not useful
-            return
+
         if num_active_model_nodes > 1:
             # not useful, but interesting. Print it out
             self.overseer_node.get_logger().warning(f"Detected {num_active_model_nodes} active nodes with the name {self.node_name}!")
-            return
-
-        self.full_node_name = active_model_nodes[0]
         
-        # if we got here, then we have a node we can control
-        # if the solver previously wasn't active
-        if not self.model_active and self.param_set_clear: #TODO: is if necessary
-            #note the solver is active
-            
-            self.model_active = True
+        if num_active_model_nodes == 1:
+            # if we got here, then we have a node we can control
+            # if the solver previously wasn't active
+            self.full_node_name = active_model_nodes[0]
+            if not self.model_active:
+                #note the model is active
+                self.model_active = True                
+                self.overseer_node.get_logger().info(f"Found {self.node_name} as {self.full_node_name}!")
 
-            #set so no other model can being having its params set
-            self.param_set_clear = False #TODO: eval and remove if necessary
-            
-            self.overseer_node.get_logger().info(f"Found {self.node_name} as {self.full_node_name}!")
-
-            #the client to set the params of the model
-            self.list_param_client = MonitoredServiceClient(self.overseer_node, ListParameters, f"{self.full_node_name}/list_parameters")
-            self.set_param_client = MonitoredServiceClient(self.overseer_node, SetParameters, f"{self.full_node_name}/set_parameters")
-
+                #the client to set the params of the model
+                self.list_param_client = MonitoredServiceClient(self.overseer_node, ListParameters, f"{self.full_node_name}/list_parameters")
+                self.set_param_client = MonitoredServiceClient(self.overseer_node, SetParameters, f"{self.full_node_name}/set_parameters")
+        elif self.model_active:
+            # model was active before, but not now
+            self.model_active = False
+            self.overseer_node.get_logger().warn(f"Lost {self.node_name}!")
 
     # resolves the available parameters on the model and then sets them.
     def list_and_set_model_parameters(self):
-        self.list_param_client.schedule_call(ListParameters.Request(), self.set_model_parameters_from_list_callback)
+        if self.model_active and self.list_param_client is not None:
+            self.list_param_client.schedule_call(ListParameters.Request(), self.set_model_parameters_from_list_callback)
+        else:
+            self.overseer_node.get_logger().warning(f"Cannot list parameters for {self.node_name} because the model is not active or the list parameters client is None")
     
     
     # sets model parameters from the provided list
     def set_model_parameters(self, parameters: 'list[str]'):
-        rq = SetParameters.Request()
-        param_array = []
-        
-        for parameter_name in parameters:
-            val = ParameterValue()
-            param = Parameter()
+        if self.model_active or self.node_name:
+            rq = SetParameters.Request()
+            param_array = []
             
-            #get parameter type and value
-            read_value, type = self.get_param_value(parameter_name)
-            if not read_value is None:
-                if type == int:
-                    #set integer values
-                    val.integer_value = int(PARAMETER_SCALE * read_value)
-                    val.type = ParameterType.PARAMETER_INTEGER                    
+            for parameter_name in parameters:
+                val = ParameterValue()
+                param = Parameter()
                 
-                elif type == float:
-                    #set integer values
-                    val.integer_value = int(PARAMETER_SCALE * read_value)
-                    val.type = ParameterType.PARAMETER_INTEGER
+                #get parameter type and value
+                read_value, type = self.get_param_value(parameter_name)
+                if not read_value is None:
+                    if type == int:
+                        #set integer values
+                        val.integer_value = int(PARAMETER_SCALE * read_value)
+                        val.type = ParameterType.PARAMETER_INTEGER                    
                     
-                elif type == list:
-                    #set integer array values
+                    elif type == float:
+                        #set float values
+                        val.integer_value = int(PARAMETER_SCALE * read_value)
+                        val.type = ParameterType.PARAMETER_INTEGER
+                        
+                    elif type == list:
+                        #set list array values
+                        int_val_array = []
+                        for item in read_value:
+                            int_val_array.append(int(item * PARAMETER_SCALE))
 
-                    int_val_array = []
-                    for item in read_value:
-                        int_val_array.append(int(item * PARAMETER_SCALE))
+                        val.integer_array_value = int_val_array
+                        val.type = ParameterType.PARAMETER_INTEGER_ARRAY
+                    elif type == bool:
+                        #set boolean parameters
+                        val.bool_value = read_value
+                        val.type = ParameterType.PARAMETER_BOOL
 
-                    val.integer_array_value = int_val_array
-                    val.type = ParameterType.PARAMETER_INTEGER_ARRAY
-                elif type == bool:
-                    #set boolean parameters
+                    else:
+                        self.overseer_node.get_logger().warn(f"Paramter type {type} not handled yet")
 
-                    val.bool_value = read_value
-                    val.type = ParameterType.PARAMETER_BOOL
+                    param.value = val
+                    param.name = parameter_name
+                    param_array.append(param)
 
+                    self.overseer_node.get_logger().info(f"Setting {parameter_name} to {val}")
                 else:
-                    self.overseer_node.get_logger().warn(f"Paramter type {type} not handled yet")
+                    self.overseer_node.get_logger().info(f"Not setting param {parameter_name}, no param found in config file!")
 
-                param.value = val
-                param.name = parameter_name
-                param_array.append(param)
-
-                self.overseer_node.get_logger().info(f"Setting {parameter_name} to {val}")
-
-            else:
-                self.overseer_node.get_logger().info(f"Not setting param {parameter_name}, no param found in config file!")
-
-        rq.parameters = param_array
-        self.set_param_client.schedule_call(rq, self.set_parameters_done_callback)
+            rq.parameters = param_array
+            self.set_param_client.schedule_call(rq, self.set_parameters_done_callback)
+        else:
+            self.overseer_node.get_logger().warning(f"Cannot list parameters for {self.node_name} because the model is not active or the set parameters client is None")
     
     
     # can be used as a list parameters service callback which immediately attempts to set the available parameters
@@ -252,6 +251,25 @@ class SimulinkModelNode():
         else:
             #executed when no exception
             return config_tree, type(config_tree)
+    
+    
+    # this function re-reads the config and loads the paramters onto the node.
+    # to load the parameters WITHOUT re-reading the config, use list_and_set_model_parameters
+    def reload_parameters(self):
+        self.overseer_node.readConfig()
+        self.list_and_set_model_parameters()
+    
+    
+    def reload_parameters_callback(self, request, response):
+        if self.model_active:
+            self.reload_parameters()
+            response.success = True
+            response.message = f"{self.node_name} parameter reload triggered."
+        else:
+            response.success = False
+            response.message = f"{self.node_name} is not active!"
+            
+        return response
         
             
 
@@ -264,13 +282,17 @@ class ControllerOverseer(Node):
     def __init__(self):
         super().__init__("controllerOverseer")
 
+        #
+        # Declare parameters 
+        #
+        
         #get robot name
         self.declare_parameter("robot", "")
         self.robotName = self.get_parameter("robot").value
 
         #get robot config file path
         self.declare_parameter("vehicle_config", "")
-        config_path = self.get_parameter("vehicle_config").value
+        self.config_path = self.get_parameter("vehicle_config").value
 
         #get thruster solver node name
         self.declare_parameter("thruster_solver_node_name", "")
@@ -288,12 +310,25 @@ class ControllerOverseer(Node):
         self.complete_name = self.get_parameter("complete_model_name").value
 
         self.declare_parameter(FF_PUBLISH_PARAM, False)
-
+        
         #set the member configuration path variable
         self.setConfigPath()
         
-        #read config
+        #
+        # Other setup
+        #
+        
+        # read config
         self.readConfig()
+        
+        
+        # tracked simulink models
+        self.model_nodes = [
+            SimulinkModelNode(self, "thruster_solver"),
+            SimulinkModelNode(self, "PID"),
+            SimulinkModelNode(self, "SMC"),
+            SimulinkModelNode(self, "complete_controller")
+        ]
 
         #generate thruster force matrix
         self.generateThrusterForceMatrix(self.thruster_info, self.com)
@@ -305,8 +340,6 @@ class ControllerOverseer(Node):
 
         # the thruster mode
         self.thrusterMode = 1
-
-        self.param_set_clear = True
 
         #declare pubs and subs
 
@@ -331,12 +364,6 @@ class ControllerOverseer(Node):
         #pub ff force
         self.ffPub = self.create_publisher(Twist, FF_TOPIC_NAME, qos_profile_system_default)
         
-        #services to republish params
-        
-        self.repubSrvActive = self.create_service(Trigger, "controller_overseer/update_smc_params", lambda: self.reloadParams("/talos/SMC"))
-        self.repubSrvActive = self.create_service(Trigger, "controller_overseer/update_pid_params", lambda: self.reloadParams("/talos/PID"))
-        self.repubSrvThruster = self.create_service(Trigger, "controller_overseer/update_ts_params", lambda: self.reloadParams("/talos/thruster_solver"))
-
         #timestamps to prevent spamming of param repub
         self.lastRepubPIDTime = self.get_clock().now()
         self.lastRepubSMCTime = self.get_clock().now()
@@ -364,8 +391,8 @@ class ControllerOverseer(Node):
         #is the complete controller active
         self.completeActive = False
 
-        #attempt to set the wrench matrix in the thruster solver
-        self.create_timer(1.0, self.checkIfSimulinkActive)
+        #timer to update models and ff
+        self.create_timer(1.0, self.doUpdate)
 
         #publsh msgs at frequency
         self.pubRPMMsg = None
@@ -378,9 +405,9 @@ class ControllerOverseer(Node):
         self.enabled = True
         self.publishingFF = True
 
-
-        #a timer to ensure that the active controllers stop if telemtry stops publishing!
+        #a timer to ensure that the active controllers stop if telemetry stops publishing!
         self.escPowerCheckTimer = self.create_timer(ESC_POWER_TIMEOUT, self.escPowerTimeout)
+
 
     def generateThrusterForceMatrix(self, thruster_info, com):
         #generate the thruster effect matrix
@@ -396,6 +423,7 @@ class ControllerOverseer(Node):
             #insert into thruster effect matrix
             self.thrusterEffects[i] = [forceVector[0], forceVector[1], forceVector[2], torque[0], torque[1], torque[2]]
 
+
     def setConfigPath(self):
         #set the path to the config file
         #reload in file from scratch just incase the target yaml has changed
@@ -403,7 +431,6 @@ class ControllerOverseer(Node):
         if self.configPath == '':
             # Try to locate the source directory, and use that configuration file directly
             descriptions_share_dir = get_package_share_directory("riptide_descriptions2")
-
             robot_config_subpath = os.path.join("config", self.robotName + ".yaml")
 
             # Set fallback config path if we can't find the one in source
@@ -430,10 +457,30 @@ class ControllerOverseer(Node):
     
     def readConfig(self):
         try:
-            with open(self.overseer_node.configPath, "r") as config:
+            with open(self.configPath, "r") as config:
                 self.configTree = yaml.safe_load(config)
         except:
-            self.get_logger().error("Cannot open config file!")
+            self.get_logger().error(f"Cannot open config file at {self.configPath}!")
+        
+        # read specific values used by the class
+        
+        # thruster info
+        self.thruster_info = self.configTree['thrusters']
+        
+        # read in com data
+        self.com = self.configTree["com"]
+        
+        # feed-forward
+        self.base_wrench = self.configTree["controller"]["feed_forward"]["base_wrench"]
+        
+        #thruster solver
+        thruster_solver_info = self.configTree["thruster_solver"]
+        
+        #read in weight info
+        self.defaultWeight      = thruster_solver_info["default_weight"]
+        self.surfaceWeight      = thruster_solver_info["surfaced_weight"]
+        self.disabledWeight     = thruster_solver_info["disable_weight"]
+        self.lowDowndraftWeight = thruster_solver_info["low_downdraft_weight"]
 
 
     def thrusterTelemetryCB(self, msg: DshotPartialTelemetry):
@@ -498,9 +545,10 @@ class ControllerOverseer(Node):
         
         self.motionEnabledPub.publish(motionMsg)
 
+
     def escPowerTimeout(self):
         #timeout for if the escs go to long without publishing telemerty
-        self.get_logger().warn("Not recieving thruster telemtry!")
+        self.get_logger().warn("Not recieving thruster telemetry!")
 
         motionMsg = Bool()
         motionMsg.data = False
@@ -519,6 +567,7 @@ class ControllerOverseer(Node):
 
             #update the weights
             self.adjustThrusterWeights()
+
 
     def odometryCB(self, msg):
         #check if thrusters are submerged - everytime odom is updated - just using as a frequency
@@ -546,6 +595,7 @@ class ControllerOverseer(Node):
         except Exception as ex:
             if self.get_clock().now().to_msg().sec >= ERROR_PATIENCE + self.startTime.to_msg().sec:
                 self.get_logger().error("Thruster Position Lookup failed with exception: " + str(ex))
+
 
     def adjustThrusterWeights(self):
         #TODO add weight values into descriptions
@@ -601,145 +651,35 @@ class ControllerOverseer(Node):
         for weight in self.thrusterWeights:
             weights.append(int(weight * PARAMETER_SCALE))
 
-        # self.get_logger().info(str(weights))
-
         msg.data = weights
 
         #publish weights
         self.weightsPub.publish(msg)
 
-    def checkIfSimulinkActive(self):
-        #attempt to set the wrench matrix in the simulink node
 
-        #see if the matlab node is running
-        found_thruster_solver = False
-        found_PID = False
-        found_SMC = False
-        found_complete = False
-
-        for nodeName in get_node_names(node=self):
-
-            
-
-
-            #check the active controller
-            if self.pidName in nodeName.name:
-
-                #mark as found!
-                found_PID= True
-
-                #if the solver previously wasn't active
-                if not self.pidActive and self.param_set_clear:
-                    #note the pid is active
-                    self.get_logger().info("Found PID")
-
-                    self.pidActive = True
-
-                    #set so no other model can being having its params set
-                    self.param_set_clear = False
-
-                    #the name of the node currently having its params set
-                    self.working_model_node_name = "/" + nodeName.name
-                    if nodeName.namespace is not None:
-                        if nodeName.namespace != '' or nodeName.namespace != '/':
-                            self.working_model_node_name = nodeName.namespace + "/" + nodeName.name
-
-                    #the client to set the params of the model
-                    self.set_param_client = self.create_client(SetParameters, f"{self.working_model_node_name}/set_parameters")
-
-                    #set the model's parameters
-                    self.set_model_paramters_timer = self.create_timer(0.5, self.setModelParameters)
-
-
-                
-            if self.smcName in nodeName.name:
-
-                #mark as found!
-                found_SMC = True
-
-                #if the solver previously wasn't active
-                if not self.solverActive and self.param_set_clear:
-                    #note the smc is active
-                    self.get_logger().info("Found SMC")
-
-                    self.smcActive = True
-
-                    #set so no other model can being having its params set
-                    self.param_set_clear = False
-
-                    #the name of the node currently having its params set
-                    self.working_model_node_name = "/" + nodeName.name
-                    if nodeName.namespace is not None:
-                        if nodeName.namespace != '' or nodeName.namespace != '/':
-                            self.working_model_node_name = nodeName.namespace + "/" + nodeName.name
-
-                    #the client to set the params of the model
-                    self.set_param_client = self.create_client(SetParameters, f"{self.working_model_node_name}/set_parameters")
-
-                    #set the model's parameters
-                    self.set_model_paramters_timer = self.create_timer(0.5, self.setModelParameters)
-
-
-
-            if self.complete_name in nodeName.name:
-
-                #mark as found!
-                found_complete = True
-
-                #if the solver previously wasn't active
-                if not self.completeActive and self.param_set_clear:
-                    #note the solver is active
-                    self.get_logger().info("Found Complete Controller")
-
-                    self.completeActive = True
-
-                    #set so no other model can being having its params set
-                    self.param_set_clear = False
-
-                    #the name of the node currently having its params set
-                    self.working_model_node_name = "/" + nodeName.name
-                    if nodeName.namespace is not None:
-                        if nodeName.namespace != '' and nodeName.namespace != '/':
-                            self.working_model_node_name = nodeName.namespace + "/" + nodeName.name
-
-                    #the client to set the params of the model
-                    self.set_param_client = self.create_client(SetParameters, f"{self.working_model_node_name}/set_parameters")
-
-                    #set the model's parameters
-                    self.set_model_paramters_timer = self.create_timer(0.5, self.setModelParameters)
-
-        if not found_thruster_solver and self.solverActive:
-            #complete is disactive
-            self.solverActive = False
-            self.get_logger().warn("Lost Thruster Solver!")
-
-        if not found_SMC and self.smcActive:
-            #complete is disactive
-            self.smcActive = False
-            self.get_logger().warn("Lost SMC!")
-
-        if not found_PID and self.pidActive:
-            #complete is disactive
-            self.pidActive = False
-            self.get_logger().warn("Lost PID!")
-
-        if not found_complete and self.completeActive:
-            #complete is disactive
-            self.completeActive = False
-            self.get_logger().warn("Lost Complete Controller!")
-
+    def doUpdate(self):
+        # check model statuses
+        active_rosnodes = get_node_names(node=self)
+        active_rosnode_names = [node.namespace + "/" + node.name for node in active_rosnodes]   
+        
+        #remove double leading / which would happen in nodes in the root namespace
+        active_rosnode_names = [node_name[1:] if node_name.startswith("//") else node_name for node_name in active_rosnode_names]
+             
+        for model_node in self.model_nodes:
+            model_node.check_if_active(active_rosnode_names)        
+        
+        # publish ff if necessary
         if not (self.get_parameter(FF_PUBLISH_PARAM).value):
             #publish the ff
-
             self.publishingFF = True
 
             msg = Twist()
-            msg.linear.x = self.talos_base_wrench[0]
-            msg.linear.y = self.talos_base_wrench[1]
-            msg.linear.z = self.talos_base_wrench[2]
-            msg.angular.x = self.talos_base_wrench[3]
-            msg.angular.y = self.talos_base_wrench[4]
-            msg.angular.z = self.talos_base_wrench[5]
+            msg.linear.x = self.base_wrench[0]
+            msg.linear.y = self.base_wrench[1]
+            msg.linear.z = self.base_wrench[2]
+            msg.angular.x = self.base_wrench[3]
+            msg.angular.y = self.base_wrench[4]
+            msg.angular.z = self.base_wrench[5]
 
             self.ffPub.publish(msg)
         elif self.publishingFF == True:
@@ -755,23 +695,6 @@ class ControllerOverseer(Node):
 
             self.ffPub.publish(msg)
 
-    def reloadParams(self, param_name):
-        #reload params for a model
-        self.readConfig()
-        while(not self.param_set_clear):
-            #ensure no one else is currently setting parameters
-            self.param_set_clear = True
-            self.working_model_node_name = param_name
-
-            self.set_model_paramters_timer = self.create_timer(0.5, self.setModelParameters)
-
-    
-
-
-    
-    
-    
-                
                 
 def main(args=None):
     rclpy.init(args=args)
@@ -784,5 +707,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
-
