@@ -284,16 +284,16 @@ class RocketLeague(Node):
                     #handle dpad left
 
                     if(event.value == 1):
-                        self.y_nudge = 1.0
-                    elif(self.y_nudge == 1.0):
+                        self.y_nudge = -1.0
+                    elif(self.y_nudge == -1.0):
                         self.y_nudge = 0.0
 
                 elif(event.code == mappings[self.controller_type]["dpad_left"]):
                     #handle dpad right
 
                     if(event.value == 1):
-                        self.y_nudge = -1.0
-                    elif(self.y_nudge == -1.0):
+                        self.y_nudge = 1.0
+                    elif(self.y_nudge == 1.0):
                         self.y_nudge = 0.0      
 
         #pub values
