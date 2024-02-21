@@ -1,34 +1,28 @@
 #! /usr/bin/env python3
 
 import os
-from subprocess import run, PIPE, TimeoutExpired
 from collections import deque
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_services_default, qos_profile_system_default
-
+from rclpy.qos import qos_profile_system_default
 from ament_index_python import get_package_share_directory
-
-from ros2node.api import get_node_names, NodeName
-
+from ros2node.api import get_node_names
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros import Buffer
-
 from tf_transformations import euler_matrix
-
 import numpy as np
-
 import yaml
-
-from riptide_msgs2.msg import DshotPartialTelemetry, DshotCommand
+from riptide_msgs2.msg import DshotPartialTelemetry
 from nav_msgs.msg import Odometry
-from rcl_interfaces.srv import SetParameters, ListParameters, DescribeParameters
+from rcl_interfaces.srv import SetParameters, ListParameters
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
-from std_msgs.msg import Int16, Int32MultiArray, Float32MultiArray, Bool
+from std_msgs.msg import Int16, Int32MultiArray, Bool
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import Twist
 from rclpy.time import Time
 
+
+#TODO: sort these
 ERROR_PATIENCE = 1.0
 
 #the number of frames the escs can be powered off before clearing acculators
@@ -37,8 +31,6 @@ ESC_POWER_TIMEOUT = 2
 
 PARAMETER_SCALE = 1000000
 
-ACTIVE_CONTROLLER_NAMES = ["PID", "SMC"]
-
 THRUSTER_SOLVER_WEIGHT_MATRIX_TOPIC = "controller/solver_weights"
 
 #paramters that cannot be pulled from yaml but still need setting
@@ -46,18 +38,17 @@ SPECIAL_PARAMETERS = ["talos_wrenchmat"]
 
 FF_PUBLISH_PARAM = "disable_native_ff"
 FF_TOPIC_NAME = "controller/FF_body_force"
-ACTIVE_CONTROL_FORCE_TOPIC_NAME = "/talos/controller/active_body_force"
-
-RPM_PUBLISH_PERIOD = .02
 WEIGHTS_FORCE_UPDATE_PERIOD = 1
 
 G = 9.8067
 
+RELOAD_TIME = 2 # seconds
+
 
 """
 things to test:
-- up/down detection
-- list param works correctly
+- up/down detection - good
+- list param works correctly - good 
 - set param works correctly
 - monitored client works correctly
 - service timeout works correctly
@@ -70,14 +61,14 @@ things to test:
 
 # wrapper class for rclpy service which monitors for timeouts and prevents concurrent operations
 # only one call is allowed at a time as these clients will be used to interact with parameters
-class MonitoredServiceClient():
-    waiting_for_client = False
-    waiting_requests = deque([])
-    
+class MonitoredServiceClient():    
     def __init__(self, node: Node, srv_type: type, srv_name: str):
         self.node = node
         self.client = node.create_client(srv_type, srv_name)
         self.timer = node.create_timer(0.5, self._timer_callback)
+        
+        self.waiting_for_client = False
+        self.waiting_requests = deque([])
     
     
     def schedule_call(self, request, callback):
@@ -88,7 +79,7 @@ class MonitoredServiceClient():
         current_time = self.node.get_clock().now()
         if self.waiting_for_client:
             # check if timed out
-            if current_time - self.srv_start_time.seconds_nanoseconds()[0] >= 3:
+            if (current_time - self.srv_start_time).to_msg().sec >= 3:
                 self.node.get_logger().error(f"Call to service {self.client.srv_name} timed out.")
                 self.client.remove_pending_request(self.active_future)
                 self.waiting_requests.popleft()
@@ -97,6 +88,7 @@ class MonitoredServiceClient():
             if len(self.waiting_requests) > 0:
                 # able to schedule the next thing
                 (request, _) = self.waiting_requests[0]
+                self.node.get_logger().info(f"Making call to service {self.client.srv_name}")
                 self.active_future = self.client.call_async(request)
                 self.active_future.add_done_callback(self._srv_callback)
                 self.srv_start_time = current_time
@@ -104,23 +96,22 @@ class MonitoredServiceClient():
     
     def _srv_callback(self, future: rclpy.Future):
         #pop queue, call callback
-        (_, callback) = self.waiting_requests.popleft()
+        (request, callback) = self.waiting_requests.popleft()
         self.waiting_for_client = False
-        callback(future)
+        callback(future, request)
 
 
 #manages an individual simulink model.
 class SimulinkModelNode():
-    model_active = False
-    full_node_name = ""
-    list_param_client = None
-    set_param_client = None
-    
-    
     def __init__(self, node: 'ControllerOverseer', node_name: str):
+        self.model_active = False
+        self.full_node_name = ""
+        self.list_param_client = None
+        self.set_param_client = None
         self.overseer_node = node
         self.node_name = node_name
         self.reload_param_service = node.create_service(Trigger, f"controller_overseer/update_{self.node_name}_params".lower(), self.reload_parameters_callback)
+        self.last_reload_time = node.get_clock().now()
 
     
     # checks if the model is active. Handles when model comes up or goes down
@@ -145,6 +136,9 @@ class SimulinkModelNode():
                 #the client to set the params of the model
                 self.list_param_client = MonitoredServiceClient(self.overseer_node, ListParameters, f"{self.full_node_name}/list_parameters")
                 self.set_param_client = MonitoredServiceClient(self.overseer_node, SetParameters, f"{self.full_node_name}/set_parameters")
+                
+                #initiate parameter reload to initialize default params
+                self.reload_parameters()
         elif self.model_active:
             # model was active before, but not now
             self.model_active = False
@@ -154,8 +148,10 @@ class SimulinkModelNode():
     def list_and_set_model_parameters(self):
         if self.model_active and self.list_param_client is not None:
             self.list_param_client.schedule_call(ListParameters.Request(), self.set_model_parameters_from_list_callback)
-        else:
-            self.overseer_node.get_logger().warning(f"Cannot list parameters for {self.node_name} because the model is not active or the list parameters client is None")
+            return True
+        
+        self.overseer_node.get_logger().warning(f"Cannot list parameters for {self.node_name} because the model is not active or the list parameters client is None")
+        return False
     
     
     # sets model parameters from the provided list
@@ -201,7 +197,7 @@ class SimulinkModelNode():
                     param.name = parameter_name
                     param_array.append(param)
 
-                    self.overseer_node.get_logger().info(f"Setting {parameter_name} to {val}")
+                    self.overseer_node.get_logger().info(f"Setting {parameter_name} to {read_value}")
                 else:
                     self.overseer_node.get_logger().info(f"Not setting param {parameter_name}, no param found in config file!")
 
@@ -212,17 +208,19 @@ class SimulinkModelNode():
     
     
     # can be used as a list parameters service callback which immediately attempts to set the available parameters
-    def set_model_parameters_from_list_callback(self, future: rclpy.Future):
-        self.set_model_parameters(future.result().names)
+    def set_model_parameters_from_list_callback(self, future: rclpy.Future, request):
+        self.set_model_parameters(future.result().result.names)
         
     
     # callback for when parameter set completes
-    def set_parameters_done_callback(self, future: rclpy.Future):
+    def set_parameters_done_callback(self, future: rclpy.Future, request):
         result = future.result()
-        if result.successful:
+        fail_indices = [idx for idx in range(0, len(result.results)) if not result.results[idx].successful]
+        if len(fail_indices) == 0:
             self.overseer_node.get_logger().info(f"Successfully set parameters for {self.node_name}")
         else:
-            self.overseer_node.get_logger().error(f"Failed to set parameters for {self.node_name}: {result.reason}")
+            for fail in fail_indices:
+                self.overseer_node.get_logger().error(f"Failed to set parameter {request.parameters[fail].name} for {self.node_name}: {result.results[fail].reason}")
 
     
     #gets a parameter value and type from the config
@@ -257,17 +255,28 @@ class SimulinkModelNode():
     # to load the parameters WITHOUT re-reading the config, use list_and_set_model_parameters
     def reload_parameters(self):
         self.overseer_node.readConfig()
-        self.list_and_set_model_parameters()
+        return self.list_and_set_model_parameters()
     
     
     def reload_parameters_callback(self, request, response):
-        if self.model_active:
-            self.reload_parameters()
-            response.success = True
-            response.message = f"{self.node_name} parameter reload triggered."
-        else:
+        current_time = self.overseer_node.get_clock().now()
+        if not self.model_active:
             response.success = False
             response.message = f"{self.node_name} is not active!"
+            return response
+        
+        if (current_time - self.last_reload_time).to_msg().sec < RELOAD_TIME:
+            response.success = False
+            response.message = f"{self.node_name} has been reloaded within the last {RELOAD_TIME} seconds."
+            return response
+        
+        success = self.reload_parameters()
+        response.success = success
+        response.message = f"{self.node_name} parameter reload triggered." if success else "Failed for unknown reason. Check overseer logs."
+        
+        if success:
+            # set most recent call time to now
+            self.last_reload_time = current_time
             
         return response
         
@@ -298,29 +307,15 @@ class ControllerOverseer(Node):
         self.declare_parameter("thruster_solver_node_name", "")
         self.thrusterSolverName = self.get_parameter("thruster_solver_node_name").value
 
-        #get pid node name
-        self.declare_parameter("pid_model_name", "PID")
-        self.pidName = self.get_parameter("pid_model_name").value
-        
-        #get smc node name
-        self.declare_parameter("smc_model_name", "SMC")
-        self.smcName = self.get_parameter("smc_model_name").value
-
-        self.declare_parameter("complete_model_name", "complete_controller")
-        self.complete_name = self.get_parameter("complete_model_name").value
-
         self.declare_parameter(FF_PUBLISH_PARAM, False)
+        
+        # Other setup
         
         #set the member configuration path variable
         self.setConfigPath()
         
-        #
-        # Other setup
-        #
-        
         # read config
         self.readConfig()
-        
         
         # tracked simulink models
         self.model_nodes = [
@@ -335,8 +330,8 @@ class ControllerOverseer(Node):
 
         #default thruster weights and working thrusters
         self.activeThrusters = [True, True, True, True, True, True, True, True]
-        self.submerdgedThrusters = [True, True, True, True, True, True, True, True]
-        self.thrusterWeights = [1,1,1,1,1,1,1,1]
+        self.submergedThrusters = [True, True, True, True, True, True, True, True]
+        self.thrusterWeights = [1, 1, 1, 1, 1, 1, 1, 1]
 
         # the thruster mode
         self.thrusterMode = 1
@@ -363,11 +358,6 @@ class ControllerOverseer(Node):
 
         #pub ff force
         self.ffPub = self.create_publisher(Twist, FF_TOPIC_NAME, qos_profile_system_default)
-        
-        #timestamps to prevent spamming of param repub
-        self.lastRepubPIDTime = self.get_clock().now()
-        self.lastRepubSMCTime = self.get_clock().now()
-        self.lastRepubThrusterTime = self.get_clock().now()
 
         #declare transform
         self.tfBuffer = Buffer()
@@ -381,27 +371,12 @@ class ControllerOverseer(Node):
         #start time
         self.startTime = None
 
-        #is the thrusterSolver active
-        self.solverActive = False
-
-        #is the SMC controller active
-        self.pidActive = False
-        self.smcActive = False
-        
-        #is the complete controller active
-        self.completeActive = False
-
         #timer to update models and ff
         self.create_timer(1.0, self.doUpdate)
-
-        #publsh msgs at frequency
-        self.pubRPMMsg = None
-        self.pubForceMsg = None
 
         #start the publish loop
         self.create_timer(WEIGHTS_FORCE_UPDATE_PERIOD, self.adjustThrusterWeights)
 
-        self.pubTimer = None
         self.enabled = True
         self.publishingFF = True
 
@@ -580,16 +555,16 @@ class ControllerOverseer(Node):
 
         try:
             #look at each thrusterbreak
-            for i, thursterSufaced in enumerate(self.submerdgedThrusters):
+            for i, thursterSufaced in enumerate(self.submergedThrusters):
                 pos = self.tfBuffer.lookup_transform("world", f"{self.tfNamespace}/thruster_{i}", Time())
 
                 #if thruster is above the kill plane
                 if pos.transform.translation.z < self.killPlane:
                     submerged[i] = True
 
-            if not (np.array_equal(submerged, self.submerdgedThrusters)):
+            if not (np.array_equal(submerged, self.submergedThrusters)):
                 #if a different thruster combo is submerdged, adjust, the weights
-                self.submerdgedThrusters = submerged
+                self.submergedThrusters = submerged
                 self.adjustThrusterWeights()
 
         except Exception as ex:
@@ -602,7 +577,7 @@ class ControllerOverseer(Node):
 
         #number of active thrusters
         activeThrusterCount = 0
-        submerdgedThrusters = 0
+        submergedThrusters = 0
 
         #shutoff inactive thrusters - disabled or broken
         for i, isActive in enumerate(self.activeThrusters):
@@ -610,12 +585,12 @@ class ControllerOverseer(Node):
                 activeThrusterCount += 1
 
                 #play around with weights for thrusters above surface
-                if not (self.submerdgedThrusters[i] == True):
+                if not (self.submergedThrusters[i] == True):
                     #if thruster is not submerdged
                     self.thrusterWeights[i] = self.surfaceWeight
                 else:
                     #thruster is active and submerdged
-                    submerdgedThrusters += 1
+                    submergedThrusters += 1
                     self.thrusterWeights[i] = self.defaultWeight
 
             else:
@@ -632,7 +607,7 @@ class ControllerOverseer(Node):
         else:
             self.enabled = True
 
-        if submerdgedThrusters >= 8:
+        if submergedThrusters >= 8:
             #take into account control modes only if all actuators are working
 
             if self.thrusterMode == 2:
