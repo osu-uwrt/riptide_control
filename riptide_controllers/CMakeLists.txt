@@ -53,14 +53,19 @@ install(TARGETS motion_profiler
   DESTINATION lib)
 
 
-# yoink python files
-file(GLOB py_files RELATIVE ${PROJECT_SOURCE_DIR} src/riptide_controllers/*.py)
-install(PROGRAMS ${py_files}
-  DESTINATION lib/${PROJECT_NAME}
-)
+# yoink python programs from src directory
+file(GLOB src_py_files RELATIVE ${PROJECT_SOURCE_DIR} src/riptide_controllers/*.py)
+install(PROGRAMS ${src_py_files}
+  DESTINATION lib/${PROJECT_NAME})
 
+# yoink python programs from models directory
 file(GLOB model_py_files RELATIVE ${PROJECT_SOURCE_DIR} models/*.py)
 install(PROGRAMS ${model_py_files}
+  DESTINATION lib/${PROJECT_NAME})
+
+# yoink python programs from test directory
+file(GLOB test_py_files RELATIVE ${PROJECT_SOURCE_DIR} test/riptide_controllers/*.py)
+install(PROGRAMS ${test_py_files}
   DESTINATION lib/${PROJECT_NAME})
 
 #Install launch files
