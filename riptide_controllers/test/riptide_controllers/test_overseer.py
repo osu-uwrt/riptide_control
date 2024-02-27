@@ -20,21 +20,6 @@ OVERSEER_SCALE_FACTOR = 1000000
 # UTIL FUNCTIONS
 #
 
-# def get_node_name_containing_name(node: Node, name: str):
-#     active_nodes = node.get_node_names_and_namespaces()
-    
-#     nodes_with_name = [node for node in active_nodes if name in node[0]]
-#     num_nodes = len(nodes_with_name)
-#     if num_nodes == 1:
-#         full_name = nodes_with_name[0][1] + "/" + nodes_with_name[0][0]
-#         if full_name.startswith('//'):
-#             full_name = full_name[1:]
-        
-#         return full_name
-    
-#     node.get_logger().error(f"Detected {num_nodes} nodes containing the name {name}. Nodes: {active_nodes}")
-    # return ""
-
 def get_node_name_containing_name(node: Node, name: str):
     for i in range(0, 4):
         active_nodes = get_node_names(node=node)
@@ -99,7 +84,7 @@ def get_parameter_value(node: Node, param: ParameterValue):
         case ParameterType.PARAMETER_BOOL:
             return param.bool_value
         case ParameterType.PARAMETER_INTEGER:
-            return param.integer_value[0] / OVERSEER_SCALE_FACTOR
+            return param.integer_value / OVERSEER_SCALE_FACTOR
         case ParameterType.PARAMETER_DOUBLE:
             return param.double_value
         case ParameterType.PARAMETER_STRING:
@@ -146,9 +131,13 @@ def test_parameter_set(node: Node):
     get_params_request.names = list_params_result.result.names
     get_params_result = call_service_sync(node, GetParameters, f"{complete_controller_name}/get_parameters", get_params_request)
     
+    all_params_match = True
+    
     for i in range(0, len(get_params_result.values)):
         param = get_params_result.values[i]
         param_name = list_params_result.result.names[i]
+        
+        node.get_logger().debug(f"Checking parameter {param_name}")
         
         config_value, t = lookup_param_in_config(config, param_name)
         if config_value is None:
@@ -156,15 +145,25 @@ def test_parameter_set(node: Node):
         
         if t == int:
             config_value = float(config_value)
-        
+                    
         param_value = get_parameter_value(node, param)
-        values_match = param_value == config_value
+        
+        # check equality of items
+        values_match = True
+        if t == list:
+            values_match = len(param_value) == len(config_value)
+            if values_match:
+                for i in range(0, len(param_value)):
+                    values_match = values_match and abs(param_value[i] - config_value[i]) < 0.001
+        else:
+            values_match = param_value == config_value
         
         if not values_match:
             node.get_logger().error(f"Value {param_name} does not match; expected {config_value}, got {param_value}")
+            all_params_match = False
         
     
-    return True
+    return all_params_match
 
 
 #
@@ -184,7 +183,8 @@ def main(args = None):
         
     #test functions here
     node.get_logger().info("test_parameter_set() - RUNNING")
-    test_parameter_set(node)
+    test_param_set_result = test_parameter_set(node)
+    node.get_logger().info(f"test_parameter_set() - {'SUCCESS' if test_param_set_result else 'FAIL'}")
     
     node.destroy_node()
     rclpy.shutdown()

@@ -1,17 +1,18 @@
 #! /usr/bin/env python3
 
 import os
-from collections import deque
+import yaml
 import rclpy
+import numpy as np
+from collections import deque
 from rclpy.node import Node
 from rclpy.qos import qos_profile_system_default
-from ament_index_python import get_package_share_directory
-from ros2node.api import get_node_names
+from rclpy.time import Time
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros import Buffer
+from ros2node.api import get_node_names
+from ament_index_python import get_package_share_directory
 from tf_transformations import euler_matrix
-import numpy as np
-import yaml
 from riptide_msgs2.msg import DshotPartialTelemetry
 from nav_msgs.msg import Odometry
 from rcl_interfaces.srv import SetParameters, ListParameters
@@ -19,7 +20,6 @@ from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from std_msgs.msg import Int16, Int32MultiArray, Bool
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import Twist
-from rclpy.time import Time
 
 
 #TODO: sort these
@@ -45,20 +45,6 @@ G = 9.8067
 RELOAD_TIME = 2 # seconds
 
 
-"""
-things to test:
-- up/down detection - good
-- list param works correctly - good 
-- set param works correctly
-- monitored client works correctly
-- service timeout works correctly
-- list param callback works correctly
-- set callback works correctly
-- set param callback works correctly
-
-
-"""
-
 # wrapper class for rclpy service which monitors for timeouts and prevents concurrent operations
 # only one call is allowed at a time as these clients will be used to interact with parameters
 class MonitoredServiceClient():    
@@ -72,7 +58,12 @@ class MonitoredServiceClient():
     
     
     def schedule_call(self, request, callback):
-        self.waiting_requests.append((request, callback))
+        if len(self.waiting_requests) < 10:
+            self.waiting_requests.append((request, callback))
+            return True
+        
+        self.node.get_logger().error(f"Reached limit of calls for service {self.client.srv_name}")
+        return False        
     
     
     def _timer_callback(self):
@@ -88,7 +79,8 @@ class MonitoredServiceClient():
             if len(self.waiting_requests) > 0:
                 # able to schedule the next thing
                 (request, _) = self.waiting_requests[0]
-                self.node.get_logger().info(f"Making call to service {self.client.srv_name}")
+                self.node.get_logger().debug(f"Making call to service {self.client.srv_name}")
+                self.client.wait_for_service()
                 self.active_future = self.client.call_async(request)
                 self.active_future.add_done_callback(self._srv_callback)
                 self.srv_start_time = current_time
@@ -110,6 +102,7 @@ class SimulinkModelNode():
         self.set_param_client = None
         self.overseer_node = node
         self.node_name = node_name
+        self.known_params = []
         self.reload_param_service = node.create_service(Trigger, f"controller_overseer/update_{self.node_name}_params".lower(), self.reload_parameters_callback)
         self.last_reload_time = node.get_clock().now()
 
@@ -139,6 +132,10 @@ class SimulinkModelNode():
                 
                 #initiate parameter reload to initialize default params
                 self.reload_parameters()
+            else:
+                # node already up, check its params to make sure they are all set
+                self.list_and_set_model_parameters()
+            
         elif self.model_active:
             # model was active before, but not now
             self.model_active = False
@@ -147,8 +144,7 @@ class SimulinkModelNode():
     # resolves the available parameters on the model and then sets them.
     def list_and_set_model_parameters(self):
         if self.model_active and self.list_param_client is not None:
-            self.list_param_client.schedule_call(ListParameters.Request(), self.set_model_parameters_from_list_callback)
-            return True
+            return self.list_param_client.schedule_call(ListParameters.Request(), self.set_model_parameters_from_list_callback)
         
         self.overseer_node.get_logger().warning(f"Cannot list parameters for {self.node_name} because the model is not active or the list parameters client is None")
         return False
@@ -191,7 +187,7 @@ class SimulinkModelNode():
                         val.type = ParameterType.PARAMETER_BOOL
 
                     else:
-                        self.overseer_node.get_logger().warn(f"Paramter type {type} not handled yet")
+                        self.overseer_node.get_logger().warn(f"Parameter type {type} not handled yet")
 
                     param.value = val
                     param.name = parameter_name
@@ -199,7 +195,8 @@ class SimulinkModelNode():
 
                     self.overseer_node.get_logger().info(f"Setting {parameter_name} to {read_value}")
                 else:
-                    self.overseer_node.get_logger().info(f"Not setting param {parameter_name}, no param found in config file!")
+                    self.overseer_node.get_logger().warning(f"Not setting param {parameter_name}, no param found in config file!")
+                    self.known_params.append(parameter_name)
 
             rq.parameters = param_array
             self.set_param_client.schedule_call(rq, self.set_parameters_done_callback)
@@ -208,14 +205,24 @@ class SimulinkModelNode():
     
     
     # can be used as a list parameters service callback which immediately attempts to set the available parameters
+    # IMPORTANT: This callback will ONLY set parameters that are not present in the known_params list. To set a specific
+    # parameter regardless of its state, use set_model_parameters with the names of the parameters you wish to set
     def set_model_parameters_from_list_callback(self, future: rclpy.Future, request):
-        self.set_model_parameters(future.result().result.names)
+        param_names = future.result().result.names
+        unknown_param_names = [name for name in param_names if name not in self.known_params]
+        if len(unknown_param_names) > 0:
+            self.set_model_parameters(unknown_param_names)
         
     
     # callback for when parameter set completes
     def set_parameters_done_callback(self, future: rclpy.Future, request):
         result = future.result()
         fail_indices = [idx for idx in range(0, len(result.results)) if not result.results[idx].successful]
+        
+        for idx in range(0, len(result.results)):
+            if not idx in fail_indices: #successful result, add it to known params
+                self.known_params.append(request.parameters[idx].name)
+        
         if len(fail_indices) == 0:
             self.overseer_node.get_logger().info(f"Successfully set parameters for {self.node_name}")
         else:
@@ -254,6 +261,7 @@ class SimulinkModelNode():
     # this function re-reads the config and loads the paramters onto the node.
     # to load the parameters WITHOUT re-reading the config, use list_and_set_model_parameters
     def reload_parameters(self):
+        self.known_params = []
         self.overseer_node.readConfig()
         return self.list_and_set_model_parameters()
     
@@ -284,12 +292,12 @@ class SimulinkModelNode():
 
 #manages parameters for the controller / thruster solver
 class ControllerOverseer(Node):
-    escPowerStopsLow = 0
-    escPowerStopsHigh = 0
-    configTree = {}
-
     def __init__(self):
         super().__init__("controllerOverseer")
+        
+        self.escPowerStopsLow = 0
+        self.escPowerStopsHigh = 0
+        self.configTree = {}
 
         #
         # Declare parameters 
@@ -442,6 +450,9 @@ class ControllerOverseer(Node):
         # thruster info
         self.thruster_info = self.configTree['thrusters']
         
+        #read in kill plane height
+        self.killPlane = self.configTree["controller_overseer"]["thruster_kill_plane"]
+        
         # read in com data
         self.com = self.configTree["com"]
         
@@ -456,7 +467,7 @@ class ControllerOverseer(Node):
         self.surfaceWeight      = thruster_solver_info["surfaced_weight"]
         self.disabledWeight     = thruster_solver_info["disable_weight"]
         self.lowDowndraftWeight = thruster_solver_info["low_downdraft_weight"]
-
+        
 
     def thrusterTelemetryCB(self, msg: DshotPartialTelemetry):
         #wether or not the thrusterSolverweigths need adjusted
