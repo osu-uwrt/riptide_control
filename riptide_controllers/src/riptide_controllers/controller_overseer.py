@@ -288,7 +288,7 @@ class controllerOverseer(Node):
         self.talos_p_surface_gains = config_file["controller"]["PID"]["p_surface_gains"]
         self.talos_i_surface_gains = config_file["controller"]["PID"]["i_surface_gains"]
         self.talos_d_surface_gains = config_file["controller"]["PID"]["d_surface_gains"]
-        self.talos_max_control = config_file["controller"]["PID"]["max_control_threshholds"]
+        self.talos_max_control = config_file["controller"]["PID"]["max_control_thresholds"]
         self.talos_surface_gain_floor = config_file["controller"]["PID"]["surface_gain_floor"]
         self.talos_surface_gain_buffer = config_file["controller"]["PID"]["surface_gain_buffer"]
         self.talos_pid_reset_threshold = config_file["controller"]["PID"]["reset_threshold"]
