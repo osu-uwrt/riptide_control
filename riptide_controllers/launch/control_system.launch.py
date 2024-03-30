@@ -25,6 +25,24 @@ def get_pid_launch():
     )
 
 
+def get_complete_launch():
+    return Node(
+        package="complete_controller",
+        executable="complete_controller",
+        name="complete_controller",
+        output="screen"
+    )
+    
+
+def get_thruster_solver_launch():
+    return Node(
+        package="thruster_solver",
+        executable="thruster_solver",
+        name=THRUSTER_SOLVER_NAME,
+        output="screen"
+    )
+
+
 def launch_active_control(context, *args, **kwargs):
     active_control_enabled = LaunchConfiguration("active_control_enabled").perform(context)
     active_control_model = LaunchConfiguration("active_control_model").perform(context)
@@ -38,10 +56,21 @@ def launch_active_control(context, *args, **kwargs):
             return [get_pid_launch()]
         elif active_control_model == "hybrid":
             return [get_smc_launch(), get_pid_launch()]
+        elif active_control_model == "complete":
+            return [get_complete_launch()]
     
     print("-----------------------------------------------------------------")
     print("Active control model either unknown or disabled. Not launching.")
     print("-----------------------------------------------------------------")
+    return []
+
+
+def launch_thruster_solver(context, *args, **kwargs):
+    active_control_model = LaunchConfiguration("active_control_model").perform(context)
+    thruster_solver_enabled = LaunchConfiguration("thruster_solver_enabled").perform(context)
+    if active_control_model != "complete" and thruster_solver_enabled == "True":
+        return [get_thruster_solver_launch()]
+    
     return []
 
 
@@ -85,17 +114,8 @@ def generate_launch_description():
                 name="calibrate_drag",
                 output="screen"
             ),
-            
-            Node(
-                package="thruster_solver",
-                executable="thruster_solver",
-                name=THRUSTER_SOLVER_NAME,
-                output="screen",
-                condition=IfCondition(
-                    PythonExpression(["'", LaunchConfiguration("thruster_solver_enabled"), "'"])
-                )
-            ),
-            
+
+            OpaqueFunction(function=launch_thruster_solver),
             OpaqueFunction(function=launch_active_control)
         ], scoped=True)
     ])

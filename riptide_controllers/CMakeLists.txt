@@ -17,6 +17,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(control_toolbox REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(std_msgs REQUIRED)
 
 #thruster test script
 add_executable(thruster_test_canbus models/thruster_solver/send_thruster_cmd_canbus.c)
@@ -24,6 +25,7 @@ target_compile_definitions(thruster_test_canbus PUBLIC ENABLE_THRUSTER_TEST) #en
 
 install(TARGETS thruster_test_canbus
   DESTINATION lib/${PROJECT_NAME})
+
 
 # yoink python files
 file(GLOB py_files RELATIVE ${PROJECT_SOURCE_DIR} src/riptide_controllers/*.py)
