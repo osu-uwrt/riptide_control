@@ -14,7 +14,7 @@ def get_complete_launch():
 
 def launch_active_control(context, *args, **kwargs):
     active_control_enabled = LaunchConfiguration("active_control_enabled").perform(context)    
-    if active_control_enabled:
+    if active_control_enabled == "True":
         return [get_complete_launch()]
     
     print("-----------------------------------------------------------------")
