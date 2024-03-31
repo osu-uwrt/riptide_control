@@ -112,7 +112,8 @@ def generate_launch_description():
                 package="riptide_controllers2",
                 executable="calibrate_drag.py",
                 name="calibrate_drag",
-                output="screen"
+                output="screen",
+                #arguments=["--ros-args", "--log-level", "debug"]
             ),
 
             OpaqueFunction(function=launch_thruster_solver),

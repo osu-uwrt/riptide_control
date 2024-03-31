@@ -20,7 +20,7 @@ find_package(tf2_ros REQUIRED)
 find_package(std_msgs REQUIRED)
 
 #thruster test script
-add_executable(thruster_test_canbus models/thruster_solver/send_thruster_cmd_canbus.c)
+add_executable(thruster_test_canbus models/complete_system/send_thruster_cmd_canbus.c)
 target_compile_definitions(thruster_test_canbus PUBLIC ENABLE_THRUSTER_TEST) #enable the thruster test code in send_thruster_cmd_canbus.c
 
 install(TARGETS thruster_test_canbus

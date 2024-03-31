@@ -54,12 +54,13 @@ class MonitoredServiceClient():
         self.timer = node.create_timer(0.5, self._timer_callback)
         
         self.waiting_for_client = False
+        self.active_client = None #if active, should be a tuple of (request, callback)
         self.waiting_requests = deque([])
     
     
     def schedule_call(self, request, callback):
         if len(self.waiting_requests) < 10:
-            self.waiting_requests.append((request, callback))
+            self.waiting_requests.appendleft((request, callback))
             return True
         
         self.node.get_logger().error(f"Reached limit of calls for service {self.client.srv_name}")
@@ -73,12 +74,14 @@ class MonitoredServiceClient():
             if (current_time - self.srv_start_time).to_msg().sec >= 3:
                 self.node.get_logger().error(f"Call to service {self.client.srv_name} timed out.")
                 self.client.remove_pending_request(self.active_future)
-                self.waiting_requests.popleft()
+                self.waiting_requests.pop()
                 self.waiting_for_client = False
+                self.active_client = None
         else:
             if len(self.waiting_requests) > 0:
                 # able to schedule the next thing
-                (request, _) = self.waiting_requests[0]
+                self.active_client = self.waiting_requests.pop()                
+                (request, _) = self.active_client
                 self.node.get_logger().debug(f"Making call to service {self.client.srv_name}")
                 self.client.wait_for_service()
                 self.active_future = self.client.call_async(request)
@@ -88,9 +91,13 @@ class MonitoredServiceClient():
     
     def _srv_callback(self, future: rclpy.Future):
         #pop queue, call callback
-        (request, callback) = self.waiting_requests.popleft()
-        self.waiting_for_client = False
-        callback(future, request)
+        if self.active_client is not None:
+            (request, callback) = self.active_client
+            self.active_client = None
+            callback(future, request)
+            self.waiting_for_client = False
+        else:
+            self.node.get_logger().error("MonitoredServiceClient received a callback but doesn't know where it came from")
 
 
 #manages an individual simulink model.
@@ -119,7 +126,6 @@ class SimulinkModelNode():
         
         if num_active_model_nodes == 1:
             # if we got here, then we have a node we can control
-            # if the solver previously wasn't active
             self.full_node_name = active_model_nodes[0]
             if not self.model_active:
                 #note the model is active
@@ -132,8 +138,8 @@ class SimulinkModelNode():
                 
                 #initiate parameter reload to initialize default params
                 self.reload_parameters()
-            else:
-                # node already up, check its params to make sure they are all set
+            elif len(self.list_param_client.waiting_requests) == 0 and len(self.set_param_client.waiting_requests) == 0:
+                # node already up and we are not trying to set parameters on it. check its params to make sure they are all set
                 self.list_and_set_model_parameters()
             
         elif self.model_active:
