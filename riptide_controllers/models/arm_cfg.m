@@ -1,5 +1,5 @@
 function cs = arm_cfg()
-% MATLAB function for configuration set generated on 16-Jan-2024 21:39:20
+% MATLAB function for configuration set generated on 31-Mar-2024 00:03:36
 % MATLAB version: 9.14.0.2337262 (R2023a) Update 5
 
 cs = Simulink.ConfigSet;
@@ -239,7 +239,7 @@ cs.set_param('UseModelRefSolver', 'off');   % Use local solver when referencing 
 
 % Simulation Target
 cs.set_param('SimCustomSourceCode', '');   % Additional code
-cs.set_param('SimUserSources', 'thruster_solver/send_thruster_cmd_canbus.c');   % Source files
+cs.set_param('SimUserSources', 'complete_system/send_thruster_cmd_canbus.c');   % Source files
 cs.set_param('SimCustomHeaderCode', '');   % Include headers
 cs.set_param('SimCustomInitializer', '');   % Initialize code
 cs.set_param('SimCustomTerminator', '');   % Terminate code
@@ -295,7 +295,7 @@ cs.set_param('RTWUseSimCustomCode', 'off');   % Use the same custom code setting
 cs.set_param('CustomSourceCode', '');   % Additional code
 cs.set_param('CustomHeaderCode', '');   % Include headers
 cs.set_param('CustomInclude', '');   % Include directories
-cs.set_param('CustomSource', 'thruster_solver/send_thruster_cmd_canbus.c');   % Source files
+cs.set_param('CustomSource', 'complete_system/send_thruster_cmd_canbus.c');   % Source files
 cs.set_param('CustomLibrary', '');   % Libraries
 cs.set_param('CustomDefine', '');   % Defines
 cs.set_param('CustomBLASCallback', '');   % Custom BLAS library callback
@@ -445,7 +445,7 @@ cs.set_param('CovModelRefEnable', 'off');   % Record coverage for referenced mod
 try
   cs_componentCC = CoderTarget.SettingsController;
   cs.attachComponent(cs_componentCC);
-  cs.set_param('CoderTargetData', struct('UseCoderTarget',true,'TargetHardware','Robot Operating System 2 (ROS 2)','ConnectionInfo',struct('TCPIP',struct('IPAddress','ros.codertarget.internal.getExtmodeDeviceAddress(hCS)','Port','17725','Verbose',false,'RunInBackground',true)),'ExtMode',struct('Configuration','TCP/IP'),'RTOS','Linux','RTOSBaseRateTaskPriority','40','Scheduler_interrupt_source',0,'Packaging',struct('MaintainerName','ROS User','MaintainerEmail','ros2user@test.com','License','BSD','Version','1.0.0'),'BoardParameters',struct('DeviceAddress','orin','Username','ros'),'Runtime',struct('BuildAction','Build'),'ROS2Install',struct('Folder','/opt/ros/humble','Workspace','/home/ros/colcon_deploy'),'ROS',struct('RemoteBuild',true,'ROSTimeStepping',false,'ROSTimeNotification',false,'StepNotify','/step_notify'),'DataVersion','2016.02'));   % CoderTargetData
+  cs.set_param('CoderTargetData', struct('UseCoderTarget',true,'TargetHardware','Robot Operating System 2 (ROS 2)','ConnectionInfo',struct('TCPIP',struct('IPAddress','ros.codertarget.internal.getExtmodeDeviceAddress(hCS)','Port','17725','Verbose',false,'RunInBackground',true)),'ExtMode',struct('Configuration','TCP/IP'),'RTOS','Linux','RTOSBaseRateTaskPriority','40','Scheduler_interrupt_source',0,'Packaging',struct('MaintainerName','ROS User','MaintainerEmail','ros2user@test.com','License','BSD','Version','1.0.0'),'BoardParameters',struct('DeviceAddress','orin','Username','ros'),'Runtime',struct('BuildAction','Build'),'ROS2Install',struct('Folder','/opt/ros/humble','Workspace','~/colcon_deploy'),'ROS',struct('RemoteBuild',true,'ROSTimeStepping',false,'ROSTimeNotification',false,'StepNotify','/step_notify'),'DataVersion','2016.02'));   % CoderTargetData
 catch ME
   warning('Simulink:ConfigSet:AttachComponentError', '%s', ME.message);
 end
