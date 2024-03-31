@@ -358,7 +358,7 @@ def resolve_archives_to_delete(
     
     def resolve_files_to_delete(dir: str, packages: 'list[str]', exclude: bool, include_build_install: bool, ws_base_dir: str):
         to_delete = [] #contains absolute paths of items to be deleted
-        if not exclude:
+        if not exclude and os.path.exists(dir):
             dir_contents = os.listdir(dir)
             for file_name in dir_contents:
                 if len(packages) > 0:
@@ -518,7 +518,7 @@ def wrap_entries(arr: str, wrapper: str):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        prog = "generate_cpp_packages.py",
+        prog = "model_manager.py",
         description = "Generates c++ packages from Simulink models in the riptide_controllers source tree. This program will, " + \
                             "unless otherwise specified using the arguments below, download all available models or " + \
                             "invoke MATLAB to build them with every available config. The number of " + \
