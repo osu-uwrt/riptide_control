@@ -87,7 +87,7 @@ static int init_can_socket(void) {
     }
 
     // Bind to requested interface
-    struct sockaddr_can addr = {};
+    struct sockaddr_can addr = {0};
     addr.can_family = AF_CAN;
     addr.can_ifindex = if_index;
 
@@ -157,36 +157,42 @@ int send_thruster_cmd_canbus(int16_t cmds[8]) {
     return 0;
 }
 
-// Thruster Tets Script Below this Line
+#ifdef ENABLE_THRUSTER_TEST
 
-// void stop_handler (int signum) {
-//     int16_t cmd[8] = {0};
-//     if (socket_fd >= 0) {
-//         send_thruster_cmd_canbus(cmd);
-//     }
-//     const char msg[] = " - INTERRUPT! Stopping Thrusters\n";
-//     write(STDOUT_FILENO, msg, sizeof(msg) - 1);
-//     _exit(0);
-// }
+// Thruster Test Script Below this Line
 
-// #include <signal.h>
+void stop_handler () {
+    int16_t cmd[8] = {0};
+    if (socket_fd >= 0) {
+        send_thruster_cmd_canbus(cmd);
+    }
+    const char msg[] = " - INTERRUPT! Stopping Thrusters\n";
+    write(STDOUT_FILENO, msg, sizeof(msg) - 1);
+    _exit(0);
+}
 
-// int main(void) {
-//     // Do nothing
-//     signal(SIGINT, stop_handler);
+#include <signal.h>
 
-//     int16_t cmd[8];
+int main(void) {
+    // Do nothing
+    signal(SIGINT, stop_handler);
 
-//     for (int i = 0; i < 8; i++) {
-//         printf("Testing Thruster %d...\n", i + 1);
-//         cmd[i] = 300;
-//         for (int j = 0; j < 100; j++) {
-//             if (send_thruster_cmd_canbus(cmd)) return 1;
-//             usleep(50 * 1000);
-//         }
-//         cmd[i] = 0;
-//     }
+    int16_t cmd[8] = {0};
 
-//     printf("Done!\n");
-//     return send_thruster_cmd_canbus(cmd) != 0;
-// }
+    while(1) {
+        for (int i = 0; i < 8; i++) {
+            printf("Testing Thruster %d...\n", i);
+            cmd[i] = 300;
+            for (int j = 0; j < 100; j++) {
+                if (send_thruster_cmd_canbus(cmd)) return 1;
+                usleep(30 * 1000); //100 * 30000 = 3000000us = 3s
+            }
+            cmd[i] = 0;
+        }
+    }
+
+    printf("Done!\n");
+    return send_thruster_cmd_canbus(cmd) != 0;
+}
+
+#endif //ENABLE_THRUSTER_TEST
