@@ -18,7 +18,7 @@ from nav_msgs.msg import Odometry
 from rcl_interfaces.srv import SetParameters, ListParameters
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from std_msgs.msg import Int16, Int32MultiArray, Bool
-from std_srvs.srv import Trigger
+from std_srvs.srv import Trigger, SetBool
 from geometry_msgs.msg import Twist
 
 
@@ -35,6 +35,8 @@ THRUSTER_SOLVER_WEIGHT_MATRIX_TOPIC = "controller/solver_weights"
 
 #paramters that cannot be pulled from yaml but still need setting
 SPECIAL_PARAMETERS = ["talos_wrenchmat"]
+
+ACTIVE_PARAMETERS_MASK = "controller__active_force_mask"
 
 FF_PUBLISH_PARAM = "disable_native_ff"
 FF_TOPIC_NAME = "controller/FF_body_force"
@@ -332,12 +334,12 @@ class ControllerOverseer(Node):
         self.readConfig()
         
         # tracked simulink models
-        self.model_nodes = [
-            SimulinkModelNode(self, "thruster_solver"),
-            SimulinkModelNode(self, "PID"),
-            SimulinkModelNode(self, "SMC"),
-            SimulinkModelNode(self, "complete_controller")
-        ]
+        self.model_nodes = {
+            "thruster_solver": SimulinkModelNode(self, "thruster_solver"),
+            "PID": SimulinkModelNode(self, "PID"),
+            "SMC": SimulinkModelNode(self, "SMC"),
+            "complete_controller": SimulinkModelNode(self, "complete_controller")
+        }
 
         #generate thruster force matrix
         self.generateThrusterForceMatrix(self.thruster_info, self.com)
@@ -372,6 +374,9 @@ class ControllerOverseer(Node):
 
         #pub ff force
         self.ffPub = self.create_publisher(Twist, FF_TOPIC_NAME, qos_profile_system_default)
+
+        #create teleop serivce
+        self.setTeleop = self.create_service(SetBool, "setTeleop", self.setTeleop)
 
         #declare transform
         self.tfBuffer = Buffer()
@@ -648,6 +653,60 @@ class ControllerOverseer(Node):
         #publish weights
         self.weightsPub.publish(msg)
 
+    def setTeleop(self, request, future):
+        #set the teleop mode
+
+        #if setting Teleop on
+        if(request.data == True):
+            try:
+                #set the control mask values
+                pVal = ParameterValue()
+                pVal.type = ParameterType.PARAMETER_INTEGER_ARRAY
+                pVal.integer_array_value = [3000000, 3000000, 2000000, 1000000, 1000000, 3000000]
+
+                param = Parameter()
+                param.value = pVal
+                param.name = ACTIVE_PARAMETERS_MASK
+
+                request = SetParameters.Request()
+                request.parameters = [param]
+
+                self.model_nodes["complete_controller"].set_param_client.schedule_call(request, self.model_nodes["complete_controller"].set_parameters_done_callback)
+
+                future.success = True
+                future.message = "Successfully enabled active control!"
+
+            except Exception as E:
+                self.get_logger().warn(f"Failed to initialize teleop! {E}")
+                future.success = False
+                future.message = f"Failed to initialize teleop! {E}"
+        else:
+        #putting into active control
+            try:
+                #set the control mask values
+                pVal = ParameterValue()
+                pVal.type = ParameterType.PARAMETER_INTEGER_ARRAY
+                pVal.integer_array_value = [2000000, 2000000, 2000000, 1000000, 1000000, 2000000]
+
+                param = Parameter()
+                param.value = pVal
+                param.name = ACTIVE_PARAMETERS_MASK
+
+                request = SetParameters.Request()
+                request.parameters = [param]
+
+                self.model_nodes["complete_controller"].set_param_client.schedule_call(request, self.model_nodes["complete_controller"].set_parameters_done_callback)
+
+                future.success = True
+                future.message = "Successfully enabled active control!"
+
+            except Exception as E:
+                self.get_logger().warn(f"Failed to initialize active control! {E}")
+                future.success = False
+                future.message = f"Failed to initialize active control! {E}" 
+            
+        return future
+            
 
     def doUpdate(self):
         # check model statuses
@@ -657,7 +716,7 @@ class ControllerOverseer(Node):
         #remove double leading / which would happen in nodes in the root namespace
         active_rosnode_names = [node_name[1:] if node_name.startswith("//") else node_name for node_name in active_rosnode_names]
              
-        for model_node in self.model_nodes:
+        for model_node in self.model_nodes.values():
             model_node.check_if_active(active_rosnode_names)        
         
         # publish ff if necessary
