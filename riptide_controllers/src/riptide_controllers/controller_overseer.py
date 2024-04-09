@@ -674,12 +674,19 @@ class ControllerOverseer(Node):
                 self.model_nodes["complete_controller"].set_param_client.schedule_call(request, self.model_nodes["complete_controller"].set_parameters_done_callback)
 
                 future.success = True
-                future.message = "Successfully enabled active control!"
+                future.message = "Successfully enabled teleop!"
 
             except Exception as E:
-                self.get_logger().warn(f"Failed to initialize teleop! {E}")
-                future.success = False
-                future.message = f"Failed to initialize teleop! {E}"
+
+                if(type(E) == AttributeError):
+                    #this is an expected error so elaborate
+                    self.get_logger().warn("Failed to initialize teleop, model is not started!")
+                    future.success = False
+                    future.message = "Failed to initialize teleop, model is not started!"
+                else:
+                    self.get_logger().warn(f"Failed to initialize teleop! {E}")
+                    future.success = False
+                    future.message = f"Failed to initialize teleop! {E}" 
         else:
         #putting into active control
             try:
@@ -701,10 +708,17 @@ class ControllerOverseer(Node):
                 future.message = "Successfully enabled active control!"
 
             except Exception as E:
-                self.get_logger().warn(f"Failed to initialize active control! {E}")
-                future.success = False
-                future.message = f"Failed to initialize active control! {E}" 
-            
+
+                if(type(E) == AttributeError):
+                    #this is an expected error so elaborate
+                    self.get_logger().warn("Failed to initialize active control, model is not started!")
+                    future.success = False
+                    future.message = "Failed to initialize active control, model is not started!"
+                else:
+                    self.get_logger().warn(f"Failed to initialize active control! {E}")
+                    future.success = False
+                    future.message = f"Failed to initialize active control! {E}" 
+                
         return future
             
 
