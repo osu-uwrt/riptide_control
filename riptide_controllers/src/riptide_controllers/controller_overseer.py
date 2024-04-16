@@ -19,6 +19,7 @@ from rcl_interfaces.srv import SetParameters, ListParameters
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from std_msgs.msg import Int16, Int32MultiArray, Bool
 from std_srvs.srv import Trigger, SetBool
+from diagnostic_msgs.msg import DiagnosticArray
 from geometry_msgs.msg import Twist
 
 
@@ -369,6 +370,7 @@ class ControllerOverseer(Node):
         #odometry filtered
         self.create_subscription(Odometry, "odometry/filtered", self.odometryCB, qos_profile_system_default)
 
+
         #pub for thruster weights
         self.weightsPub = self.create_publisher(Int32MultiArray, THRUSTER_SOLVER_WEIGHT_MATRIX_TOPIC, qos_profile_system_default)
 
@@ -401,7 +403,6 @@ class ControllerOverseer(Node):
 
         #a timer to ensure that the active controllers stop if telemetry stops publishing!
         self.escPowerCheckTimer = self.create_timer(ESC_POWER_TIMEOUT, self.escPowerTimeout)
-
 
     def generateThrusterForceMatrix(self, thruster_info, com):
         #generate the thruster effect matrix
