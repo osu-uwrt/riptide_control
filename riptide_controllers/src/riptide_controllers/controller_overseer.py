@@ -647,7 +647,7 @@ class ControllerOverseer(Node):
         #scale and round all weights
         weights = []
         for weight in self.thrusterWeights:
-            weights.append(int(weight * PARAMETER_SCALE))
+            weights.append(int(weight))
 
         msg.data = weights
 
