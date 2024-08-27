@@ -427,7 +427,6 @@ def yesNoPrompt(question: str, assume_yes: bool):
     yes_no = input(question + " [y/n]: ")
     return yes_no.lower() == "y" or len(yes_no) == 0
 
-
 def ensure_directory_exists(dir: str):
     if not os.path.exists(dir):
         os.mkdir(dir)
