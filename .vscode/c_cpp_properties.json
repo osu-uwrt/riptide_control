@@ -1,0 +1,42 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/home/hollis/osu-uwrt/development/software/install/riptide_rviz/include/**",
+        "/home/hollis/osu-uwrt/development/software/install/riptide_gyro/include/**",
+        "/home/hollis/osu-uwrt/development/software/install/riptide_msgs2/include/**",
+        "/home/hollis/osu-uwrt/development/software/install/launch_msgs/include/**",
+        "/home/hollis/AMR/install/amrviz/include/**",
+        "/home/hollis/AMR/install/amr_msgs/include/**",
+        "/home/hollis/osu-uwrt/development/dependencies/install/zed_interfaces/include/**",
+        "/home/hollis/osu-uwrt/development/dependencies/install/vectornav/include/**",
+        "/home/hollis/osu-uwrt/development/dependencies/install/vectornav_msgs/include/**",
+        "/home/hollis/osu-uwrt/development/dependencies/install/nortek_dvl_msgs/include/**",
+        "/home/hollis/osu-uwrt/development/dependencies/install/chameleon_tf_msgs/include/**",
+        "/home/hollis/osu-uwrt/dependencies/install/stereo_image_proc/include/**",
+        "/home/hollis/osu-uwrt/dependencies/install/image_proc/include/**",
+        "/home/hollis/osu-uwrt/dependencies/install/tracetools_image_pipeline/include/**",
+        "/home/hollis/osu-uwrt/dependencies/install/nortek_dvl_msgs/include/**",
+        "/home/hollis/osu-uwrt/dependencies/install/microstrain_inertial_msgs/include/**",
+        "/home/hollis/osu-uwrt/dependencies/install/micro_ros_agent/include/**",
+        "/home/hollis/osu-uwrt/dependencies/install/micro_ros_msgs/include/**",
+        "/home/hollis/osu-uwrt/dependencies/install/image_view/include/**",
+        "/home/hollis/osu-uwrt/dependencies/install/image_rotate/include/**",
+        "/home/hollis/osu-uwrt/dependencies/install/image_publisher/include/**",
+        "/home/hollis/osu-uwrt/dependencies/install/depth_image_proc/include/**",
+        "/opt/ros/humble/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++14"
+    }
+  ],
+  "version": 4
+}
