@@ -307,6 +307,8 @@ class ControllerOverseer(Node):
         self.escPowerStopsLow = 0
         self.escPowerStopsHigh = 0
         self.configTree = {}
+        self.currentAutoTuneTwist = [0,0,0,0,0,0]
+        self.autoff_config_path = None
 
         #
         # Declare parameters 
@@ -323,6 +325,10 @@ class ControllerOverseer(Node):
         #get thruster solver node name
         self.declare_parameter("thruster_solver_node_name", "")
         self.thrusterSolverName = self.get_parameter("thruster_solver_node_name").value
+
+        #declare write autotune param
+        self.declare_parameter("write_ff_autotune", True)
+        self.writeFFAutoTune = self.get_parameter("write_ff_autotune").value
 
         self.declare_parameter(FF_PUBLISH_PARAM, False)
         
@@ -370,6 +376,8 @@ class ControllerOverseer(Node):
         #odometry filtered
         self.create_subscription(Odometry, "odometry/filtered", self.odometryCB, qos_profile_system_default)
 
+        #sub to autotune
+        self.create_subscription(Twist, "ff_auto_tune", self.ffAutoTuneCB, qos_profile_system_default)
 
         #pub for thruster weights
         self.weightsPub = self.create_publisher(Int32MultiArray, THRUSTER_SOLVER_WEIGHT_MATRIX_TOPIC, qos_profile_system_default)
@@ -448,14 +456,28 @@ class ControllerOverseer(Node):
                         self.configPath = path_check
                         self.get_logger().info(f"Discovered source directory, overriding descriptions to use '{self.configPath}'")
                         break
-    
-    
+
+        #set the path to the autocal saved data file
+        control_share_dir = get_package_share_directory("riptide_controllers2")
+
+        auto_ff_subpath = os.path.join("config", self.robotName + "_autoff.yaml")
+
+         # Set fallback config path if we can't find the one in source
+        self.autoff_config_path = os.path.join(control_share_dir, auto_ff_subpath)
+
     def readConfig(self):
         try:
             with open(self.configPath, "r") as config:
                 self.configTree = yaml.safe_load(config)
         except:
             self.get_logger().error(f"Cannot open config file at {self.configPath}!")
+
+        try:
+            with open(self.autoff_config_path, "r") as config:
+                self.configTree["auto_ff"] = yaml.safe_load(config)
+                self.currentAutoTuneTwist = self.configTree["auto_ff"]["auto_ff"]
+        except:
+            self.get_logger().error(f"Cannot open config file at {self.autoff_config_path}!")
         
         # read specific values used by the class
         
@@ -479,7 +501,7 @@ class ControllerOverseer(Node):
         self.surfaceWeight      = thruster_solver_info["surfaced_weight"]
         self.disabledWeight     = thruster_solver_info["disable_weight"]
         self.lowDowndraftWeight = thruster_solver_info["low_downdraft_weight"]
-        
+
 
     def thrusterTelemetryCB(self, msg: DshotPartialTelemetry):
         #wether or not the thrusterSolverweigths need adjusted
@@ -760,6 +782,33 @@ class ControllerOverseer(Node):
             msg.angular.z = 0.0
 
             self.ffPub.publish(msg)
+
+    def ffAutoTuneCB(self, msg):
+        #write the autotune save if it has changed
+
+        #if writing is disabled
+        if not self.writeFFAutoTune:
+            return
+    
+        #if the auto ff config path doesn't exist
+        if (self.autoff_config_path == None):
+            return 
+
+        #if the twist has been updated
+        if not (self.currentAutoTuneTwist[0] == msg.linear.x and self.currentAutoTuneTwist[1] == msg.linear.y and self.currentAutoTuneTwist[2] == msg.linear.z and 
+           self.currentAutoTuneTwist[3] == msg.angular.x and self.currentAutoTuneTwist[4] == msg.angular.y and self.currentAutoTuneTwist[5] == msg.angular.z):
+            #prepare string to be wrote
+            auto_ff_config_string = f"auto_ff: [{msg.linear.x},{msg.linear.y},{msg.linear.z},{msg.angular.x},{msg.angular.y},{msg.angular.z}]"
+
+            #write config to file
+            try:
+                with open(self.autoff_config_path, "w") as config:
+                    config.write(auto_ff_config_string)
+                    config.close()
+
+            except:
+                self.get_logger().error(f"Cannot open ff auto tune file at: {self.autoff_config_path}")
+            
 
                 
 def main(args=None):
