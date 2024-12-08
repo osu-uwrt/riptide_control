@@ -115,6 +115,7 @@ class SimulinkModelNode():
         self.known_params = []
         self.reload_param_service = node.create_service(Trigger, f"controller_overseer/update_{self.node_name}_params".lower(), self.reload_parameters_callback)
         self.last_reload_time = node.get_clock().now()
+        self.loaded_params = False # have parameters been loaded
 
     
     # checks if the model is active. Handles when model comes up or goes down
@@ -237,6 +238,8 @@ class SimulinkModelNode():
         else:
             for fail in fail_indices:
                 self.overseer_node.get_logger().error(f"Failed to set parameter {request.parameters[fail].name} for {self.node_name}: {result.results[fail].reason}")
+
+        self.loaded_params = True
 
     
     #gets a parameter value and type from the config
@@ -788,6 +791,10 @@ class ControllerOverseer(Node):
 
         #if writing is disabled
         if not self.writeFFAutoTune:
+            return
+        
+        #if the overseer has not initialized the controller yet
+        if not self.model_nodes["complete_controller"].loaded_params:
             return
     
         #if the auto ff config path doesn't exist
