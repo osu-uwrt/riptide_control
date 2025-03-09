@@ -1,0 +1,15 @@
+%process simualtion data
+
+%number of samples in evaluation data
+samples_count = out.samples_count.Data(1);
+
+time = out.time_buffer.Data(1:samples_count);
+forces = out.forces_buffer.Data(:, 1:samples_count);
+velocities = out.velocity_buffer.Data(:, 1:samples_count);
+
+
+
+
+
+function plot_axes(time, forces, )
+
