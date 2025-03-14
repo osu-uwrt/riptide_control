@@ -492,13 +492,20 @@ class ControllerOverseer(Node):
         try:
             with open(self.autoff_config_path, "r") as config:
                 autoff_yaml_data = yaml.safe_load(config)
-                autoff_init = autoff_yaml_data["autoff"]
-                self.configTree["controller"]["auto_ff"]["initial_ff"] = autoff_init
+                autoff_init = autoff_yaml_data["auto_ff"]
+                
+                #this is cursed
+                layer = dict()
+                layer["initial_ff"] = autoff_init
+                self.configTree["controller"]["autoff"] = layer
+                
                 self.currentAutoTuneTwist = autoff_init
-        except:
+        except FileNotFoundError:
             self.get_logger().error(f"Cannot open config file at {self.autoff_config_path}!")
         
         # read specific values used by the class
+        
+        self.get_logger().info(f"{self.autoff_config_path}")
         
         # thruster info
         self.thruster_info = self.configTree['thrusters']
