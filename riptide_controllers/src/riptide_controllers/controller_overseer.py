@@ -20,7 +20,7 @@ from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from std_msgs.msg import Int16, Int32MultiArray, Bool, Empty
 from std_srvs.srv import Trigger, SetBool
 from diagnostic_msgs.msg import DiagnosticArray
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, TwistWithCovariance
 
 
 #TODO: sort these
@@ -310,6 +310,10 @@ class SimulinkModelNode():
 class ControllerOverseer(Node):
     waiting_on_init = False
 
+    drag_comp_forward_data = False
+    drag_comp_reverse_data = False
+
+    refresh_drag_file = True
 
     def __init__(self):
         super().__init__("controllerOverseer")
@@ -389,6 +393,12 @@ class ControllerOverseer(Node):
         #sub to autotune
         self.create_subscription(Twist, "ff_auto_tune", self.ffAutoTuneCB, qos_profile_system_default)
 
+        #sub to the drag compensator forward
+        self.create_subscription(TwistWithCovariance, "controller/drag_comp/forward", self.dragCompForwardCb, qos_profile_system_default)
+
+        #sub to the drag compensator reverse
+        self.create_subscription(TwistWithCovariance, "controller/drag_comp/reverse", self.dragCompRevereseCb, qos_profile_system_default)
+
         #pub for thruster weights
         self.weightsPub = self.create_publisher(Int32MultiArray, THRUSTER_SOLVER_WEIGHT_MATRIX_TOPIC, qos_profile_system_default)
 
@@ -424,6 +434,20 @@ class ControllerOverseer(Node):
 
         #a timer to ensure that the active controllers stop if telemetry stops publishing!
         self.escPowerCheckTimer = self.create_timer(ESC_POWER_TIMEOUT, self.escPowerTimeout)
+
+
+    def dragCompForwardCb(self, msg):
+
+        #save drag data
+        self.drag_comp_forward_data = msg.covariance
+        self.refresh_drag_file = True
+
+    def dragCompRevereseCb(self, msg):
+
+        #save drag data
+        self.drag_comp_reverse_data = msg.covariance
+        self.refresh_drag_file = True
+
 
 
     def generateThrusterForceMatrix(self, thruster_info, com):
@@ -475,12 +499,12 @@ class ControllerOverseer(Node):
 
         auto_ff_subpath = os.path.join("config", self.robotName + "_autoff.yaml")
 
-
         if not os.path.exists("/home/ros/colcon_deploy"):
             #running on personal computer
             self.get_logger().info("I think I am running on not the orin!")
 
             self.autoff_config_path = os.path.join(control_share_dir, auto_ff_subpath)
+
         else:
             self.get_logger().info("I think I am running on the orin!")
 
@@ -497,11 +521,17 @@ class ControllerOverseer(Node):
             with open(self.autoff_config_path, "r") as config:
                 autoff_yaml_data = yaml.safe_load(config)
                 autoff_init = autoff_yaml_data["auto_ff"]
+                drag_forward_init = autoff_yaml_data["drag_forward"]
+                drag_reverse_init = autoff_yaml_data["drag_reverse"]
                 
-                #this is cursed
-                layer = dict()
-                layer["initial_ff"] = autoff_init
-                self.configTree["controller"]["autoff"] = layer
+                auto_loaded_params = dict()
+                auto_loaded_params["initial_ff"] = autoff_init
+                self.configTree["controller"]["autoff"] = auto_loaded_params
+
+                drag_initial_comp = dict()
+                drag_initial_comp["forward"] = drag_forward_init
+                drag_initial_comp["reverse"] = drag_reverse_init
+                self.configTree["controlller"]["drag_compensation"]["inital_compensation"] = drag_initial_comp
                 
                 self.currentAutoTuneTwist = autoff_init
         except FileNotFoundError:
@@ -851,23 +881,39 @@ class ControllerOverseer(Node):
 
             return
 
+        if(self.drag_comp_forward_data or self.drag_comp_reverse_data):
+            #cant save until cb complete
+            return
 
         #if the twist has been updated
-        if not (self.currentAutoTuneTwist[0] == msg.linear.x and self.currentAutoTuneTwist[1] == msg.linear.y and self.currentAutoTuneTwist[2] == msg.linear.z and 
-           self.currentAutoTuneTwist[3] == msg.angular.x and self.currentAutoTuneTwist[4] == msg.angular.y and self.currentAutoTuneTwist[5] == msg.angular.z):
+        if (not (self.currentAutoTuneTwist[0] == msg.linear.x and self.currentAutoTuneTwist[1] == msg.linear.y and self.currentAutoTuneTwist[2] == msg.linear.z and 
+           self.currentAutoTuneTwist[3] == msg.angular.x and self.currentAutoTuneTwist[4] == msg.angular.y and self.currentAutoTuneTwist[5] == msg.angular.z)) or (self.refresh_drag_file):
             #prepare string to be wrote
             auto_ff_config_string = f"auto_ff: [{msg.linear.x},{msg.linear.y},{msg.linear.z},{msg.angular.x},{msg.angular.y},{msg.angular.z}]"
+
+            #write the forward drag string
+            drag_forward_string = f"drag_forward: ["
+            for value in self.drag_comp_forward_data:
+                drag_forward_string = drag_forward_string + str(value) + ","
+            drag_forward_string =  drag_forward_string + "]"
+
+            #write the reverse drag string
+            drag_reverse_string = f"drag_reverse: ["
+            for value in self.drag_comp_reverse_data:
+                drag_reverse_string = drag_reverse_string + str(value) + ","
+            drag_reverse_string =  drag_reverse_string + "]"
 
             #write config to file
             try:
                 with open(self.autoff_config_path, "w") as config:
                     config.write(auto_ff_config_string)
+                    config.write(drag_forward_string)
+                    config.write(drag_reverse_string)
                     config.close()
 
             except:
                 self.get_logger().error(f"Cannot open ff auto tune file at: {self.autoff_config_path}")
-            
-
+        
                 
 def main(args=None):
     rclpy.init(args=args)
