@@ -306,6 +306,9 @@ class SimulinkModelNode():
 
 #manages parameters for the controller / thruster solver
 class ControllerOverseer(Node):
+    waiting_on_init = False
+
+
     def __init__(self):
         super().__init__("controllerOverseer")
         
@@ -420,8 +423,6 @@ class ControllerOverseer(Node):
         #a timer to ensure that the active controllers stop if telemetry stops publishing!
         self.escPowerCheckTimer = self.create_timer(ESC_POWER_TIMEOUT, self.escPowerTimeout)
 
-        self.init_pub_timer = self.create_timer(1, self.pubInitSignal)
-
 
     def generateThrusterForceMatrix(self, thruster_info, com):
         #generate the thruster effect matrix
@@ -436,13 +437,6 @@ class ControllerOverseer(Node):
 
             #insert into thruster effect matrix
             self.thrusterEffects[i] = [forceVector[0], forceVector[1], forceVector[2], torque[0], torque[1], torque[2]]
-
-    def pubInitSignal(self):
-        #publish a signal to reinit auto ff
-        msg = Empty()
-        self.re_init_signal_pub.publish(msg)
-
-        self.init_pub_timer.cancel()
 
     def setConfigPath(self):
         #set the path to the config file
@@ -823,6 +817,30 @@ class ControllerOverseer(Node):
         #if the auto ff config path doesn't exist
         if (self.autoff_config_path == None):
             return 
+
+        #if the controller is trying to reinit the autoff
+        if(self.waiting_on_init):
+
+            auto_ff_init = None
+            try:
+                auto_ff_init = self.configTree["controller"]["autoff"]["initial_ff"]
+            except KeyError:
+                self.get_logger().warn("Cannot find the initial auto ff in config tree!")
+                return
+
+            if (auto_ff_init[0] == msg.linear.x and auto_ff_init[1] == msg.linear.y and auto_ff_init[2] == msg.linear.z and 
+                auto_ff_init[3] == msg.angular.x and auto_ff_init[4] == msg.angular.y and auto_ff_init[5] == msg.angular.z):
+
+                #if the init signal has taken
+                self.waiting_on_init = False
+
+            else: 
+                #pub msg
+                msg = Empty()
+                self.re_init_signal_pub.publish(msg)
+
+            return
+
 
         #if the twist has been updated
         if not (self.currentAutoTuneTwist[0] == msg.linear.x and self.currentAutoTuneTwist[1] == msg.linear.y and self.currentAutoTuneTwist[2] == msg.linear.z and 
