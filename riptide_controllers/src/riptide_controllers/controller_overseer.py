@@ -2,6 +2,7 @@
 
 import os
 import yaml
+import yaml.parser
 import rclpy
 import numpy as np
 from collections import deque
@@ -310,8 +311,8 @@ class SimulinkModelNode():
 class ControllerOverseer(Node):
     waiting_on_init = False
 
-    drag_comp_forward_data = False
-    drag_comp_reverse_data = False
+    drag_comp_forward_data = None
+    drag_comp_reverse_data = None
 
     refresh_drag_file = True
 
@@ -536,11 +537,18 @@ class ControllerOverseer(Node):
                 self.currentAutoTuneTwist = autoff_init
         except FileNotFoundError:
             self.get_logger().error(f"Cannot open config file at {self.autoff_config_path}!")
+        except KeyError:
+            self.get_logger().error(f"Missing Autoff Keys!")
+        except TypeError:
+            self.get_logger().error(f"Missing Autoff Keys!")
+        except yaml.parser.ParserError:
+            self.get_logger().error(f"Yaml Parser")
+
+
+            
         
         # read specific values used by the class
-        
-        self.get_logger().info(f"{self.autoff_config_path}")
-        
+                
         # thruster info
         self.thruster_info = self.configTree['thrusters']
         
@@ -881,34 +889,40 @@ class ControllerOverseer(Node):
 
             return
 
-        if(self.drag_comp_forward_data or self.drag_comp_reverse_data):
-            #cant save until cb complete
-            return
 
         #if the twist has been updated
         if (not (self.currentAutoTuneTwist[0] == msg.linear.x and self.currentAutoTuneTwist[1] == msg.linear.y and self.currentAutoTuneTwist[2] == msg.linear.z and 
            self.currentAutoTuneTwist[3] == msg.angular.x and self.currentAutoTuneTwist[4] == msg.angular.y and self.currentAutoTuneTwist[5] == msg.angular.z)) or (self.refresh_drag_file):
             #prepare string to be wrote
-            auto_ff_config_string = f"auto_ff: [{msg.linear.x},{msg.linear.y},{msg.linear.z},{msg.angular.x},{msg.angular.y},{msg.angular.z}]"
+            auto_ff_config_string = f"auto_ff: [{msg.linear.x},{msg.linear.y},{msg.linear.z},{msg.angular.x},{msg.angular.y},{msg.angular.z}]\n"
+            
+            drag_forward_string = ""
+            drag_reverse_string = ""
+            if(not ((self.drag_comp_forward_data is None) or (self.drag_comp_reverse_data is None))):
 
-            #write the forward drag string
-            drag_forward_string = f"drag_forward: ["
-            for value in self.drag_comp_forward_data:
-                drag_forward_string = drag_forward_string + str(value) + ","
-            drag_forward_string =  drag_forward_string + "]"
+                #write the forward drag string
+                drag_forward_string = f"drag_forward: ["
+                for value in self.drag_comp_forward_data:
+                    drag_forward_string = drag_forward_string + str(value) + ","
+                drag_forward_string =  drag_forward_string + "]\n"
 
-            #write the reverse drag string
-            drag_reverse_string = f"drag_reverse: ["
-            for value in self.drag_comp_reverse_data:
-                drag_reverse_string = drag_reverse_string + str(value) + ","
-            drag_reverse_string =  drag_reverse_string + "]"
+                #write the reverse drag string
+                drag_reverse_string = f"drag_reverse: ["
+                for value in self.drag_comp_reverse_data:
+                    drag_reverse_string = drag_reverse_string + str(value) + ","
+                drag_reverse_string =  drag_reverse_string + "]\n"
 
             #write config to file
             try:
                 with open(self.autoff_config_path, "w") as config:
+                    
                     config.write(auto_ff_config_string)
-                    config.write(drag_forward_string)
-                    config.write(drag_reverse_string)
+                    
+                    if((self.drag_comp_forward_data is None) or (self.drag_comp_reverse_data is None)):
+                     #cant save until cb complete
+                        config.write(drag_forward_string)
+                        config.write(drag_reverse_string)
+                        
                     config.close()
 
             except:
