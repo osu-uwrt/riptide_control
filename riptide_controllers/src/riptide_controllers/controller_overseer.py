@@ -17,7 +17,7 @@ from riptide_msgs2.msg import DshotPartialTelemetry
 from nav_msgs.msg import Odometry
 from rcl_interfaces.srv import SetParameters, ListParameters
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
-from std_msgs.msg import Int16, Int32MultiArray, Bool
+from std_msgs.msg import Int16, Int32MultiArray, Bool, Empty
 from std_srvs.srv import Trigger, SetBool
 from diagnostic_msgs.msg import DiagnosticArray
 from geometry_msgs.msg import Twist
@@ -41,6 +41,7 @@ ACTIVE_PARAMETERS_MASK = "controller__active_force_mask"
 
 FF_PUBLISH_PARAM = "disable_native_ff"
 FF_TOPIC_NAME = "controller/FF_body_force"
+AUTOTUNE_REINIT_TOPIC_NAME = "controller/re_init_accumulators"
 WEIGHTS_FORCE_UPDATE_PERIOD = 1
 
 G = 9.8067
@@ -275,6 +276,7 @@ class SimulinkModelNode():
     def reload_parameters(self):
         self.known_params = []
         self.overseer_node.readConfig()
+
         return self.list_and_set_model_parameters()
     
     
@@ -388,6 +390,9 @@ class ControllerOverseer(Node):
         #pub ff force
         self.ffPub = self.create_publisher(Twist, FF_TOPIC_NAME, qos_profile_system_default)
 
+        #pub signal to reinit autoff and dragcal
+        self.re_init_signal_pub = self.create_publisher(Empty, AUTOTUNE_REINIT_TOPIC_NAME, qos_profile_system_default)
+
         #create teleop serivce
         self.setTeleop = self.create_service(SetBool, "setTeleop", self.setTeleop)
 
@@ -415,6 +420,9 @@ class ControllerOverseer(Node):
         #a timer to ensure that the active controllers stop if telemetry stops publishing!
         self.escPowerCheckTimer = self.create_timer(ESC_POWER_TIMEOUT, self.escPowerTimeout)
 
+        self.init_pub_timer = self.create_timer(1, self.pubInitSignal)
+
+
     def generateThrusterForceMatrix(self, thruster_info, com):
         #generate the thruster effect matrix
         self.thrusterEffects = np.zeros(shape=(8,6))
@@ -429,6 +437,12 @@ class ControllerOverseer(Node):
             #insert into thruster effect matrix
             self.thrusterEffects[i] = [forceVector[0], forceVector[1], forceVector[2], torque[0], torque[1], torque[2]]
 
+    def pubInitSignal(self):
+        #publish a signal to reinit auto ff
+        msg = Empty()
+        self.re_init_signal_pub.publish(msg)
+
+        self.init_pub_timer.cancel()
 
     def setConfigPath(self):
         #set the path to the config file
@@ -477,8 +491,10 @@ class ControllerOverseer(Node):
 
         try:
             with open(self.autoff_config_path, "r") as config:
-                self.configTree["auto_ff"] = yaml.safe_load(config)
-                self.currentAutoTuneTwist = self.configTree["auto_ff"]["auto_ff"]
+                autoff_yaml_data = yaml.safe_load(config)
+                autoff_init = autoff_yaml_data["autoff"]
+                self.configTree["controller"]["auto_ff"]["initial_ff"] = autoff_init
+                self.currentAutoTuneTwist = autoff_init
         except:
             self.get_logger().error(f"Cannot open config file at {self.autoff_config_path}!")
         
