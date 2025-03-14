@@ -44,6 +44,8 @@ FF_TOPIC_NAME = "controller/FF_body_force"
 AUTOTUNE_REINIT_TOPIC_NAME = "controller/re_init_accumulators"
 WEIGHTS_FORCE_UPDATE_PERIOD = 1
 
+ORIN_AUTOTUNE_DIR = "/bin"
+
 G = 9.8067
 
 RELOAD_TIME = 2 # seconds
@@ -473,8 +475,16 @@ class ControllerOverseer(Node):
 
         auto_ff_subpath = os.path.join("config", self.robotName + "_autoff.yaml")
 
-         # Set fallback config path if we can't find the one in source
-        self.autoff_config_path = os.path.join(control_share_dir, auto_ff_subpath)
+
+        if not os.path.exists("/home/ros/colcon_deploy"):
+            #running on personal computer
+            self.get_logger().info("I think I am running on not the orin!")
+
+            self.autoff_config_path = os.path.join(control_share_dir, auto_ff_subpath)
+        else:
+            self.get_logger().info("I think I am running on the orin!")
+
+            self.autoff_config_path = os.path.join(ORIN_AUTOTUNE_DIR, self.robotName + "_autoff.yaml")
 
     def readConfig(self):
         try:
