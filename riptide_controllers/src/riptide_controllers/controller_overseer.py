@@ -522,12 +522,13 @@ class ControllerOverseer(Node):
             with open(self.autoff_config_path, "r") as config:
                 autoff_yaml_data = yaml.safe_load(config)
                 autoff_init = autoff_yaml_data["auto_ff"]
-                drag_forward_init = autoff_yaml_data["drag_forward"]
-                drag_reverse_init = autoff_yaml_data["drag_reverse"]
                 
                 auto_loaded_params = dict()
                 auto_loaded_params["initial_ff"] = autoff_init
                 self.configTree["controller"]["autoff"] = auto_loaded_params
+
+                drag_forward_init = autoff_yaml_data["drag_forward"]
+                drag_reverse_init = autoff_yaml_data["drag_reverse"]
 
                 drag_initial_comp = dict()
                 drag_initial_comp["forward"] = drag_forward_init
