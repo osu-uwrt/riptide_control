@@ -522,7 +522,10 @@ class ControllerOverseer(Node):
             with open(self.autoff_config_path, "r") as config:
                 autoff_yaml_data = yaml.safe_load(config)
                 autoff_init = autoff_yaml_data["auto_ff"]
-                
+              
+                #ensure the re init signal is sent to the controller mode;  
+                self.waiting_on_init = True
+
                 auto_loaded_params = dict()
                 auto_loaded_params["initial_ff"] = autoff_init
                 self.configTree["controller"]["autoff"] = auto_loaded_params
