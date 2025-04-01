@@ -47,6 +47,8 @@ WEIGHTS_FORCE_UPDATE_PERIOD = 1
 
 ORIN_AUTOTUNE_DIR = "/bin"
 
+AUTOFF_INIT_TOLERANCE = .01 #seeing rounding errors lol
+
 G = 9.8067
 
 RELOAD_TIME = 2 # seconds
@@ -880,8 +882,13 @@ class ControllerOverseer(Node):
                 self.get_logger().warn("Cannot find the initial auto ff in config tree!")
                 return
 
-            if (auto_ff_init[0] == msg.linear.x and auto_ff_init[1] == msg.linear.y and auto_ff_init[2] == msg.linear.z and 
-                auto_ff_init[3] == msg.angular.x and auto_ff_init[4] == msg.angular.y and auto_ff_init[5] == msg.angular.z):
+            self.get_logger().info(f"{auto_ff_init}")
+            self.get_logger().info(f"{msg.angular.x}")
+            self.get_logger().info(f"{auto_ff_init[3] == msg.angular.x}")
+            self.get_logger().info(f"-----------------------------------------------------------------------------------------------------------------------")
+
+            if (abs(auto_ff_init[0] - msg.linear.x) < AUTOFF_INIT_TOLERANCE and abs(auto_ff_init[1] - msg.linear.y) < AUTOFF_INIT_TOLERANCE and abs(auto_ff_init[2] - msg.linear.z) < AUTOFF_INIT_TOLERANCE and 
+                abs(auto_ff_init[3] - msg.angular.x) < AUTOFF_INIT_TOLERANCE and abs(auto_ff_init[4] - msg.angular.y) < AUTOFF_INIT_TOLERANCE and abs(auto_ff_init[5] - msg.angular.z) < AUTOFF_INIT_TOLERANCE):
 
                 #if the init signal has taken
                 self.waiting_on_init = False
@@ -892,7 +899,6 @@ class ControllerOverseer(Node):
                 self.re_init_signal_pub.publish(msg)
 
             return
-
 
         #if the twist has been updated
         if (not (self.currentAutoTuneTwist[0] == msg.linear.x and self.currentAutoTuneTwist[1] == msg.linear.y and self.currentAutoTuneTwist[2] == msg.linear.z and 
