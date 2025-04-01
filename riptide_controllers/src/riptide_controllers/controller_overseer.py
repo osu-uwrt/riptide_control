@@ -882,11 +882,6 @@ class ControllerOverseer(Node):
                 self.get_logger().warn("Cannot find the initial auto ff in config tree!")
                 return
 
-            self.get_logger().info(f"{auto_ff_init}")
-            self.get_logger().info(f"{msg.angular.x}")
-            self.get_logger().info(f"{auto_ff_init[3] == msg.angular.x}")
-            self.get_logger().info(f"-----------------------------------------------------------------------------------------------------------------------")
-
             if (abs(auto_ff_init[0] - msg.linear.x) < AUTOFF_INIT_TOLERANCE and abs(auto_ff_init[1] - msg.linear.y) < AUTOFF_INIT_TOLERANCE and abs(auto_ff_init[2] - msg.linear.z) < AUTOFF_INIT_TOLERANCE and 
                 abs(auto_ff_init[3] - msg.angular.x) < AUTOFF_INIT_TOLERANCE and abs(auto_ff_init[4] - msg.angular.y) < AUTOFF_INIT_TOLERANCE and abs(auto_ff_init[5] - msg.angular.z) < AUTOFF_INIT_TOLERANCE):
 
@@ -935,8 +930,11 @@ class ControllerOverseer(Node):
                         
                     config.close()
 
-            except:
+            except FileExistsError:
                 self.get_logger().error(f"Cannot open ff auto tune file at: {self.autoff_config_path}")
+            except PermissionError:
+                self.get_logger().error(f"No Permission to write of autoff file at: {self.autoff_config_path}")
+
         
                 
 def main(args=None):
