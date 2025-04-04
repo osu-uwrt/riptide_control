@@ -5,6 +5,7 @@ from launch.substitutions import LaunchConfiguration
 
 def get_complete_launch():
     return Node(
+        prefix=["taskset 0x02"],
         package="complete_controller",
         executable="complete_controller",
         name="complete_controller",
