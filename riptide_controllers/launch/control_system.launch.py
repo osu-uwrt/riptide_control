@@ -23,7 +23,7 @@ def launch_active_control(context, *args, **kwargs):
     if(os.path.exists("/home/ros/colcon_deploy")):
         print("I'm running on the orin! Isolating a core for controller use!")
 
-        launch_prefix = "taskset 0x02"
+        launch_prefix = "taskset 0x7FF"
     else:
         print("I'm running on a development laptop")
         
