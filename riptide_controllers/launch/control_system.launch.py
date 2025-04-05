@@ -3,9 +3,11 @@ from launch.actions import DeclareLaunchArgument, GroupAction, OpaqueFunction
 from launch_ros.actions import PushRosNamespace, Node
 from launch.substitutions import LaunchConfiguration
 
-def get_complete_launch():
+import os
+
+def get_complete_launch(launch_prefix):
     return Node(
-        prefix=["taskset 0x02"],
+        prefix=[launch_prefix],
         package="complete_controller",
         executable="complete_controller",
         name="complete_controller",
@@ -14,9 +16,20 @@ def get_complete_launch():
 
 
 def launch_active_control(context, *args, **kwargs):
-    active_control_enabled = LaunchConfiguration("active_control_enabled").perform(context)    
+    active_control_enabled = LaunchConfiguration("active_control_enabled").perform(context)   
+
+    #detect if we are running on the orin
+    launch_prefix = None
+    if(os.path.exists("/home/ros/colcon_deploy")):
+        print("I'm running on the orin! Isolating a core for controller use!")
+
+        launch_prefix = "taskset 0x02"
+    else:
+        print("I'm running on a development laptop")
+        
+
     if active_control_enabled == "True":
-        return [get_complete_launch()]
+        return [get_complete_launch(launch_prefix)]
     
     print("-----------------------------------------------------------------")
     print("Active control model either unknown or disabled. Not launching.")
