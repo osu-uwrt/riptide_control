@@ -19,7 +19,7 @@ def launch_active_control(context, *args, **kwargs):
     active_control_enabled = LaunchConfiguration("active_control_enabled").perform(context)   
 
     #detect if we are running on the orin
-    launch_prefix = None
+    launch_prefix = ""
     if(os.path.exists("/home/ros/colcon_deploy")):
         print("I'm running on the orin! Isolating a core for controller use!")
 
