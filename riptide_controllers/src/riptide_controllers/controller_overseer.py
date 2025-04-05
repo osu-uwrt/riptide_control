@@ -923,8 +923,12 @@ class ControllerOverseer(Node):
                     
                     config.write(auto_ff_config_string)
                     
-                    if((self.drag_comp_forward_data is None) or (self.drag_comp_reverse_data is None)):
+                    self.get_logger().error(f"Writing auto ff")
+
+                    if not ((self.drag_comp_forward_data is None) or (self.drag_comp_reverse_data is None)):
                      #cant save until cb complete
+                        self.get_logger().error(f"Attempting to write drag string {drag_forward_string}")
+
                         config.write(drag_forward_string)
                         config.write(drag_reverse_string)
                         
