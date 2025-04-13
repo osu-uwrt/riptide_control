@@ -17,7 +17,7 @@ def get_complete_launch(launch_prefix):
 def get_launch_prefix():
     
     #detect if we are running on the orin
-    launch_prefix = None
+    launch_prefix = ""
     if(os.path.exists("/home/ros/colcon_deploy")):
         print("I'm running on the orin! Isolating a core for controller use!")
         launch_prefix = "taskset -c 11"
