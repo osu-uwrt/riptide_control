@@ -538,7 +538,10 @@ class ControllerOverseer(Node):
                 drag_initial_comp = dict()
                 drag_initial_comp["forward"] = drag_forward_init
                 drag_initial_comp["reverse"] = drag_reverse_init
-                self.configTree["controlller"]["drag_compensation"]["inital_compensation"] = drag_initial_comp
+                
+                self.configTree["controller"]["drag_compensator"]["initial_compensation"] = drag_initial_comp
+                
+                self.get_logger().info(f"{self.configTree}")
                 
                 self.currentAutoTuneTwist = autoff_init
         except FileNotFoundError:
@@ -546,7 +549,7 @@ class ControllerOverseer(Node):
         except KeyError:
             self.get_logger().error(f"Missing Autoff Keys!")
         except TypeError:
-            self.get_logger().error(f"Missing Autoff Keys!")
+            self.get_logger().error(f"Type Error!")
         except yaml.parser.ParserError:
             self.get_logger().error(f"Yaml Parser")
 
@@ -923,12 +926,9 @@ class ControllerOverseer(Node):
                     
                     config.write(auto_ff_config_string)
                     
-                    self.get_logger().error(f"Writing auto ff")
 
                     if not ((self.drag_comp_forward_data is None) or (self.drag_comp_reverse_data is None)):
                      #cant save until cb complete
-                        self.get_logger().error(f"Attempting to write drag string {drag_forward_string}")
-
                         config.write(drag_forward_string)
                         config.write(drag_reverse_string)
                         
