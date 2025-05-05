@@ -633,11 +633,14 @@ class ControllerOverseer(Node):
         if self.escPowerStopsLow > ESC_POWER_STOP_TOLERANCE or self.escPowerStopsHigh > ESC_POWER_STOP_TOLERANCE:
             #publish disabled message
             motionMsg.data = False
+            self.enabled = False
 
-            self.get_logger().warn("Recieving disabled flags from ESC!")
+            # if self.enabled:
+            #     self.get_logger().warn("Recieving disabled flags from ESC!")
         else:
 
             motionMsg.data = True
+            self.enabled = True
             #publish enabled message
         
         self.motionEnabledPub.publish(motionMsg)
@@ -645,10 +648,12 @@ class ControllerOverseer(Node):
 
     def escPowerTimeout(self):
         #timeout for if the escs go to long without publishing telemerty
-        self.get_logger().warn("Not recieving thruster telemetry!")
+        if self.enabled:
+            self.get_logger().warn("Not recieving thruster telemetry!")
 
         motionMsg = Bool()
         motionMsg.data = False
+        self.enabled = False
         self.motionEnabledPub.publish(motionMsg)
 
 
@@ -723,9 +728,9 @@ class ControllerOverseer(Node):
             #if system is not full actuated, it cannot be optimized, very high rpms / force can be requested
             #for the safety of the system, this will autodisable robot (probably)
             #remove if PIA
-
-            self.get_logger().error("System has become underactuated. Only:  " + str(activeThrusterCount) + " thrusters are active. Killing Thrusters!")
-            self.enabled = False
+            if self.enabled:
+                self.get_logger().error("System has become underactuated. Only:  " + str(activeThrusterCount) + " thrusters are active. Killing Thrusters!")
+                self.enabled = False
         else:
             self.enabled = True
 
