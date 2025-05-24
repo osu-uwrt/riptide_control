@@ -5,7 +5,7 @@ from launch.substitutions import LaunchConfiguration
 
 import os
 
-def get_complete_launch(launch_prefix):
+def get_complete_controller_launch(launch_prefix):
     return Node(
         prefix=[launch_prefix],
         package="complete_controller",
@@ -13,6 +13,9 @@ def get_complete_launch(launch_prefix):
         name="complete_controller",
         output="screen"
     )
+    
+def get_liltank_controller_launch(launch_prefix):
+    return None
 
 def get_launch_prefix():
     
@@ -31,10 +34,15 @@ def launch_active_control(context, *args, **kwargs):
     active_control_enabled = LaunchConfiguration("active_control_enabled").perform(context)   
 
     if active_control_enabled == "True":
-        return [get_complete_launch(get_launch_prefix())]
+        robot = LaunchConfiguration("robot").perform(context)
+        if robot == "talos":
+            return [get_complete_controller_launch(get_launch_prefix())]
+        elif robot == "liltank":
+            # return [get_liltank_controller_launch(get_launch_prefix())]
+            return [] #TODO: replace with above line when controller is implemented
     
     print("-----------------------------------------------------------------")
-    print("Active control model either unknown or disabled. Not launching.")
+    print("Active control model either unknown or disabled, or robot name is unknown. Not launching.")
     print("-----------------------------------------------------------------")
     return []
 
@@ -66,13 +74,6 @@ def generate_launch_description():
                     }
                 ],
                 output="screen"
-            ),
-            
-            Node(
-                package="riptide_controllers2",
-                executable="calibrate_drag.py",
-                name="calibrate_drag",
-                output="screen",
             ),
 
             OpaqueFunction(function=launch_active_control)

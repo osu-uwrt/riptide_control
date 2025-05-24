@@ -487,7 +487,7 @@ class ControllerOverseer(Node):
 
         if not os.path.exists("/home/ros/colcon_deploy"):
             #running on personal computer
-            self.get_logger().info("I think I am running on not the orin!")
+            self.get_logger().info("I think I am running on a development laptop!")
 
             self.autoff_config_path = os.path.join(control_share_dir, auto_ff_subpath)
 
