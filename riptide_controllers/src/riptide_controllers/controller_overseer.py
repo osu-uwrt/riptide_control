@@ -345,7 +345,9 @@ class ControllerOverseer(Node):
                     "overseer_autotune_plugin",
                     "overseer_ff_plugin",
                     "overseer_thruster_solver_plugin"
-                ])
+                ]),
+            "liltank_controller": SimulinkModelNode(self, "liltank_controller", self.configTree,
+                [ ])
         }
 
         #generate thruster force matrix
