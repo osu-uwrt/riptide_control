@@ -40,34 +40,37 @@ def get_launch_prefix(context):
 
 def launch_control_system(context, *args, **kwargs):
     launch_prefix = get_launch_prefix(context)
-    
-    Node(
-        prefix=[launch_prefix],
-        package="riptide_controllers2",
-        executable="controller_overseer.py",
-        name="controller_overseer",
-        parameters = [
-            {
-                "vehicle_config": "",  # Leave empty to let the node discover it
-                "robot": LaunchConfiguration("robot"),
-            }
-        ],
-        output="screen"
-    ),
-    
+    launches = [
+        Node(
+            prefix=[launch_prefix],
+            package="riptide_controllers2",
+            executable="controller_overseer.py",
+            name="controller_overseer",
+            parameters = [
+                {
+                    "vehicle_config": "",  # Leave empty to let the node discover it
+                    "robot": LaunchConfiguration("robot"),
+                }
+            ],
+            output="screen"
+        )
+    ]
+        
     active_control_enabled = LaunchConfiguration("active_control_enabled").perform(context)   
 
     if active_control_enabled == "True":
         robot = LaunchConfiguration("robot").perform(context)
         if robot == "talos":
-            return [get_complete_controller_launch(get_launch_prefix(context))]
+            launches.append(get_complete_controller_launch(get_launch_prefix(context)))
+            return launches
         elif robot == "liltank":
-            return [get_liltank_controller_launch(get_launch_prefix(context))]
-    
+            launches.append(get_liltank_controller_launch(get_launch_prefix(context)))
+            return launches
+        
     print("-----------------------------------------------------------------")
     print("Active control model either unknown or disabled, or robot name is unknown. Not launching.")
     print("-----------------------------------------------------------------")
-    return []
+    return launches
 
 def generate_launch_description():
     return LaunchDescription([
@@ -86,8 +89,6 @@ def generate_launch_description():
         GroupAction([
             PushRosNamespace(LaunchConfiguration("robot")),
             
-            
-
             OpaqueFunction(function=launch_control_system)
         ], scoped=True)
     ])
