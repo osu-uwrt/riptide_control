@@ -538,7 +538,10 @@ class ControllerOverseer(Node):
                 drag_initial_comp = dict()
                 drag_initial_comp["forward"] = drag_forward_init
                 drag_initial_comp["reverse"] = drag_reverse_init
-                self.configTree["controlller"]["drag_compensation"]["inital_compensation"] = drag_initial_comp
+                
+                self.configTree["controller"]["drag_compensator"]["initial_compensation"] = drag_initial_comp
+                
+                self.get_logger().info(f"{self.configTree}")
                 
                 self.currentAutoTuneTwist = autoff_init
         except FileNotFoundError:
@@ -546,7 +549,7 @@ class ControllerOverseer(Node):
         except KeyError:
             self.get_logger().error(f"Missing Autoff Keys!")
         except TypeError:
-            self.get_logger().error(f"Missing Autoff Keys!")
+            self.get_logger().error(f"Type Error!")
         except yaml.parser.ParserError:
             self.get_logger().error(f"Yaml Parser")
 
@@ -630,11 +633,14 @@ class ControllerOverseer(Node):
         if self.escPowerStopsLow > ESC_POWER_STOP_TOLERANCE or self.escPowerStopsHigh > ESC_POWER_STOP_TOLERANCE:
             #publish disabled message
             motionMsg.data = False
+            self.enabled = False
 
-            self.get_logger().warn("Recieving disabled flags from ESC!")
+            # if self.enabled:
+            #     self.get_logger().warn("Recieving disabled flags from ESC!")
         else:
 
             motionMsg.data = True
+            self.enabled = True
             #publish enabled message
         
         self.motionEnabledPub.publish(motionMsg)
@@ -642,10 +648,12 @@ class ControllerOverseer(Node):
 
     def escPowerTimeout(self):
         #timeout for if the escs go to long without publishing telemerty
-        self.get_logger().warn("Not recieving thruster telemetry!")
+        if self.enabled:
+            self.get_logger().warn("Not recieving thruster telemetry!")
 
         motionMsg = Bool()
         motionMsg.data = False
+        self.enabled = False
         self.motionEnabledPub.publish(motionMsg)
 
 
@@ -720,9 +728,9 @@ class ControllerOverseer(Node):
             #if system is not full actuated, it cannot be optimized, very high rpms / force can be requested
             #for the safety of the system, this will autodisable robot (probably)
             #remove if PIA
-
-            self.get_logger().error("System has become underactuated. Only:  " + str(activeThrusterCount) + " thrusters are active. Killing Thrusters!")
-            self.enabled = False
+            if self.enabled:
+                self.get_logger().error("System has become underactuated. Only:  " + str(activeThrusterCount) + " thrusters are active. Killing Thrusters!")
+                self.enabled = False
         else:
             self.enabled = True
 
@@ -923,12 +931,9 @@ class ControllerOverseer(Node):
                     
                     config.write(auto_ff_config_string)
                     
-                    self.get_logger().error(f"Writing auto ff")
 
                     if not ((self.drag_comp_forward_data is None) or (self.drag_comp_reverse_data is None)):
                      #cant save until cb complete
-                        self.get_logger().error(f"Attempting to write drag string {drag_forward_string}")
-
                         config.write(drag_forward_string)
                         config.write(drag_reverse_string)
                         
