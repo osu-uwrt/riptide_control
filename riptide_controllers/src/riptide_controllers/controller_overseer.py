@@ -2,6 +2,7 @@
 
 import os
 import yaml
+import yaml.parser
 import rclpy
 import numpy as np
 from collections import deque
@@ -17,10 +18,10 @@ from riptide_msgs2.msg import DshotPartialTelemetry
 from nav_msgs.msg import Odometry
 from rcl_interfaces.srv import SetParameters, ListParameters
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
-from std_msgs.msg import Int16, Int32MultiArray, Bool
+from std_msgs.msg import Int16, Int32MultiArray, Bool, Empty
 from std_srvs.srv import Trigger, SetBool
 from diagnostic_msgs.msg import DiagnosticArray
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, TwistWithCovariance
 
 
 #TODO: sort these
@@ -41,7 +42,12 @@ ACTIVE_PARAMETERS_MASK = "controller__active_force_mask"
 
 FF_PUBLISH_PARAM = "disable_native_ff"
 FF_TOPIC_NAME = "controller/FF_body_force"
+AUTOTUNE_REINIT_TOPIC_NAME = "controller/re_init_accumulators"
 WEIGHTS_FORCE_UPDATE_PERIOD = 1
+
+ORIN_AUTOTUNE_DIR = "/bin"
+
+AUTOFF_INIT_TOLERANCE = .01 #seeing rounding errors lol
 
 G = 9.8067
 
@@ -275,6 +281,7 @@ class SimulinkModelNode():
     def reload_parameters(self):
         self.known_params = []
         self.overseer_node.readConfig()
+
         return self.list_and_set_model_parameters()
     
     
@@ -304,6 +311,13 @@ class SimulinkModelNode():
 
 #manages parameters for the controller / thruster solver
 class ControllerOverseer(Node):
+    waiting_on_init = False
+
+    drag_comp_forward_data = None
+    drag_comp_reverse_data = None
+
+    refresh_drag_file = True
+
     def __init__(self):
         super().__init__("controllerOverseer")
         
@@ -382,11 +396,20 @@ class ControllerOverseer(Node):
         #sub to autotune
         self.create_subscription(Twist, "ff_auto_tune", self.ffAutoTuneCB, qos_profile_system_default)
 
+        #sub to the drag compensator forward
+        self.create_subscription(TwistWithCovariance, "controller/drag_comp/forward", self.dragCompForwardCb, qos_profile_system_default)
+
+        #sub to the drag compensator reverse
+        self.create_subscription(TwistWithCovariance, "controller/drag_comp/reverse", self.dragCompRevereseCb, qos_profile_system_default)
+
         #pub for thruster weights
         self.weightsPub = self.create_publisher(Int32MultiArray, THRUSTER_SOLVER_WEIGHT_MATRIX_TOPIC, qos_profile_system_default)
 
         #pub ff force
         self.ffPub = self.create_publisher(Twist, FF_TOPIC_NAME, qos_profile_system_default)
+
+        #pub signal to reinit autoff and dragcal
+        self.re_init_signal_pub = self.create_publisher(Empty, AUTOTUNE_REINIT_TOPIC_NAME, qos_profile_system_default)
 
         #create teleop serivce
         self.setTeleop = self.create_service(SetBool, "setTeleop", self.setTeleop)
@@ -415,6 +438,21 @@ class ControllerOverseer(Node):
         #a timer to ensure that the active controllers stop if telemetry stops publishing!
         self.escPowerCheckTimer = self.create_timer(ESC_POWER_TIMEOUT, self.escPowerTimeout)
 
+
+    def dragCompForwardCb(self, msg):
+
+        #save drag data
+        self.drag_comp_forward_data = msg.covariance
+        self.refresh_drag_file = True
+
+    def dragCompRevereseCb(self, msg):
+
+        #save drag data
+        self.drag_comp_reverse_data = msg.covariance
+        self.refresh_drag_file = True
+
+
+
     def generateThrusterForceMatrix(self, thruster_info, com):
         #generate the thruster effect matrix
         self.thrusterEffects = np.zeros(shape=(8,6))
@@ -428,7 +466,6 @@ class ControllerOverseer(Node):
 
             #insert into thruster effect matrix
             self.thrusterEffects[i] = [forceVector[0], forceVector[1], forceVector[2], torque[0], torque[1], torque[2]]
-
 
     def setConfigPath(self):
         #set the path to the config file
@@ -465,8 +502,16 @@ class ControllerOverseer(Node):
 
         auto_ff_subpath = os.path.join("config", self.robotName + "_autoff.yaml")
 
-         # Set fallback config path if we can't find the one in source
-        self.autoff_config_path = os.path.join(control_share_dir, auto_ff_subpath)
+        if not os.path.exists("/home/ros/colcon_deploy"):
+            #running on personal computer
+            self.get_logger().info("I think I am running on not the orin!")
+
+            self.autoff_config_path = os.path.join(control_share_dir, auto_ff_subpath)
+
+        else:
+            self.get_logger().info("I think I am running on the orin!")
+
+            self.autoff_config_path = os.path.join(ORIN_AUTOTUNE_DIR, self.robotName + "_autoff.yaml")
 
     def readConfig(self):
         try:
@@ -477,13 +522,42 @@ class ControllerOverseer(Node):
 
         try:
             with open(self.autoff_config_path, "r") as config:
-                self.configTree["auto_ff"] = yaml.safe_load(config)
-                self.currentAutoTuneTwist = self.configTree["auto_ff"]["auto_ff"]
-        except:
+                autoff_yaml_data = yaml.safe_load(config)
+                autoff_init = autoff_yaml_data["auto_ff"]
+              
+                #ensure the re init signal is sent to the controller mode;  
+                self.waiting_on_init = True
+
+                auto_loaded_params = dict()
+                auto_loaded_params["initial_ff"] = autoff_init
+                self.configTree["controller"]["autoff"] = auto_loaded_params
+
+                drag_forward_init = autoff_yaml_data["drag_forward"]
+                drag_reverse_init = autoff_yaml_data["drag_reverse"]
+
+                drag_initial_comp = dict()
+                drag_initial_comp["forward"] = drag_forward_init
+                drag_initial_comp["reverse"] = drag_reverse_init
+                
+                self.configTree["controller"]["drag_compensator"]["initial_compensation"] = drag_initial_comp
+                
+                self.get_logger().info(f"{self.configTree}")
+                
+                self.currentAutoTuneTwist = autoff_init
+        except FileNotFoundError:
             self.get_logger().error(f"Cannot open config file at {self.autoff_config_path}!")
+        except KeyError:
+            self.get_logger().error(f"Missing Autoff Keys!")
+        except TypeError:
+            self.get_logger().error(f"Type Error!")
+        except yaml.parser.ParserError:
+            self.get_logger().error(f"Yaml Parser")
+
+
+            
         
         # read specific values used by the class
-        
+                
         # thruster info
         self.thruster_info = self.configTree['thrusters']
         
@@ -559,11 +633,14 @@ class ControllerOverseer(Node):
         if self.escPowerStopsLow > ESC_POWER_STOP_TOLERANCE or self.escPowerStopsHigh > ESC_POWER_STOP_TOLERANCE:
             #publish disabled message
             motionMsg.data = False
+            self.enabled = False
 
-            self.get_logger().warn("Recieving disabled flags from ESC!")
+            # if self.enabled:
+            #     self.get_logger().warn("Recieving disabled flags from ESC!")
         else:
 
             motionMsg.data = True
+            self.enabled = True
             #publish enabled message
         
         self.motionEnabledPub.publish(motionMsg)
@@ -571,10 +648,12 @@ class ControllerOverseer(Node):
 
     def escPowerTimeout(self):
         #timeout for if the escs go to long without publishing telemerty
-        self.get_logger().warn("Not recieving thruster telemetry!")
+        if self.enabled:
+            self.get_logger().warn("Not recieving thruster telemetry!")
 
         motionMsg = Bool()
         motionMsg.data = False
+        self.enabled = False
         self.motionEnabledPub.publish(motionMsg)
 
 
@@ -649,9 +728,9 @@ class ControllerOverseer(Node):
             #if system is not full actuated, it cannot be optimized, very high rpms / force can be requested
             #for the safety of the system, this will autodisable robot (probably)
             #remove if PIA
-
-            self.get_logger().error("System has become underactuated. Only:  " + str(activeThrusterCount) + " thrusters are active. Killing Thrusters!")
-            self.enabled = False
+            if self.enabled:
+                self.get_logger().error("System has become underactuated. Only:  " + str(activeThrusterCount) + " thrusters are active. Killing Thrusters!")
+                self.enabled = False
         else:
             self.enabled = True
 
@@ -801,22 +880,71 @@ class ControllerOverseer(Node):
         if (self.autoff_config_path == None):
             return 
 
+        #if the controller is trying to reinit the autoff
+        if(self.waiting_on_init):
+
+            auto_ff_init = None
+            try:
+                auto_ff_init = self.configTree["controller"]["autoff"]["initial_ff"]
+            except KeyError:
+                self.get_logger().warn("Cannot find the initial auto ff in config tree!")
+                return
+
+            if (abs(auto_ff_init[0] - msg.linear.x) < AUTOFF_INIT_TOLERANCE and abs(auto_ff_init[1] - msg.linear.y) < AUTOFF_INIT_TOLERANCE and abs(auto_ff_init[2] - msg.linear.z) < AUTOFF_INIT_TOLERANCE and 
+                abs(auto_ff_init[3] - msg.angular.x) < AUTOFF_INIT_TOLERANCE and abs(auto_ff_init[4] - msg.angular.y) < AUTOFF_INIT_TOLERANCE and abs(auto_ff_init[5] - msg.angular.z) < AUTOFF_INIT_TOLERANCE):
+
+                #if the init signal has taken
+                self.waiting_on_init = False
+
+            else: 
+                #pub msg
+                msg = Empty()
+                self.re_init_signal_pub.publish(msg)
+
+            return
+
         #if the twist has been updated
-        if not (self.currentAutoTuneTwist[0] == msg.linear.x and self.currentAutoTuneTwist[1] == msg.linear.y and self.currentAutoTuneTwist[2] == msg.linear.z and 
-           self.currentAutoTuneTwist[3] == msg.angular.x and self.currentAutoTuneTwist[4] == msg.angular.y and self.currentAutoTuneTwist[5] == msg.angular.z):
+        if (not (self.currentAutoTuneTwist[0] == msg.linear.x and self.currentAutoTuneTwist[1] == msg.linear.y and self.currentAutoTuneTwist[2] == msg.linear.z and 
+           self.currentAutoTuneTwist[3] == msg.angular.x and self.currentAutoTuneTwist[4] == msg.angular.y and self.currentAutoTuneTwist[5] == msg.angular.z)) or (self.refresh_drag_file):
             #prepare string to be wrote
-            auto_ff_config_string = f"auto_ff: [{msg.linear.x},{msg.linear.y},{msg.linear.z},{msg.angular.x},{msg.angular.y},{msg.angular.z}]"
+            auto_ff_config_string = f"auto_ff: [{msg.linear.x},{msg.linear.y},{msg.linear.z},{msg.angular.x},{msg.angular.y},{msg.angular.z}]\n"
+            
+            drag_forward_string = ""
+            drag_reverse_string = ""
+            if(not ((self.drag_comp_forward_data is None) or (self.drag_comp_reverse_data is None))):
+
+                #write the forward drag string
+                drag_forward_string = f"drag_forward: ["
+                for value in self.drag_comp_forward_data:
+                    drag_forward_string = drag_forward_string + str(value) + ","
+                drag_forward_string =  drag_forward_string + "]\n"
+
+                #write the reverse drag string
+                drag_reverse_string = f"drag_reverse: ["
+                for value in self.drag_comp_reverse_data:
+                    drag_reverse_string = drag_reverse_string + str(value) + ","
+                drag_reverse_string =  drag_reverse_string + "]\n"
 
             #write config to file
             try:
                 with open(self.autoff_config_path, "w") as config:
+                    
                     config.write(auto_ff_config_string)
+                    
+
+                    if not ((self.drag_comp_forward_data is None) or (self.drag_comp_reverse_data is None)):
+                     #cant save until cb complete
+                        config.write(drag_forward_string)
+                        config.write(drag_reverse_string)
+                        
                     config.close()
 
-            except:
+            except FileExistsError:
                 self.get_logger().error(f"Cannot open ff auto tune file at: {self.autoff_config_path}")
-            
+            except PermissionError:
+                self.get_logger().error(f"No Permission to write of autoff file at: {self.autoff_config_path}")
 
+        
                 
 def main(args=None):
     rclpy.init(args=args)
