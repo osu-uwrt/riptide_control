@@ -4,6 +4,7 @@ import os
 import yaml
 import yaml.parser
 import rclpy
+import shutil
 import numpy as np
 from collections import deque
 from rclpy.node import Node
@@ -902,6 +903,13 @@ class ControllerOverseer(Node):
                 self.re_init_signal_pub.publish(msg)
 
             return
+        
+        # Make sure we aren't writing 0 -ish values 
+        if (abs(msg.linear.x) < AUTOFF_INIT_TOLERANCE and abs(msg.linear.y) < AUTOFF_INIT_TOLERANCE and 
+            abs(msg.linear.z) < AUTOFF_INIT_TOLERANCE and abs(msg.angular.x) < AUTOFF_INIT_TOLERANCE and 
+            abs(msg.angular.y) < AUTOFF_INIT_TOLERANCE and abs(msg.angular.z) < AUTOFF_INIT_TOLERANCE):
+            self.get_logger().warn("Received near-zero autotune data, skipping write to prevent corruption")
+            return
 
         #if the twist has been updated
         if (not (self.currentAutoTuneTwist[0] == msg.linear.x and self.currentAutoTuneTwist[1] == msg.linear.y and self.currentAutoTuneTwist[2] == msg.linear.z and 
@@ -911,7 +919,7 @@ class ControllerOverseer(Node):
             
             drag_forward_string = ""
             drag_reverse_string = ""
-            if(not ((self.drag_comp_forward_data is None) or (self.drag_comp_reverse_data is None))):
+            if self.drag_comp_forward_data is not None and self.drag_comp_reverse_data is not None:
 
                 #write the forward drag string
                 drag_forward_string = f"drag_forward: ["
@@ -927,22 +935,25 @@ class ControllerOverseer(Node):
 
             #write config to file
             try:
-                with open(self.autoff_config_path, "w") as config:
-                    
+                # Write to temporary file first
+                temp_path = self.autoff_config_path + ".tmp"
+                with open(temp_path, "w") as config:
                     config.write(auto_ff_config_string)
-                    
-
-                    if not ((self.drag_comp_forward_data is None) or (self.drag_comp_reverse_data is None)):
-                     #cant save until cb complete
+                    if self.drag_comp_forward_data is not None and self.drag_comp_reverse_data is not None:
                         config.write(drag_forward_string)
                         config.write(drag_reverse_string)
-                        
-                    config.close()
+                
+                # Move temp only after successful write
+                shutil.move(temp_path, self.autoff_config_path)
 
-            except FileExistsError:
-                self.get_logger().error(f"Cannot open ff auto tune file at: {self.autoff_config_path}")
-            except PermissionError:
-                self.get_logger().error(f"No Permission to write of autoff file at: {self.autoff_config_path}")
+            except (FileExistsError, PermissionError) as e:
+                # Clean up temp file if it exists
+                if os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except:
+                        pass
+                self.get_logger().error(f"Failed to write autotune file: {e}")
 
         
                 
