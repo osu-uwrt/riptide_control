@@ -46,7 +46,7 @@ FF_TOPIC_NAME = "controller/FF_body_force"
 AUTOTUNE_REINIT_TOPIC_NAME = "controller/re_init_accumulators"
 WEIGHTS_FORCE_UPDATE_PERIOD = 1
 
-ORIN_AUTOTUNE_DIR = "/bin"
+ORIN_AUTOTUNE_DIR = "/var/lib/autoff"
 
 AUTOFF_INIT_TOLERANCE = .01 #seeing rounding errors lol
 
