@@ -953,7 +953,7 @@ class ControllerOverseer(Node):
                         os.remove(temp_path)
                     except:
                         pass
-                self.get_logger().error(f"Failed to write autotune file: {e}")
+                #self.get_logger().error(f"Failed to write autotune file: {e}")
 
         
                 
