@@ -908,7 +908,7 @@ class ControllerOverseer(Node):
         if (abs(msg.linear.x) < AUTOFF_INIT_TOLERANCE and abs(msg.linear.y) < AUTOFF_INIT_TOLERANCE and 
             abs(msg.linear.z) < AUTOFF_INIT_TOLERANCE and abs(msg.angular.x) < AUTOFF_INIT_TOLERANCE and 
             abs(msg.angular.y) < AUTOFF_INIT_TOLERANCE and abs(msg.angular.z) < AUTOFF_INIT_TOLERANCE):
-            self.get_logger().warn("Received near-zero autotune data, skipping write to prevent corruption")
+            #self.get_logger().warn("Received near-zero autotune data, skipping write to prevent corruption")
             return
 
         #if the twist has been updated
@@ -953,7 +953,7 @@ class ControllerOverseer(Node):
                         os.remove(temp_path)
                     except:
                         pass
-                self.get_logger().error(f"Failed to write autotune file: {e}")
+                #self.get_logger().error(f"Failed to write autotune file: {e}")
 
         
                 
