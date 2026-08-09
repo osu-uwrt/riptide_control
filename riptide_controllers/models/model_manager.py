@@ -36,8 +36,10 @@ def assert_path_exists(name, pth):
             "Please ensure that the source tree exists, otherwise this script serves no purpose", file=sys.stderr)
         exit()
 
+print(f"Controllers root {CONTROLLERS_ROOT_LOCATION}")
 assert_path_exists("uwrt root", UWRT_ROOT)
 print(f"Detected uwrt root as {UWRT_ROOT}")
+print(f"Detected models root as {MODELS_ROOT}")
 assert_path_exists("models path", MODELS_ROOT)
 print(f"Detected models root as {MODELS_ROOT}")
 
