@@ -22,7 +22,7 @@ typeQueue = Queue() # thread saf4e object representing the type of the queue
 
 #controller mappings - dependent on controller
 mappings = {
-    "PLAYSTATION(R)3":{
+    "Sony PLAYSTATION(R)3 Controller":{
         "left_joy_x":ecodes.ABS_X,
         "left_joy_y":ecodes.ABS_Y,
         "left_trigger":ecodes.ABS_Z,        
@@ -115,7 +115,7 @@ class RocketLeague(Node):
         self.dropper_trigger_pub = self.create_publisher(Empty, "/talos/command/simple_dropper_fire", qos_profile_system_default)
 
         #parameters
-        self.declare_parameter("default_depth", value= 1.0)
+        self.declare_parameter("default_depth", value= -0.5)
         self.declare_parameter("depth_increment", value= 0.1)
         self.declare_parameter("roll_max", value = .5 )
         self.declare_parameter("pitch_max", value = .5 )
@@ -374,13 +374,14 @@ async def read_controller_events():
 
             #connect a controller
 
-            controllerTypes = ["PLAYSTATION(R)3", "SHANWAN"]  #name of the controller trying to find
+            # use the exact ps controller name or it'll grab motion controls
+            controllerTypes = ["Sony PLAYSTATION(R)3 Controller", "SHANWAN"]  #name of the controller trying to find
 
             devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
 
             for device in devices:
                 for type in controllerTypes:
-                    if(type in device.name):
+                    if(type == device.name):
                         controller = device
                         typeQueue.put(type)
 
