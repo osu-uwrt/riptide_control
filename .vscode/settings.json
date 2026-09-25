@@ -42,5 +42,6 @@
         "/home/hollis/osu-uwrt/dependencies/install/camera_calibration/lib/python3.10/site-packages",
         "/opt/ros/humble/lib/python3.10/site-packages",
         "/opt/ros/humble/local/lib/python3.10/dist-packages"
-    ]
+    ],
+    "cmake.sourceDirectory": "/home/john/osu-uwrt/development/software/src/riptide_control/riptide_controllers"
 }
