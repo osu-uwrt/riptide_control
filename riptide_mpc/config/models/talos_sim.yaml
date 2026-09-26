@@ -1,0 +1,145 @@
+# Exact copy of the simulator's Talos plant (c_simulator robots/talos/config/
+# hydrodynamics.yaml, as resolved for the competition pool: current oscillation
+# frequency 0). Use it as the MPC model (mpc_model:=sim_copy) for a perfect-model
+# baseline, or as the reference point when editing talos.yaml.
+schema_version: 1
+robot: talos
+parameter_status: unvalidated_prior
+provenance: CAD rigid inertia; equivalent-ellipsoid added mass; approximated legacy
+  drag. NO pool identification.
+rigid_body_inertia3x3:
+- 1.6315
+- -0.0599
+- -0.033
+- -0.0599
+- 0.7341
+- 0.0427
+- -0.033
+- 0.0427
+- 1.6332
+added_mass6x6:
+- - 33.76441573413407
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 7.138775954138664
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 14.375071388298007
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.062395054069073454
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.060232298657156735
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.30409901675615597
+linear_damping6x6:
+- - 34.945580177147725
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 27.992277245879045
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 40.36692194478054
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 9.910927173896203
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 3.0045521578787238
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 3.8668316289236078
+quadratic_damping:
+- 128.93885061269464
+- 96.24090039531974
+- 50.33885380673263
+- 2.7724251278046257
+- 1.4991943770654036
+- 5.138467615330231
+damping_center_relative:
+- 0.0
+- 0.0
+- 0.0
+water_density: 998.2
+displaced_volume: 0.0323621667640687
+cob_relative:
+- 0.00775
+- 0.0
+- 0.010
+buoyancy_radii:
+- 0.175
+- 0.415
+- 0.275
+water_level: 0.0
+current_velocity:
+- 0.0
+- 0.0
+- 0.0
+current_oscillation_amplitude:
+- 0.0
+- 0.0
+- 0.0
+current_oscillation_frequency: 0.0
+thruster_dynamics:
+  delay: 0.1
+  rise_time_constant: 0.08
+  fall_time_constant: 0.06
+  slew_rate: 300.0
+  force_deadband: 0.0
+  forward_scale: 1.0
+  reverse_scale: 1.0
+  command_timeout: 0.5
+  forward_max_force: 28.0
+  reverse_max_force: 28.0
+  propeller_radius: 0.05
+thruster_efficiencies:
+- 1.0
+- 1.0
+- 1.0
+- 1.0
+- 1.0
+- 1.0
+- 1.0
+- 1.0

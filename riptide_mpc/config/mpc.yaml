@@ -1,0 +1,100 @@
+/**/mpc_controller:
+  ros__parameters:
+    # Feedback: "sensors" = own estimator from IMU (vectornav/imu), FOG (gyro/twist),
+    # DVL (dvl_twist) and depth (depth/pose), with the EKF (odom_topic) only anchoring
+    # x/y + heading and standing in for stale sensors. "odometry" = odom_topic as is.
+    state_source: sensors
+    odom_topic: odometry/filtered
+    imu_topic: vectornav/imu
+    fog_topic: gyro/twist
+    dvl_topic: dvl_twist
+    depth_topic: depth/pose
+    estimator:
+      gyro_gain: 1.0                  # fraction of each gyro innovation applied
+      fog_gain: 1.0
+      dvl_gain: 0.7
+      tilt_time_constant: 1.0         # s; IMU gravity reference for roll/pitch
+      depth_time_constant: 0.3        # s
+      heading_time_constant: 2.0      # s; EKF yaw anchor
+      horizontal_time_constant: 2.0   # s; EKF x/y anchor
+      fallback_time_constant: 0.3     # s; EKF replacing a stale sensor
+      gyro_timeout: 0.2               # s; older -> stale, EKF takes over that channel
+      fog_timeout: 0.1
+      tilt_timeout: 0.5
+      dvl_timeout: 1.0                # DVL stops publishing without bottom lock
+      depth_timeout: 0.5
+      reset_distance: 1.0             # m; re-seed from the EKF beyond this disagreement
+      reset_angle: 0.5                # rad
+      # Offset-free MPC: learn the wrench the model is missing (buoyancy/trim,
+      # COB/COM offsets, thruster scale) and predict with it. Learning slows with
+      # speed so speed-dependent error (drag) is left to feedback.
+      estimate_disturbance: true
+      disturbance_force_time_constant: 3.0    # s
+      disturbance_torque_time_constant: 3.0   # s
+      max_disturbance_force: 20.0             # N
+      max_disturbance_torque: 5.0             # N m
+      disturbance_gate_speed: 0.1             # m/s
+      disturbance_gate_rate: 0.2              # rad/s
+    control_period: 0.05       # s; also the MPC stage length
+    horizon_steps: 30          # 1.5 s horizon (after the 0.1 s thruster delay)
+    model_step: 0.002          # nominal prediction step; same as physics_simulator
+    linearization_step: 0.025  # finite-difference Jacobian model step
+    sqp_iterations: 1          # real-time iteration; raise for more exact nonlinear solves
+    qp_max_iterations: 50
+    compensate_delay: true
+    linear_velocity_frame: body  # VELOCITY mode setpoint frame: body | world
+    respect_motion_enabled: true
+    odom_timeout: 0.5
+    motion:
+      # Setpoints are approached along a speed/accel/jerk-limited (S-curve) profile
+      # rather than chased directly. The MPC tracks its pose, velocity, and the
+      # thrust it needs (inverse Fossen dynamics) as feedforward.
+      profile: true
+      linear_speed: 0.7        # m/s; the sim model tops out near 0.9 m/s (drag vs 28 N thrusters)
+      linear_accel: 0.3        # m/s^2; above ~0.7 the vehicle starts lagging the profile
+      linear_jerk: 2.0         # m/s^3; accel ramps over accel/jerk = 0.25 s
+      # Straight up/down limits; linear_* above are then horizontal and a
+      # diagonal move gets the ellipse between. -1: same as horizontal.
+      # e.g. 0.3 / 0.3 / 2.0 to slow climbs and dives (the sim lags on climbs).
+      linear_speed_vertical: 0.3   # m/s
+      linear_accel_vertical: 0.2   # m/s^2
+      linear_jerk_vertical: -1.0    # m/s^3
+      angular_speed: 1.0       # rad/s
+      angular_accel: 1.2       # rad/s^2
+      angular_jerk: 6.0        # rad/s^3; 0.2 s ramp
+      max_reference_lag: 1.0   # m; re-seed the profile at the vehicle if it falls this far behind
+      max_reference_lag_angle: 0.8  # rad
+      # Reference governor: when the vehicle lags the profile (thrust saturation,
+      # model error) its cruise speed is scaled down, to a crawl at the stop lag.
+      governor_lag: 0.15          # m
+      governor_stop_lag: 0.40     # m
+      governor_angle: 0.05        # rad
+      governor_stop_angle: 0.25   # rad
+    path:
+      # follow_path action (FollowPath BT node): the reference turns toward the next
+      # waypoint within corner_radius of the current one, slowing only enough that its
+      # swing through the corner stays inside that radius, and stops only on the last.
+      corner_radius: 0.3        # m
+      success_trust: 0.8        # result once trust (below) reaches this on the last waypoint
+      progress_timeout: 10.0    # s without 5 cm of progress -> PROGRESS_FAIL
+    trust:
+      # controller/scale/trust (autonomy WaitForController): restarts at 0 on a new
+      # setpoint, grows once the profile has arrived and the vehicle is within these
+      # thresholds, decays otherwise. >0.95 about 1 s after arrival.
+      growth_tau: 0.25                  # s
+      decay_tau: 1.0                    # s
+      position_threshold: 0.02          # m
+      attitude_threshold: 0.035         # rad
+      linear_velocity_threshold: 0.03   # m/s
+      angular_velocity_threshold: 0.03  # rad/s
+    weights:
+      # diagonal output weights, per axis x y z (or roll pitch yaw)
+      position: [400.0, 400.0, 400.0]
+      attitude: [3000.0, 3000.0, 300.0]   # roll/pitch dominate: never tilt to gain distance
+      linear_velocity: [100.0, 100.0, 100.0]
+      angular_velocity: [50.0, 50.0, 50.0]
+      linear_damping: [20.0, 20.0, 20.0]    # zero-velocity weight while holding a position
+      angular_damping: [10.0, 10.0, 10.0]   # zero-rate weight while holding an attitude
+      terminal_factor: 5.0
+      thrust: 0.001        # per N^2, about the hover trim
+      thrust_rate: 0.005   # per N^2, change between successive commands

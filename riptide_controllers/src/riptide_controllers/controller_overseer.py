@@ -336,6 +336,10 @@ class ControllerOverseer(Node):
         self.declare_parameter("robot", "")
         self.robotName = self.get_parameter("robot").value
 
+        #active controller; the Simulink-only parameter pushes are skipped for "mpc"
+        self.declare_parameter("active_control_model", "hybrid")
+        self.activeControlModel = self.get_parameter("active_control_model").value
+
         #get robot config file path
         self.declare_parameter("vehicle_config", "")
         self.config_path = self.get_parameter("vehicle_config").value
@@ -761,6 +765,12 @@ class ControllerOverseer(Node):
 
     def setTeleop(self, request, future):
         #set the teleop mode
+
+        #the control mask only exists in the Simulink model; the MPC handles every mode itself
+        if self.activeControlModel == "mpc":
+            future.success = True
+            future.message = "MPC controller active; no control mask to set"
+            return future
 
         #if setting Teleop on
         if(request.data == True):

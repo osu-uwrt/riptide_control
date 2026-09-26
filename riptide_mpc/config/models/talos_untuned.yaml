@@ -1,0 +1,157 @@
+# Deliberately wrong prior for testing pool identification (see provenance).
+# Roll/pitch drag are kept: the session does not identify them.
+schema_version: 1
+robot: talos
+parameter_status: unvalidated_prior
+provenance: 'Test prior for pool identification: talos.yaml with drag and added mass
+  ZEROED on the identified axes (surge, sway, heave, yaw), 5% less buoyancy and a
+  shifted COB. Fly it with mpc_model:=talos_untuned and run pool_identify with model:=talos_untuned.'
+rigid_body_inertia3x3:
+- 1.6315
+- -0.0599
+- -0.033
+- -0.0599
+- 0.7341
+- 0.0427
+- -0.033
+- 0.0427
+- 1.6332
+added_mass6x6:
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+linear_damping6x6:
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+quadratic_damping:
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+damping_center_relative:
+- 0.0
+- 0.0
+- 0.0
+water_density: 998.2
+displaced_volume: 0.030744
+cob_relative:
+- 0.0
+- 0.0
+- 0.02
+buoyancy_radii:
+- 0.175
+- 0.415
+- 0.275
+water_level: 0.0
+current_velocity:
+- 0.0
+- 0.0
+- 0.0
+current_oscillation_amplitude:
+- 0.0
+- 0.0
+- 0.0
+current_oscillation_frequency: 0.0
+thruster_dynamics:
+  delay: 0.1
+  rise_time_constant: 0.08
+  fall_time_constant: 0.06
+  slew_rate: 300.0
+  force_deadband: 0.0
+  forward_scale: 1.0
+  reverse_scale: 1.0
+  command_timeout: 0.5
+  forward_max_force: 24.0
+  reverse_max_force: 24.0
+  propeller_radius: 0.05
+thruster_efficiencies:
+- 1.0
+- 1.0
+- 1.0
+- 1.0
+- 1.0
+- 1.0
+- 1.0
+- 1.0
+hardware:
+  can_interface: can0
+  total_thrust_limit: 73.0
+  force_to_rpm_positive:
+  - -475.886186
+  - 32.327429
+  - -324.744664
+  - 1443.832105
+  force_to_rpm_negative:
+  - 257.460623
+  - 42.948545
+  - -24.402056
+  - -986.338071

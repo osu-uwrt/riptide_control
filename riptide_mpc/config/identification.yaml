@@ -1,0 +1,28 @@
+# Pool identification session (ros2 launch riptide_mpc pool_identify.launch.py).
+# Fits net buoyancy + centre of buoyancy (tilted holds), drag (steady runs at
+# several speeds) and added mass (the accelerations of those runs). Thruster
+# geometry, force curve, limits and delay are trusted as calibrated.
+/**/pool_identify:
+  ros__parameters:
+    # hydrodynamics_config: <prior model>   # default: riptide_mpc config/models/<robot>.yaml
+    # output_dir: ~/osu-uwrt/mpc_identification
+    statics: true
+    surge: true
+    sway: true
+    heave: true
+    yaw: true
+    lane_length: 3.0          # m of clear water ahead (+x) and to port (+y) of the start
+    heave_span: 0.8           # m below the start depth (keep clear of the floor)
+    yaw_span: 3.14159         # rad, centred on the start heading
+    linear_speeds: [0.2, 0.35, 0.5, 0.65]
+    heave_speeds: [0.15, 0.25, 0.35]
+    yaw_rates: [0.3, 0.6, 0.9]
+    linear_accel: 0.5
+    angular_accel: 1.2
+    tilt: 0.1745              # rad (10 deg) roll/pitch holds for the vertical COB offset
+    hold_secs: 6.0
+    settle_timeout: 25.0
+    min_start_depth: 0.8      # m below the surface to start
+    min_depth: 0.4            # m; shallower than this ends the session
+    abort_margin: 1.5         # m beyond the lanes before the session ends
+    trust_threshold: 0.95     # controller/scale/trust meaning "settled"
