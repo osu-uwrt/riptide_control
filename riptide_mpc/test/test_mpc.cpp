@@ -75,7 +75,7 @@ TEST(BoxQp, MatchesKktConditions) {
 TEST(FossenModel, LoadsSimulatorConfiguration) {
     const FossenModel m = talos();
     EXPECT_EQ(m.thrusterCount(), 8);
-    EXPECT_NEAR(m.mass(), 31.998, 1e-9);
+    EXPECT_NEAR(m.mass(), 34.708, 1e-9);
     Eigen::FullPivLU<MatrixXd> lu(m.thrusterMatrix());
     EXPECT_EQ(lu.rank(), 6);
     // Round trip between odometry (base_link) and simulator (COM) state.
@@ -303,6 +303,40 @@ TEST(Mpc, HoldsLevelWithNoSteadyStateError) {
     std::printf("hold drift %.2e m\n", (loop.position() - r.position).norm());
     EXPECT_LT((loop.position() - r.position).norm(), 1e-4);
     EXPECT_LT(quaternionLog(loop.orientation()).norm(), 1e-4);
+}
+
+// thruster_sweep swaps the thruster model mid-hold: the replica restarts settled on
+// the last command, so the hold barely moves; an invalid model changes nothing.
+TEST(Mpc, ThrusterModelSwapMidHoldDoesNotKick) {
+    ClosedLoop loop;
+    Reference r;
+    r.linear_mode = r.angular_mode = Mode::POSITION;
+    r.position = loop.position();
+    loop.run(r, 3.0);
+    // Same model: the restart alone must be invisible.
+    std::vector<ThrusterParameters> p = loop.controller.model().actuatorParameters();
+    loop.controller.setActuatorParameters(p);
+    EXPECT_LT((loop.controller.actuatorEstimate().forces() - loop.plant_actuator.forces()).norm(), 1e-3);
+    loop.max_rate = 0;
+    loop.run(r, 1.0);
+    EXPECT_LT(loop.max_rate, 1e-3);
+    // A modest mismatch (slower actuators than the plant) still holds.
+    for (auto &a : p)
+        a.delay = 0.15;
+    loop.controller.setActuatorParameters(p);
+    EXPECT_DOUBLE_EQ(loop.controller.model().actuatorParameters().front().delay, 0.15);
+    EXPECT_NEAR(loop.controller.actuatorEstimate().forces().norm(), loop.plant_actuator.forces().norm(), 0.5);
+    loop.max_rate = 0;
+    loop.run(r, 3.0);
+    std::printf("after swap: drift %.2e m, max rate %.2e rad/s\n", (loop.position() - r.position).norm(),
+                loop.max_rate);
+    EXPECT_LT((loop.position() - r.position).norm(), 0.01);
+    EXPECT_LT(loop.max_rate, 0.02);
+
+    auto bad = p;
+    bad.front().efficiency = 1.5;
+    EXPECT_THROW(loop.controller.setActuatorParameters(bad), std::invalid_argument);
+    EXPECT_DOUBLE_EQ(loop.controller.model().actuatorParameters().front().efficiency, p.front().efficiency);
 }
 
 TEST(Mpc, TracksBodyVelocity) {

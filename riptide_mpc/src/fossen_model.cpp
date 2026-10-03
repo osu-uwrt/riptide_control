@@ -110,6 +110,8 @@ FossenModel FossenModel::load(const std::string &vehicle_yaml, const std::string
         p.reverseLimit = dynamics["reverse_max_force"].as<double>(max_thrust);
         p.forwardScale = dynamics["forward_scale"].as<double>(1.0);
         p.reverseScale = dynamics["reverse_scale"].as<double>(1.0);
+        p.startup = dynamics["startup_time_constant"].as<double>(0.0);
+        p.startupForce = dynamics["startup_force"].as<double>(0.0);
         p.efficiency = efficiencies[i];
         model.actuators_.push_back(p);
 
@@ -155,6 +157,31 @@ VectorXd FossenModel::limitTotalThrust(const VectorXd &command) const {
 ThrusterDynamics FossenModel::makeActuator() const {
     ThrusterDynamics actuator;
     actuator.configure(actuators_, command_timeout_);
+    return actuator;
+}
+
+void FossenModel::setActuatorParameters(const std::vector<ThrusterParameters> &parameters) {
+    if (static_cast<int>(parameters.size()) != thrusterCount())
+        throw std::invalid_argument("Expected one thruster parameter set per thruster");
+    ThrusterDynamics check;
+    check.configure(parameters, command_timeout_); // throws on invalid values
+    actuators_ = parameters;
+}
+
+ThrusterDynamics FossenModel::settledActuator(const VectorXd &command) const {
+    ThrusterDynamics actuator = makeActuator();
+    if (command.size() != thrusterCount() || !command.allFinite())
+        return actuator;
+    double settle = 0;
+    for (const auto &p : actuators_)
+        settle = std::max(settle, p.delay + 10 * std::max(p.rise, p.fall));
+    // Re-issued every 50 ms, well inside the command watchdog.
+    const double step = 0.05;
+    for (double t = 0; t <= settle; t += step) {
+        actuator.command(command);
+        actuator.advance(step);
+    }
+    actuator.command(command);
     return actuator;
 }
 
@@ -217,8 +244,11 @@ void FossenModel::evolveActuators(VectorXd &force, const VectorXd &target, doubl
         return;
     for (int i = 0; i < thrusterCount(); ++i) {
         const auto &p = actuators_[i];
-        const double tau =
-            (target[i] * force[i] >= 0 && std::abs(target[i]) > std::abs(force[i])) ? p.rise : p.fall;
+        const bool starting = target[i] * force[i] < 0 ||
+                              (std::abs(force[i]) < p.startupForce && std::abs(target[i]) > std::abs(force[i]));
+        const double tau = p.startup > 0 && starting ? p.startup
+                           : (target[i] * force[i] >= 0 && std::abs(target[i]) > std::abs(force[i])) ? p.rise
+                                                                                                    : p.fall;
         double delta = tau > 0 ? (target[i] - force[i]) * (-std::expm1(-dt / tau)) : target[i] - force[i];
         if (p.slew > 0)
             delta = std::clamp(delta, -p.slew * dt, p.slew * dt);

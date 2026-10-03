@@ -256,7 +256,13 @@ TEST(OffsetFree, RemovesSteadyStateErrorUnderModelMismatch) {
         if (learn) {
             EXPECT_LT(err, 0.005);
             EXPECT_LT(attitude, 0.3 * M_PI / 180);
-            EXPECT_NEAR(d[4], -3.2, 1.0); // COB 1 cm forward of ~320 N buoyancy
+            // COB 1 cm forward of the +2% buoyancy, plus the 10% weak thrusters holding the
+            // model's own COB moment.
+            const YAML::Node sim = YAML::LoadFile(TALOS_MODEL_SIM);
+            const double buoyancy = sim["water_density"].as<double>() * sim["displaced_volume"].as<double>() * 9.80665;
+            const double cob_x = sim["cob_relative"][0].as<double>();
+            const double pitch = -(1.02 * buoyancy * (cob_x + 0.01) - buoyancy * cob_x) - 0.1 * buoyancy * cob_x;
+            EXPECT_NEAR(d[4], pitch, 1.0);
             EXPECT_GT(d[2], 5.0);         // ~6 N of extra lift
         } else {
             EXPECT_GT(attitude, 5 * M_PI / 180); // the model alone cannot know

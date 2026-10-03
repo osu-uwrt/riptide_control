@@ -2,6 +2,7 @@
 
 #include "riptide_mpc/fossen_model.hpp"
 
+#include <deque>
 #include <limits>
 #include <string>
 
@@ -95,6 +96,10 @@ class StateEstimator {
     // Thruster replica: every published command, and kill (queued commands dropped).
     void command(double t, const VectorXd &command);
     void stopActuators(double t);
+    // Live thruster model; the replica restarts settled on `last_command`. Throws if invalid.
+    void setActuatorParameters(const std::vector<ThrusterParameters> &parameters, const VectorXd &last_command);
+    // Live hydrodynamic model swap; keeps the thruster parameters, actuator replica and disturbance.
+    void setModel(FossenModel model);
 
     void imuRate(double t, const Vector3d &rate_imu_frame);
     void imuOrientation(double t, const Quaterniond &orientation_imu_frame);
@@ -126,6 +131,15 @@ class StateEstimator {
     bool fresh(double last, double timeout, double t) const {
         return t - last < timeout;
     }
+    // Recent COM velocity and body rate, so a measurement stamped in the past (the DVL's
+    // velocity is ~0.12 s old) is compared with what the estimate was then, not now.
+    void record();
+    bool velocityAt(double t, Vector3d &v, Vector3d &w) const;
+    struct Past {
+        double t;
+        Vector3d v, w;
+    };
+    std::deque<Past> history_;
 
     FossenModel model_;
     SensorMounts mounts_;

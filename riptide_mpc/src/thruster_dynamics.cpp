@@ -11,7 +11,7 @@ void ThrusterDynamics::configure(const std::vector<ThrusterParameters> &p, doubl
         throw std::invalid_argument("Invalid actuator count/timeout");
     for (const auto &a : p) {
         for (double value : {a.delay, a.rise, a.fall, a.slew, a.deadband, a.forwardLimit, a.reverseLimit,
-                             a.forwardScale, a.reverseScale, a.efficiency})
+                             a.forwardScale, a.reverseScale, a.efficiency, a.startup, a.startupForce})
             if (!std::isfinite(value) || value < 0)
                 throw std::invalid_argument("Thruster parameters must be finite/nonnegative");
         if (a.forwardLimit <= 0 || a.reverseLimit <= 0 || a.efficiency > 1)
@@ -61,8 +61,11 @@ void ThrusterDynamics::evolve(int i, double dt) {
     if (dt <= 0)
         return;
     const auto &p = parameters_[i];
-    const double tau =
-        (targets_[i] * forces_[i] >= 0 && std::abs(targets_[i]) > std::abs(forces_[i])) ? p.rise : p.fall;
+    const bool starting = targets_[i] * forces_[i] < 0 ||
+                          (std::abs(forces_[i]) < p.startupForce && std::abs(targets_[i]) > std::abs(forces_[i]));
+    const double tau = p.startup > 0 && starting ? p.startup
+                       : (targets_[i] * forces_[i] >= 0 && std::abs(targets_[i]) > std::abs(forces_[i])) ? p.rise
+                                                                                                          : p.fall;
     double delta = tau > 0 ? (targets_[i] - forces_[i]) * (-std::expm1(-dt / tau)) : targets_[i] - forces_[i];
     if (p.slew > 0)
         delta = std::clamp(delta, -p.slew * dt, p.slew * dt);

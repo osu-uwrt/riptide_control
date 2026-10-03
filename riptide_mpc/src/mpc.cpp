@@ -147,6 +147,21 @@ void MpcController::seedReference(const State13d &x, const Reference &r) {
     target_ = r;
 }
 
+void MpcController::setActuatorParameters(const std::vector<ThrusterParameters> &parameters) {
+    model_.setActuatorParameters(parameters);
+    lb_ = model_.commandLowerBound().replicate(settings_.horizon, 1);
+    ub_ = model_.commandUpperBound().replicate(settings_.horizon, 1);
+    actuator_ = model_.settledActuator(last_command_);
+}
+
+void MpcController::setModel(FossenModel model) {
+    if (model.thrusterCount() != nu_)
+        throw std::invalid_argument("New model has a different thruster count");
+    model.setActuatorParameters(model_.actuatorParameters());
+    model.setDisturbance(model_.disturbance());
+    model_ = std::move(model);
+}
+
 void MpcController::issue(const VectorXd &command) {
     actuator_.command(command);
     last_command_ = command;

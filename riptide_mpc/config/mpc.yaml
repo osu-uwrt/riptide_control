@@ -13,6 +13,7 @@
       gyro_gain: 1.0                  # fraction of each gyro innovation applied
       fog_gain: 1.0
       dvl_gain: 0.7
+      dvl_latency: 0.12               # s; Nortek reports its velocity ~0.12 s after the measurement (dt2)
       tilt_time_constant: 1.0         # s; IMU gravity reference for roll/pitch
       depth_time_constant: 0.3        # s
       heading_time_constant: 2.0      # s; EKF yaw anchor
@@ -45,12 +46,17 @@
     linear_velocity_frame: body  # VELOCITY mode setpoint frame: body | world
     respect_motion_enabled: true
     odom_timeout: 0.5
+    hardware.spin_bias: 0.0      # N; zero-wrench thrust pattern so no thruster idles near 0 rpm (these ESCs take
+                                 # ~0.8 s to start a motor). Live; 2026-10-03 testing.
+    hardware.rpm_offset: 140.0   # rpm added to every nonzero ESC request; the ESCs settle ~140 rpm short
+                                 # (2026-10-03 telemetry). talos.yaml was identified with 140; keep them paired.
+    table_mode: false          # bench test out of the water: RPM = 500*(1 - e^(-|F|/2)), capped at 500
     motion:
       # Setpoints are approached along a speed/accel/jerk-limited (S-curve) profile
       # rather than chased directly. The MPC tracks its pose, velocity, and the
       # thrust it needs (inverse Fossen dynamics) as feedforward.
       profile: true
-      linear_speed: 0.7        # m/s; the sim model tops out near 0.9 m/s (drag vs 28 N thrusters)
+      linear_speed: 0.5        # m/s; the sim model tops out near 0.9 m/s (drag vs 28 N thrusters)
       linear_accel: 0.3        # m/s^2; above ~0.7 the vehicle starts lagging the profile
       linear_jerk: 2.0         # m/s^3; accel ramps over accel/jerk = 0.25 s
       # Straight up/down limits; linear_* above are then horizontal and a
@@ -97,4 +103,5 @@
       angular_damping: [10.0, 10.0, 10.0]   # zero-rate weight while holding an attitude
       terminal_factor: 5.0
       thrust: 0.001        # per N^2, about the hover trim
-      thrust_rate: 0.005   # per N^2, change between successive commands
+      thrust_rate: 0.05    # per N^2, change between successive commands. 2026-10-03 weight sweep: 0.005 wobbled
+                           # (pitch 0.6-0.9 deg rms, ~4 deg/s); 0.02 and 0.05 held 0.07-0.09 deg with less thrust

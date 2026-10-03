@@ -9,6 +9,10 @@ namespace riptide_mpc {
 struct ThrusterParameters {
     double delay = .1, rise = .08, fall = .06, slew = 300, deadband = 0;
     double forwardLimit = 28, reverseLimit = 28, forwardScale = 1, reverseScale = 1, efficiency = 1;
+    // Slow response while the motor reverses (target and force of opposite sign) or is still
+    // starting (|force| below startupForce): sensorless ESCs take ~0.5-0.8 s there. 0 = off
+    // (the simulator's copy has no such term; off keeps the two identical).
+    double startup = 0, startupForce = 0;
 };
 // Simulation-time actuator dynamics, independent of ROS scheduling and wall
 // time.

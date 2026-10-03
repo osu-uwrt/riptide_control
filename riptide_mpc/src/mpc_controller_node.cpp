@@ -34,7 +34,11 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <iomanip>
 #include <optional>
+#include <sstream>
+#include <string>
+#include <vector>
 
 extern "C" int send_thruster_cmd_canbus(int16_t cmds[8]); // riptide_controllers send_thruster_cmd_canbus.c
 
@@ -89,19 +93,149 @@ class MpcControllerNode : public rclcpp::Node {
         reference_.linear_velocity_in_body = declare_parameter<std::string>("linear_velocity_frame", "body") == "body";
         respect_motion_enabled_ = declare_parameter("respect_motion_enabled", true);
         odom_timeout_ = declare_parameter("odom_timeout", 0.5);
+        table_mode_ = declare_parameter("table_mode", false);
+        // The ESC RPM loops settle ~100-190 rpm short of every target (2026-10-03 telemetry: slope ~1,
+        // offset ~-140), so real thrust fell to ~0.7 of commanded at holding RPMs. Added to every
+        // nonzero request in its direction of rotation.
+        rpm_offset_ = declare_parameter("hardware.rpm_offset", 0.0);
+        if (table_mode_)
+            RCLCPP_WARN(get_logger(), "Table mode ON: thruster RPM capped at %.0f", kTableModeMaxRpm);
 
         const auto source = declare_parameter<std::string>("state_source", "sensors");
         if (source != "sensors" && source != "odometry")
             throw std::invalid_argument("state_source must be 'sensors' or 'odometry'");
         use_sensors_ = source == "sensors";
 
-        const FossenModel model = FossenModel::load(vehicle, hydro);
+        FossenModel model = FossenModel::load(vehicle, hydro);
+        vehicle_path_ = vehicle;
+        // Thruster model (thruster_dynamics + thruster_efficiencies of the model file),
+        // live-settable for thruster_sweep. Defaults are the file's values.
+        thruster_file_ = model.actuatorParameters();
+        {
+            const ThrusterParameters &p = thruster_file_.front();
+            std::vector<double> efficiencies;
+            for (const auto &a : thruster_file_)
+                efficiencies.push_back(a.efficiency);
+            ThrusterModel &t = thruster_model_;
+            t.delay = declare_parameter("thruster_model.delay", p.delay);
+            t.rise = declare_parameter("thruster_model.rise_time_constant", p.rise);
+            t.fall = declare_parameter("thruster_model.fall_time_constant", p.fall);
+            t.slew = declare_parameter("thruster_model.slew_rate", p.slew);
+            t.deadband = declare_parameter("thruster_model.force_deadband", p.deadband);
+            t.forward_scale = declare_parameter("thruster_model.forward_scale", p.forwardScale);
+            t.reverse_scale = declare_parameter("thruster_model.reverse_scale", p.reverseScale);
+            t.efficiencies = declare_parameter("thruster_model.efficiencies", efficiencies);
+            t.startup = declare_parameter("thruster_model.startup_time_constant", p.startup);
+            t.startup_force = declare_parameter("thruster_model.startup_force", p.startupForce);
+            model.setActuatorParameters(thrusterParameters(t));
+        }
         controller_.emplace(model, s);
-        // Motion limits can be changed live (e.g. by the identification sequence).
+        // Spin bias: a thrust pattern with zero net wrench (null space of the thruster matrix) that keeps
+        // every thruster turning, because these ESCs take ~0.8 s to start a motor from ~0 rpm (2026-10-03).
+        spin_pattern_ = spinPattern(controller_->model().thrusterMatrix());
+        spin_bias_ = declare_parameter("hardware.spin_bias", 0.0);
+        {
+            std::ostringstream o;
+            for (int i = 0; i < spin_pattern_.size(); ++i)
+                o << (i ? " " : "") << std::fixed << std::setprecision(2) << spin_pattern_[i];
+            RCLCPP_INFO(get_logger(), "Spin bias pattern [%s], bias %.1f N", o.str().c_str(), spin_bias_);
+        }
+        // Motion limits, table mode and the thruster model can be changed live (e.g. by
+        // the identification sequence or thruster_sweep).
         param_callback_ = add_on_set_parameters_callback([this](const std::vector<rclcpp::Parameter> &params) {
             MotionLimits m = controller_->settings().motion;
+            bool table_mode = table_mode_;
+            ThrusterModel thrusters = thruster_model_;
+            bool thrusters_changed = false;
+            MpcSettings weights = controller_->settings();
+            bool weights_changed = false;
+            std::optional<FossenModel> new_model;
+            std::optional<double> new_rpm_offset, new_spin_bias;
+            std::string new_model_path;
+            std::string weights_error;
             for (const auto &p : params) {
                 const std::string &n = p.get_name();
+                if (n == "hydrodynamics_config") { // live model swap (pool_identify iterations)
+                    try {
+                        new_model.emplace(FossenModel::load(vehicle_path_, p.as_string()));
+                        new_model_path = p.as_string();
+                    } catch (const std::exception &e) {
+                        rcl_interfaces::msg::SetParametersResult r;
+                        r.successful = false;
+                        r.reason = "hydrodynamics_config " + p.as_string() + ": " + e.what();
+                        return r;
+                    }
+                    continue;
+                }
+                if (n == "hardware.spin_bias" && p.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+                    if (!(p.as_double() >= 0 && p.as_double() <= 6)) {
+                        rcl_interfaces::msg::SetParametersResult r;
+                        r.successful = false;
+                        r.reason = "hardware.spin_bias must be 0..6 N";
+                        return r;
+                    }
+                    new_spin_bias = p.as_double();
+                    continue;
+                }
+                if (n == "hardware.rpm_offset" && p.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+                    if (!(p.as_double() >= 0 && p.as_double() <= 500)) {
+                        rcl_interfaces::msg::SetParametersResult r;
+                        r.successful = false;
+                        r.reason = "hardware.rpm_offset must be 0..500";
+                        return r;
+                    }
+                    new_rpm_offset = p.as_double();
+                    continue;
+                }
+                if (n == "table_mode" && p.get_type() == rclcpp::ParameterType::PARAMETER_BOOL) {
+                    table_mode = p.as_bool();
+                    continue;
+                }
+                if (n.rfind("thruster_model.", 0) == 0) {
+                    thrusters_changed = true;
+                    if (n == "thruster_model.efficiencies") thrusters.efficiencies = p.as_double_array();
+                    else if (n == "thruster_model.delay") thrusters.delay = p.as_double();
+                    else if (n == "thruster_model.rise_time_constant") thrusters.rise = p.as_double();
+                    else if (n == "thruster_model.fall_time_constant") thrusters.fall = p.as_double();
+                    else if (n == "thruster_model.slew_rate") thrusters.slew = p.as_double();
+                    else if (n == "thruster_model.force_deadband") thrusters.deadband = p.as_double();
+                    else if (n == "thruster_model.forward_scale") thrusters.forward_scale = p.as_double();
+                    else if (n == "thruster_model.reverse_scale") thrusters.reverse_scale = p.as_double();
+                    else if (n == "thruster_model.startup_time_constant") thrusters.startup = p.as_double();
+                    else if (n == "thruster_model.startup_force") thrusters.startup_force = p.as_double();
+                    continue;
+                }
+                if (n.rfind("weights.", 0) == 0) {
+                    weights_changed = true;
+                    Vector3d *v3 = n == "weights.position"           ? &weights.q_position
+                                   : n == "weights.attitude"         ? &weights.q_attitude
+                                   : n == "weights.linear_velocity"  ? &weights.q_linear_velocity
+                                   : n == "weights.angular_velocity" ? &weights.q_angular_velocity
+                                   : n == "weights.linear_damping"   ? &weights.q_linear_damping
+                                   : n == "weights.angular_damping"  ? &weights.q_angular_damping
+                                                                     : nullptr;
+                    if (v3) {
+                        const auto a = p.as_double_array();
+                        if (a.size() != 3 || !(a[0] >= 0 && a[1] >= 0 && a[2] >= 0))
+                            weights_error = n + " needs three nonnegative values";
+                        else
+                            *v3 = Vector3d(a[0], a[1], a[2]);
+                        continue;
+                    }
+                    double *scalar = n == "weights.terminal_factor" ? &weights.terminal_factor
+                                     : n == "weights.thrust"        ? &weights.r_thrust
+                                     : n == "weights.thrust_rate"   ? &weights.r_thrust_rate
+                                                                    : nullptr;
+                    if (scalar) {
+                        const double v = p.as_double();
+                        // r_thrust keeps the QP strictly convex.
+                        if (!std::isfinite(v) || v < 0 || (scalar == &weights.r_thrust && !(v > 0)))
+                            weights_error = n + (scalar == &weights.r_thrust ? " must be positive" : " must be nonnegative");
+                        else
+                            *scalar = v;
+                    }
+                    continue;
+                }
                 if (n.rfind("motion.", 0) != 0 || p.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE)
                     continue;
                 const double v = p.as_double();
@@ -125,8 +259,70 @@ class MpcControllerNode : public rclcpp::Node {
                 else if (n == "motion.angular_accel") m.angular_accel = v;
                 else if (n == "motion.angular_jerk") m.angular_jerk = v;
             }
-            controller_->setMotionLimits(m);
             rcl_interfaces::msg::SetParametersResult r;
+            // Validate the whole request before applying any of it.
+            if (!weights_error.empty()) {
+                r.successful = false;
+                r.reason = weights_error;
+                return r;
+            }
+            std::vector<ThrusterParameters> thruster_parameters;
+            if (thrusters_changed) {
+                try {
+                    thruster_parameters = thrusterParameters(thrusters);
+                    FossenModel check = controller_->model();
+                    check.setActuatorParameters(thruster_parameters);
+                } catch (const std::exception &e) {
+                    r.successful = false;
+                    r.reason = std::string("thruster_model: ") + e.what();
+                    return r;
+                }
+            }
+            controller_->setMotionLimits(m);
+            if (new_spin_bias) {
+                spin_bias_ = *new_spin_bias;
+                RCLCPP_WARN(get_logger(), "Thruster spin bias: %.1f N", spin_bias_);
+            }
+            if (new_rpm_offset) {
+                rpm_offset_ = *new_rpm_offset;
+                RCLCPP_WARN(get_logger(), "ESC rpm offset: %.0f rpm", rpm_offset_);
+            }
+            if (new_model) {
+                try {
+                    controller_->setModel(*new_model);
+                    if (estimator_)
+                        estimator_->setModel(*new_model);
+                } catch (const std::exception &e) {
+                    r.successful = false;
+                    r.reason = std::string("hydrodynamics_config: ") + e.what();
+                    return r;
+                }
+                RCLCPP_WARN(get_logger(), "MPC model swapped live: %s", new_model_path.c_str());
+            }
+            if (weights_changed) {
+                controller_->setCostWeights(weights);
+                const auto v = [](const Vector3d &x) {
+                    std::ostringstream o;
+                    o << "[" << x.x() << " " << x.y() << " " << x.z() << "]";
+                    return o.str();
+                };
+                RCLCPP_WARN(get_logger(), "MPC weights: attitude %s angular_damping %s position %s linear_damping %s "
+                            "thrust %g thrust_rate %g terminal %g", v(weights.q_attitude).c_str(),
+                            v(weights.q_angular_damping).c_str(), v(weights.q_position).c_str(),
+                            v(weights.q_linear_damping).c_str(), weights.r_thrust, weights.r_thrust_rate,
+                            weights.terminal_factor);
+            }
+            if (table_mode != table_mode_) {
+                table_mode_ = table_mode;
+                RCLCPP_WARN(get_logger(), "Table mode %s", table_mode_ ? "ON: thruster RPM capped" : "OFF");
+            }
+            if (thrusters_changed) {
+                controller_->setActuatorParameters(thruster_parameters);
+                if (estimator_)
+                    estimator_->setActuatorParameters(thruster_parameters, controller_->lastCommand());
+                thruster_model_ = thrusters;
+                RCLCPP_WARN(get_logger(), "Thruster model: %s", describe(thrusters).c_str());
+            }
             r.successful = true;
             return r;
         });
@@ -146,6 +342,9 @@ class MpcControllerNode : public rclcpp::Node {
             e.gyro_gain = declare_parameter("estimator.gyro_gain", e.gyro_gain);
             e.fog_gain = declare_parameter("estimator.fog_gain", e.fog_gain);
             e.dvl_gain = declare_parameter("estimator.dvl_gain", e.dvl_gain);
+            // The Nortek DVL's velocity is ~0.12 s old when it is sent (its dt2), and the driver
+            // stamps on arrival; the estimate compares it with its own state from that long ago.
+            dvl_latency_ = declare_parameter("estimator.dvl_latency", 0.12);
             e.tilt_time_constant = declare_parameter("estimator.tilt_time_constant", e.tilt_time_constant);
             e.depth_time_constant = declare_parameter("estimator.depth_time_constant", e.depth_time_constant);
             e.heading_time_constant = declare_parameter("estimator.heading_time_constant", e.heading_time_constant);
@@ -252,8 +451,9 @@ class MpcControllerNode : public rclcpp::Node {
 
   private:
     // Sensor messages are applied in stamp order at the start of each tick.
-    void queue(const builtin_interfaces::msg::Time &stamp, std::function<void(double)> apply) {
-        pending_.push_back({rclcpp::Time(stamp, get_clock()->get_clock_type()).seconds(), std::move(apply)});
+    // age: how long before its stamp the message was measured (the DVL stamps on arrival).
+    void queue(const builtin_interfaces::msg::Time &stamp, std::function<void(double)> apply, double age = 0) {
+        pending_.push_back({rclcpp::Time(stamp, get_clock()->get_clock_type()).seconds() - age, std::move(apply)});
     }
 
     void subscribeSensors() {
@@ -280,7 +480,8 @@ class MpcControllerNode : public rclcpp::Node {
             [this](const geometry_msgs::msg::TwistWithCovarianceStamped &m) {
                 const auto &v = m.twist.twist.linear;
                 queue(m.header.stamp,
-                      [this, v = Vector3d(v.x, v.y, v.z)](double t) { estimator_->dvlVelocity(t, v); });
+                      [this, v = Vector3d(v.x, v.y, v.z)](double t) { estimator_->dvlVelocity(t, v); },
+                      dvl_latency_);
             });
         depth_sub_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
             declare_parameter<std::string>("depth_topic", "depth/pose"), qos,
@@ -393,6 +594,65 @@ class MpcControllerNode : public rclcpp::Node {
             RCLCPP_INFO(get_logger(), "Hardware output disabled (%s); publishing thruster_forces only", why.c_str());
     }
 
+    // Table mode (complete_controller's thruster_solver_table_mode): out of the water, a soft
+    // curve that saturates at kTableModeMaxRpm replaces the fitted force-to-RPM curve.
+    // The thruster_model.* parameters, shared by every thruster but the efficiencies.
+    struct ThrusterModel {
+        double delay = .1, rise = .08, fall = .06, slew = 0, deadband = 0, forward_scale = 1, reverse_scale = 1;
+        double startup = 0, startup_force = 0;
+        std::vector<double> efficiencies;
+    };
+
+    // Per-thruster actuator parameters for `t`. A scale keeps the model file's
+    // command limit (limit / scale): modelling a thruster as weaker lowers the
+    // force it can realize, never raises the command the hardware is sent.
+    std::vector<ThrusterParameters> thrusterParameters(const ThrusterModel &t) const {
+        if (t.efficiencies.size() != thruster_file_.size())
+            throw std::invalid_argument("efficiencies needs one value per thruster (" +
+                                        std::to_string(thruster_file_.size()) + ")");
+        if (!(t.forward_scale > 0) || !(t.reverse_scale > 0))
+            throw std::invalid_argument("forward_scale and reverse_scale must be positive");
+        std::vector<ThrusterParameters> out;
+        for (std::size_t i = 0; i < thruster_file_.size(); ++i) {
+            const ThrusterParameters &file = thruster_file_[i];
+            ThrusterParameters p = file;
+            p.delay = t.delay;
+            p.rise = t.rise;
+            p.fall = t.fall;
+            p.slew = t.slew;
+            p.deadband = t.deadband;
+            p.forwardScale = t.forward_scale;
+            p.reverseScale = t.reverse_scale;
+            p.startup = t.startup;
+            p.startupForce = t.startup_force;
+            p.forwardLimit = (file.forwardScale > 0 ? file.forwardLimit / file.forwardScale : file.forwardLimit) *
+                             t.forward_scale;
+            p.reverseLimit = (file.reverseScale > 0 ? file.reverseLimit / file.reverseScale : file.reverseLimit) *
+                             t.reverse_scale;
+            p.efficiency = t.efficiencies[i];
+            out.push_back(p);
+        }
+        return out;
+    }
+
+    static std::string describe(const ThrusterModel &t) {
+        std::ostringstream s;
+        s << "delay " << t.delay << " s, rise " << t.rise << " s, fall " << t.fall << " s, slew " << t.slew
+          << " N/s, deadband " << t.deadband << " N, forward x" << t.forward_scale << ", reverse x" << t.reverse_scale
+          << ", startup " << t.startup << " s below " << t.startup_force << " N"
+          << ", efficiencies [";
+        for (std::size_t i = 0; i < t.efficiencies.size(); ++i)
+            s << (i ? " " : "") << t.efficiencies[i];
+        s << "]";
+        return s.str();
+    }
+
+    static double tableModeRpm(double force) {
+        if (!std::isfinite(force))
+            return 0;
+        return std::copysign(kTableModeMaxRpm * (1 - std::exp(-0.5 * std::abs(force))), force);
+    }
+
     void sendRpm(const VectorXd &force) {
         const auto &hw = controller_->model().hardware();
         if (!hw.present || force.size() != 8)
@@ -400,7 +660,11 @@ class MpcControllerNode : public rclcpp::Node {
         riptide_msgs2::msg::DshotCommand rpm;
         int16_t can[8];
         for (int i = 0; i < 8; ++i) {
-            const double r = std::clamp(std::round(hw.forceToRpm(force[i])), -32768., 32767.);
+            const double f = force[i];
+            double target = table_mode_ ? tableModeRpm(f) : hw.forceToRpm(f);
+            if (!table_mode_ && target != 0)
+                target += std::copysign(rpm_offset_, target);
+            const double r = std::clamp(std::round(target), -32768., 32767.);
             rpm.values[i] = can[i] = static_cast<int16_t>(r);
         }
         rpm_pub_->publish(rpm);
@@ -684,11 +948,38 @@ class MpcControllerNode : public rclcpp::Node {
         }
     }
 
-    void publish(const VectorXd &command) {
+    // Zero-wrench thrust pattern with every entry as large as possible (largest = 1); empty if none.
+    static VectorXd spinPattern(const MatrixXd &T) {
+        if (T.cols() - T.rows() < 1)
+            return VectorXd();
+        Eigen::JacobiSVD<MatrixXd> svd(T, Eigen::ComputeFullV);
+        const MatrixXd N = svd.matrixV().rightCols(T.cols() - T.rows());
+        VectorXd best;
+        double best_min = 0;
+        for (int k = 0; k < 3600; ++k) { // a line through the null space (dim 2 on Talos)
+            const double a = M_PI * k / 3600;
+            VectorXd n = N.col(0) * std::cos(a);
+            if (N.cols() > 1)
+                n += N.col(1) * std::sin(a);
+            n /= n.cwiseAbs().maxCoeff();
+            if (n.cwiseAbs().minCoeff() > best_min) {
+                best_min = n.cwiseAbs().minCoeff();
+                best = n;
+            }
+        }
+        return best_min > 0.3 ? best : VectorXd();
+    }
+
+    // `command` is what the controller and estimator know; the thrusters additionally get the spin bias,
+    // which adds no wrench, so their models stay valid without it.
+    void publish(const VectorXd &command, bool active = false) {
+        VectorXd hw = command;
+        if (active && spin_bias_ > 0 && spin_pattern_.size() == command.size())
+            hw = controller_->model().limitTotalThrust(command + spin_bias_ * spin_pattern_);
         std_msgs::msg::Float32MultiArray msg;
-        msg.data.assign(command.data(), command.data() + command.size());
+        msg.data.assign(hw.data(), hw.data() + hw.size());
         thruster_pub_->publish(msg);
-        sendRpm(command);
+        sendRpm(hw);
         controller_->issue(command);
         if (estimator_)
             estimator_->command(get_clock()->now().seconds(), command);
@@ -758,7 +1049,7 @@ class MpcControllerNode : public rclcpp::Node {
             publish(zero);
             return;
         }
-        publish(out.command);
+        publish(out.command, out.active);
         updatePath(now);
         if (out.solve_ms > controller_->settings().dt * 1000)
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "MPC solve %.1f ms exceeds the control period",
@@ -824,7 +1115,15 @@ class MpcControllerNode : public rclcpp::Node {
     }
 
   private:
+    static constexpr double kTableModeMaxRpm = 500;
     bool can_enabled_ = false;
+    bool table_mode_ = false;
+    std::string vehicle_path_;
+    double dvl_latency_ = 0.12;
+    double rpm_offset_ = 0, spin_bias_ = 0;
+    VectorXd spin_pattern_;
+    std::vector<ThrusterParameters> thruster_file_; // the model file's thruster model
+    ThrusterModel thruster_model_;                  // live thruster_model.* values
     std::optional<MpcController> controller_;
     std::optional<StateEstimator> estimator_;
     SensorMounts mounts_;

@@ -11,18 +11,21 @@
     sway: true
     heave: true
     yaw: true
-    lane_length: 3.0          # m of clear water ahead (+x) and to port (+y) of the start
-    heave_span: 0.8           # m below the start depth (keep clear of the floor)
+    lane_length: 1.5          # m of clear water ahead (+x) and to port (+y) of the start
+    heave_span: 0.8           # m below the start depth (keep clear of the floor); 0.4 never reached cruise
     yaw_span: 3.14159         # rad, centred on the start heading
-    linear_speeds: [0.2, 0.35, 0.5, 0.65]
-    heave_speeds: [0.15, 0.25, 0.35]
+    linear_speeds: [0.15, 0.25, 0.35, 0.5]   # 0.65 saturated the 73 N limit; slow levels cruise longest in 1.5 m lanes
+    heave_speeds: [0.1, 0.2, 0.3]     # MPC vertical accel cap 0.2 m/s^2: these reach cruise in 0.8 m
     yaw_rates: [0.3, 0.6, 0.9]
     linear_accel: 0.5
     angular_accel: 1.2
     tilt: 0.1745              # rad (10 deg) roll/pitch holds for the vertical COB offset
-    hold_secs: 6.0
-    settle_timeout: 25.0
-    min_start_depth: 0.8      # m below the surface to start
+    max_iterations: 3         # fly, fit all data so far, load the fit into the MPC, fly again; stops early
+                              # when two fits agree (convergence_tolerance 10%, cob_tolerance 2 mm)
+    repeats: 2                # out-and-back pairs per speed: more data in a small pool
+    hold_secs: 10.0           # long enough to average out a hold wobble (Talos: ~0.8 Hz)
+    settle_timeout: 12.0      # a wobbling hold never reaches trust; record anyway after this
+    min_start_depth: 0.75      # m below the surface to start
     min_depth: 0.4            # m; shallower than this ends the session
     abort_margin: 1.5         # m beyond the lanes before the session ends
     trust_threshold: 0.95     # controller/scale/trust meaning "settled"

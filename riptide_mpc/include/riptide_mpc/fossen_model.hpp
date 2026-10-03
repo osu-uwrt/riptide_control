@@ -70,6 +70,9 @@ class FossenModel {
     const std::vector<ThrusterParameters> &actuatorParameters() const {
         return actuators_;
     }
+    // Replaces the thruster model (one entry per thruster), e.g. live from a tuning
+    // sweep. Throws std::invalid_argument and leaves the model unchanged if invalid.
+    void setActuatorParameters(const std::vector<ThrusterParameters> &parameters);
     double commandTimeout() const {
         return command_timeout_;
     }
@@ -93,6 +96,10 @@ class FossenModel {
     void step(State13d &x, ThrusterDynamics &actuator, double h) const;
 
     ThrusterDynamics makeActuator() const;
+    // An actuator that has been holding `command` long enough to settle on it: the
+    // replica to restart from when the thruster model changes mid-run (the real
+    // thrusters keep spinning).
+    ThrusterDynamics settledActuator(const VectorXd &command) const;
 
     // base_link pose/twist (what odometry reports) <-> simulator COM state.
     State13d fromBaseLink(const Vector3d &p_base, const Quaterniond &q, const Vector3d &v_base_body,

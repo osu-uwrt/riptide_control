@@ -99,6 +99,28 @@ class MpcController {
     void setMotionLimits(const MotionLimits &m) {
         settings_.motion = m;
     }
+    // Live cost weights (q_*, terminal_factor, r_thrust, r_thrust_rate) from `w`; next compute().
+    void setCostWeights(const MpcSettings &w) {
+        settings_.q_position = w.q_position;
+        settings_.q_attitude = w.q_attitude;
+        settings_.q_linear_velocity = w.q_linear_velocity;
+        settings_.q_angular_velocity = w.q_angular_velocity;
+        settings_.q_linear_damping = w.q_linear_damping;
+        settings_.q_angular_damping = w.q_angular_damping;
+        settings_.terminal_factor = w.terminal_factor;
+        settings_.r_thrust = w.r_thrust;
+        settings_.r_thrust_rate = w.r_thrust_rate;
+    }
+    // Live thruster model (delay, lag, scale, efficiency). The actuator replica
+    // restarts settled on the last command. Throws if invalid; nothing changes then.
+    void setActuatorParameters(const std::vector<ThrusterParameters> &parameters);
+    // Live hydrodynamic model swap (identification): the new model keeps this one's
+    // thruster parameters and learned disturbance, so the actuator replica, the
+    // profile and the warm start all carry over.
+    void setModel(FossenModel model);
+    const VectorXd &lastCommand() const {
+        return last_command_;
+    }
 
     MpcOutput compute(const State13d &measured, const Reference &reference);
 

@@ -1,0 +1,170 @@
+# FALLBACK: talos.yaml as flown before the 2026-10-03 full identification (statics + delay 0.03,
+# sim-copy drag/added mass). Fly it with mpc_model:=talos_pre_ident.
+# The MPC's model of the REAL Talos (used on hardware and, by default, in sim).
+# Same schema as the simulator's hydrodynamics file, so the simulator's plant
+# (talos_sim.yaml) and this estimate can differ on purpose to study mismatch.
+# Geometry, mass, COM, thruster poses and sensor mounts come from the vehicle
+# file (riptide_descriptions talos.yaml), which is shared with the hardware.
+schema_version: 1
+robot: talos
+parameter_status: statics_pool_identified
+provenance: Started as a copy of the simulator plant (talos_sim.yaml), with the
+  hardware thrust limits. Rigid inertia from the Talos 7-11-26 SolidWorks CAD
+  (2026-10-01); displaced volume and COB pool-identified 2026-10-03. Replace coefficients with pool-identified values as they
+  become available; the disturbance estimator absorbs what remains.
+# Rigid inertia tensor about the COM, body axes (off-diagonals = -products of inertia),
+# from the "Talos 7-11-26" SolidWorks CAD.
+rigid_body_inertia3x3:
+- 1.8429
+- 0.0496
+- 0.0945
+- 0.0496
+- 1.0051
+- -0.0083
+- 0.0945
+- -0.0083
+- 1.8607
+added_mass6x6:
+- - 33.76441573413407
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 7.138775954138664
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 14.375071388298007
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.062395054069073454
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.060232298657156735
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.30409901675615597
+linear_damping6x6:
+- - 34.945580177147725
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 27.992277245879045
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 40.36692194478054
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 9.910927173896203
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 3.0045521578787238
+  - 0.0
+- - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 3.8668316289236078
+quadratic_damping:
+- 128.93885061269464
+- 96.24090039531974
+- 50.33885380673263
+- 2.7724251278046257
+- 1.4991943770654036
+- 5.138467615330231
+damping_center_relative:
+- 0.0
+- 0.0
+- 0.0
+water_density: 998.2
+# Statics from pool identification 2026-10-03 (talos_20261003_130036: 6 holds, level and
+# +-10 deg pitch/roll, torque residual 0.86 N m). Flown with the CAD mass/COM, re-fitted
+# offline for the vehicle file's measured mass 32.444 and com [-0.150, 0.037, -0.013]
+# (hold torques moved to that COM). Net buoyancy +1.9 N. These values pair with that
+# mass/COM: change either and re-run the statics identification (pool_identify, statics only).
+displaced_volume: 0.03270
+cob_relative:
+- 0.0090
+- -0.0015
+- 0.0320
+buoyancy_radii:
+- 0.175
+- 0.415
+- 0.275
+water_level: 0.0
+current_velocity:
+- 0.0
+- 0.0
+- 0.0
+current_oscillation_amplitude:
+- 0.0
+- 0.0
+- 0.0
+current_oscillation_frequency: 0.0
+thruster_dynamics:
+  delay: 0.03   # thruster_sweep 2026-10-03: 0.02-0.03 best; 0.05 close; 0.1 (old) much worse, 0.15+ worse still
+  rise_time_constant: 0.08
+  fall_time_constant: 0.06
+  slew_rate: 300.0
+  force_deadband: 0.0
+  forward_scale: 1.0
+  reverse_scale: 1.0
+  command_timeout: 0.5
+  forward_max_force: 24.0   # hardware individual_thrust_limit (sim plant: 28)
+  reverse_max_force: 24.0
+  propeller_radius: 0.05
+thruster_efficiencies:
+- 1.0
+- 1.0
+- 1.0
+- 1.0
+- 1.0
+- 1.0
+- 1.0
+- 1.0
+
+# Hardware actuation (not used by the simulator). The thrust limits must match
+# what the thruster/ESC stack enforces (riptide_descriptions talos.yaml
+# thruster_solver.*), and the curve must match the ESC firmware's RPM units.
+hardware:
+  can_interface: can0
+  total_thrust_limit: 73.0   # N, sum over thrusters of |force| (power budget)
+  # Force [N] -> requested RPM, as in complete_controller's "Force to RPM
+  # Transform": rpm = c0 + c1*F + c2*tanh(F) + c3*|F|^(1/4), positive curve for
+  # F > 0, negative curve for F < 0 (riptide_descriptions talos.yaml
+  # force_to_rpm_coefficents).
+  force_to_rpm_positive: [-475.886186, 32.327429, -324.744664, 1443.832105]
+  force_to_rpm_negative: [257.460623, 42.948545, -24.402056, -986.338071]

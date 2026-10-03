@@ -7,15 +7,15 @@ provenance: 'Test prior for pool identification: talos.yaml with drag and added 
   ZEROED on the identified axes (surge, sway, heave, yaw), 5% less buoyancy and a
   shifted COB. Fly it with mpc_model:=talos_untuned and run pool_identify with model:=talos_untuned.'
 rigid_body_inertia3x3:
-- 1.6315
-- -0.0599
-- -0.033
-- -0.0599
-- 0.7341
-- 0.0427
-- -0.033
-- 0.0427
-- 1.6332
+- 1.8429
+- 0.0496
+- 0.0945
+- 0.0496
+- 1.0051
+- -0.0083
+- 0.0945
+- -0.0083
+- 1.8607
 added_mass6x6:
 - - 0.0
   - 0.0
@@ -102,11 +102,11 @@ damping_center_relative:
 - 0.0
 - 0.0
 water_density: 998.2
-displaced_volume: 0.030744
-cob_relative:
-- 0.0
-- 0.0
-- 0.02
+displaced_volume: 0.031170
+cob_relative:  # talos.yaml's COB shifted by [-0.00775, 0, +0.010]
+- -0.00025
+- -0.0003
+- 0.0252
 buoyancy_radii:
 - 0.175
 - 0.415

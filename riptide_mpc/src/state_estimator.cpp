@@ -74,6 +74,33 @@ void StateEstimator::reset(const State13d &x, double t) {
     x_ = x;
     t_ = t;
     initialized_ = true;
+    history_.clear();
+    record();
+}
+
+void StateEstimator::record() {
+    if (!history_.empty() && history_.back().t >= t_)
+        history_.back() = {t_, x_.segment<3>(7), x_.tail<3>()};
+    else
+        history_.push_back({t_, x_.segment<3>(7), x_.tail<3>()});
+    while (history_.size() > 2 && t_ - history_.front().t > 1.0)
+        history_.pop_front();
+}
+
+bool StateEstimator::velocityAt(double t, Vector3d &v, Vector3d &w) const {
+    if (history_.empty() || t < history_.front().t)
+        return false;
+    for (std::size_t i = 1; i < history_.size(); ++i)
+        if (history_[i].t >= t) {
+            const Past &a = history_[i - 1], &b = history_[i];
+            const double k = b.t > a.t ? (t - a.t) / (b.t - a.t) : 1.;
+            v = a.v + k * (b.v - a.v);
+            w = a.w + k * (b.w - a.w);
+            return true;
+        }
+    v = history_.back().v;
+    w = history_.back().w;
+    return true;
 }
 
 void StateEstimator::propagate(double t) {
@@ -84,6 +111,7 @@ void StateEstimator::propagate(double t) {
     for (int i = 0; i < steps; ++i)
         model_.step(x_, actuator_, h);
     t_ = t;
+    record();
 }
 
 bool StateEstimator::advanceTo(double t) {
@@ -105,6 +133,20 @@ void StateEstimator::command(double t, const VectorXd &command) {
 void StateEstimator::stopActuators(double t) {
     advanceTo(t);
     actuator_.stop();
+}
+
+void StateEstimator::setModel(FossenModel model) {
+    if (model.thrusterCount() != model_.thrusterCount())
+        throw std::invalid_argument("New model has a different thruster count");
+    model.setActuatorParameters(model_.actuatorParameters());
+    model.setDisturbance(model_.disturbance());
+    model_ = std::move(model);
+}
+
+void StateEstimator::setActuatorParameters(const std::vector<ThrusterParameters> &parameters,
+                                           const VectorXd &last_command) {
+    model_.setActuatorParameters(parameters); // keeps the learned disturbance
+    actuator_ = model_.settledActuator(last_command);
 }
 
 double StateEstimator::gate() const {
@@ -183,13 +225,19 @@ void StateEstimator::dvlVelocity(double t, const Vector3d &velocity_dvl) {
     if (!advanceTo(t))
         return;
     // The DVL measures its own point: v_com + w x r. Using the gyro-fresh rate
-    // here is what keeps rotation from being read as translation.
-    const Vector3d predicted = x_.segment<3>(7) + x_.tail<3>().cross(mounts_.dvl_position);
+    // here is what keeps rotation from being read as translation. A measurement
+    // older than the estimate is compared with the estimate at its time; the
+    // correction then applies now (the error is assumed to persist).
+    Vector3d v = x_.segment<3>(7), w = x_.tail<3>();
+    if (t < t_)
+        velocityAt(t, v, w);
+    const Vector3d predicted = v + w.cross(mounts_.dvl_position);
     const Vector3d innovation = mounts_.dvl * velocity_dvl - predicted;
     if (fresh(last_dvl_, settings_.dvl_timeout, t))
         learnForce(innovation);
     x_.segment<3>(7) += settings_.dvl_gain * innovation;
-    last_dvl_ = t;
+    last_dvl_ = std::max(last_dvl_, t);
+    record();
 }
 
 void StateEstimator::depth(double t, double base_link_z) {

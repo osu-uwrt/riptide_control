@@ -95,6 +95,7 @@ struct SequenceSettings {
     double linear_accel = 0.5, angular_accel = 1.2;
     double tilt = 10 * M_PI / 180; // statics holds at +-tilt in roll and pitch
     double hold_secs = 6, settle_timeout = 25, run_timeout_margin = 12;
+    int repeats = 1; // out-and-back pairs per speed (more drag and inertia data in a small pool)
 };
 
 struct Step {
@@ -126,7 +127,9 @@ class Sequencer {
         bool done = false;
         std::string message;
     };
-    explicit Sequencer(std::vector<Step> steps) : steps_(std::move(steps)) {}
+    // first_segment_id: distinct per identification iteration, so pooled recordings never share ids.
+    explicit Sequencer(std::vector<Step> steps, int first_segment_id = 0)
+        : steps_(std::move(steps)), next_segment_id_(first_segment_id) {}
     Output update(double t, bool settled);
     std::size_t index() const {
         return index_;

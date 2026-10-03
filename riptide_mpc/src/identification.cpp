@@ -174,7 +174,12 @@ std::vector<Step> buildSequence(const SequenceSettings &s, const Vector3d &start
         st.position = p;
         st.orientation = q;
         st.limits = base;
-        if (axis < 3) {
+        if (axis == 2) { // vertical limits govern heave; never above the MPC's own vertical accel cap
+            st.limits.linear_speed_vertical = speed;
+            st.limits.linear_accel_vertical = base.linear_accel_vertical > 0
+                                                  ? std::min(s.linear_accel, base.linear_accel_vertical)
+                                                  : s.linear_accel;
+        } else if (axis < 3) {
             st.limits.linear_speed = speed;
             st.limits.linear_accel = s.linear_accel;
         } else {
@@ -217,19 +222,21 @@ std::vector<Step> buildSequence(const SequenceSettings &s, const Vector3d &start
         hold(start, heading, std::string("start ") + l.name, false);
         // Heave runs go down first: +z is up, so "direction" is the sign of the body z velocity.
         const int out_sign = l.axis == 2 ? -1 : 1;
-        for (double v : *l.speeds) {
-            run(l.axis, v, out_sign, start + l.offset, heading, l.offset.norm(), std::string(l.name) + " out");
-            run(l.axis, v, -out_sign, start, heading, l.offset.norm(), std::string(l.name) + " back");
-        }
+        for (double v : *l.speeds)
+            for (int k = 0; k < std::max(1, s.repeats); ++k) {
+                run(l.axis, v, out_sign, start + l.offset, heading, l.offset.norm(), std::string(l.name) + " out");
+                run(l.axis, v, -out_sign, start, heading, l.offset.norm(), std::string(l.name) + " back");
+            }
     }
     if (s.yaw) {
         const Quaterniond a(Eigen::AngleAxisd(yaw - s.yaw_span / 2, Vector3d::UnitZ()));
         const Quaterniond b(Eigen::AngleAxisd(yaw + s.yaw_span / 2, Vector3d::UnitZ()));
         hold(start, a, "start yaw", false);
-        for (double r : s.yaw_rates) {
-            run(5, r, 1, start, b, s.yaw_span, "yaw left");
-            run(5, r, -1, start, a, s.yaw_span, "yaw right");
-        }
+        for (double r : s.yaw_rates)
+            for (int k = 0; k < std::max(1, s.repeats); ++k) {
+                run(5, r, 1, start, b, s.yaw_span, "yaw left");
+                run(5, r, -1, start, a, s.yaw_span, "yaw right");
+            }
     }
     hold(start, heading, "finish", false);
     return steps;
@@ -309,20 +316,36 @@ Result fit(const YAML::Node &prior, double mass, const std::vector<Sample> &samp
     StaticsFit &st = result.statics;
     std::vector<Vector3d> ups;
     std::vector<Vector6d> holds;
+    int wobbling_holds = 0;
     for (const auto &seg : segments) {
         if (seg.kind != Segment::Kind::Hold)
             continue;
         Vector6d impulse = Vector6d::Zero();
         Vector3d up = Vector3d::Zero();
         double time = 0;
-        for (const Sample *s : segmentSamples(samples, seg.id, 0.3))
+        const auto hold = segmentSamples(samples, seg.id, 0.3);
+        for (const Sample *s : hold)
             if (s->v.norm() < 0.05 && s->w.norm() < 0.05) {
                 impulse += s->impulse;
                 up += s->up * s->dt;
                 time += s->dt;
             }
-        if (time < 1.0)
-            continue;
+        if (time < 1.0) {
+            // A vehicle that wobbles about the hold is rarely still. Averaged over
+            // the whole hold, the wobble's inertial torque (I times the net rate
+            // change over the hold) is small, so use every sample instead.
+            impulse.setZero();
+            up.setZero();
+            time = 0;
+            for (const Sample *s : hold) {
+                impulse += s->impulse;
+                up += s->up * s->dt;
+                time += s->dt;
+            }
+            if (time < 1.0)
+                continue;
+            ++wobbling_holds;
+        }
         ups.push_back(up.normalized());
         holds.push_back(impulse / time);
     }
@@ -367,6 +390,9 @@ Result fit(const YAML::Node &prior, double mass, const std::vector<Sample> &samp
         st.ok = std::abs(st.volume / prior_volume - 1) < 0.25 && st.cob.norm() < 0.15;
         if (!st.ok)
             st.note = "implausible (volume off by >25% or cob > 15 cm): kept the prior";
+        else if (wobbling_holds > 0)
+            st.note = (st.note.empty() ? "" : st.note + "; ") + std::to_string(wobbling_holds) +
+                      " hold(s) never still: averaged over the whole hold";
     } else {
         st.note = "no usable holds";
     }
@@ -395,9 +421,16 @@ Result fit(const YAML::Node &prior, double mass, const std::vector<Sample> &samp
         std::vector<double> levels;
         for (const Segment *seg : list) {
             const auto ss = segmentSamples(samples, seg->id);
-            double smax = 0;
+            // Cruise = within 10% of the run's top speed; the 90th percentile, so one DVL
+            // spike cannot set a threshold the steady part never reaches.
+            std::vector<double> along_run;
             for (const Sample *s : ss)
-                smax = std::max(smax, seg->direction * along(*s, axis));
+                along_run.push_back(seg->direction * along(*s, axis));
+            if (along_run.empty())
+                continue;
+            const auto p90 = along_run.begin() + static_cast<long>(0.9 * (along_run.size() - 1));
+            std::nth_element(along_run.begin(), p90, along_run.end());
+            const double smax = *p90;
             if (smax < 0.02)
                 continue;
             std::vector<const Sample *> cruise;
@@ -515,10 +548,15 @@ Result fit(const YAML::Node &prior, double mass, const std::vector<Sample> &samp
                 tot += std::pow(js[k] - mean, 2);
             }
             a.mass_r2 = tot > 0 ? 1 - res / tot : 0;
-            a.mass_ok = std::isfinite(a.mass_total) && a.mass_r2 >= 0.8 && a.added_mass > -0.25 * rigid &&
-                        a.added_mass < 3 * rigid;
+            // Over 3x rigid is rejected: Talos fits 3-4x on surge/sway, but a model with those
+            // values flew much worse (2026-10-03), so they are likely sensing/actuation lag
+            // folded into the inertia rather than mass.
+            const bool fit_ok = std::isfinite(a.mass_total) && a.mass_r2 >= 0.8;
+            const bool range_ok = a.added_mass > -0.25 * rigid && a.added_mass < 3 * rigid;
+            a.mass_ok = fit_ok && range_ok;
             if (!a.mass_ok)
-                a.note += std::string(a.note.empty() ? "" : "; ") + "added mass rejected (R2 < 0.8 or implausible)";
+                a.note += std::string(a.note.empty() ? "" : "; ") +
+                          (fit_ok ? "added mass rejected (outside -0.25..3x rigid)" : "added mass rejected (R2 < 0.8)");
             a.added_mass = std::max(0., a.added_mass);
         } else {
             a.note += std::string(a.note.empty() ? "" : "; ") + "added mass: no complete accel/decel windows";

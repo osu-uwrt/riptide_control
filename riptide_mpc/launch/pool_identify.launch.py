@@ -23,6 +23,11 @@ def overrides(context, *args, **kwargs):
         if not os.path.isfile(model):
             raise FileNotFoundError(f"prior model not found: {model}")
         params["hydrodynamics_config"] = model
+    if LaunchConfiguration("wait_for_trigger").perform(context).lower() in ("true", "1"):
+        params["wait_for_trigger"] = True
+    iterations = LaunchConfiguration("max_iterations").perform(context)
+    if iterations:
+        params["max_iterations"] = int(iterations)
     output_dir = LaunchConfiguration("output_dir").perform(context)
     if output_dir:
         params["output_dir"] = os.path.expanduser(output_dir)
@@ -45,6 +50,11 @@ def generate_launch_description():
         DeclareLaunchArgument("model", default_value="",
                               description="Prior model: a name in riptide_mpc config/models or a path "
                                           "(default: config/models/<robot>.yaml). Use the model the MPC is running."),
+        DeclareLaunchArgument("wait_for_trigger", default_value="false",
+                              description="Start only on the pool_identify/start service (IdentificationTree, "
+                                          "untethered) and stay up reporting pool_identify/done"),
+        DeclareLaunchArgument("max_iterations", default_value="",
+                              description="Override identification.yaml max_iterations"),
         DeclareLaunchArgument("output_dir", default_value="",
                               description="Session folder root (default ~/osu-uwrt/mpc_identification)"),
         OpaqueFunction(function=overrides),

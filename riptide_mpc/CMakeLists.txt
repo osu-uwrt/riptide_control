@@ -22,6 +22,8 @@ find_package(sensor_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(ament_index_cpp REQUIRED)
+find_package(rosbag2_cpp REQUIRED)
+find_package(std_srvs REQUIRED)
 
 add_library(mpc_core src/marine_dynamics.cpp src/thruster_dynamics.cpp src/fossen_model.cpp src/box_qp.cpp src/mpc.cpp src/state_estimator.cpp src/motion_profile.cpp src/identification.cpp)
 target_include_directories(mpc_core PUBLIC include)
@@ -43,14 +45,19 @@ ament_target_dependencies(model_study ament_index_cpp)
 
 add_executable(pool_identify src/pool_identify_node.cpp)
 target_link_libraries(pool_identify mpc_core)
-ament_target_dependencies(pool_identify rclcpp riptide_msgs2 geometry_msgs nav_msgs std_msgs sensor_msgs ament_index_cpp)
+ament_target_dependencies(pool_identify rclcpp riptide_msgs2 geometry_msgs nav_msgs std_msgs std_srvs sensor_msgs ament_index_cpp)
 
 add_executable(identify_fit src/identify_fit.cpp)
 target_link_libraries(identify_fit mpc_core)
 ament_target_dependencies(identify_fit ament_index_cpp)
 
-install(TARGETS mpc_controller model_study pool_identify identify_fit DESTINATION lib/${PROJECT_NAME})
+add_executable(bag_prediction src/bag_prediction.cpp)
+target_link_libraries(bag_prediction mpc_core)
+ament_target_dependencies(bag_prediction rclcpp rosbag2_cpp nav_msgs std_msgs ament_index_cpp)
+
+install(TARGETS mpc_controller model_study pool_identify identify_fit bag_prediction DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+install(PROGRAMS scripts/thruster_sweep.py DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
