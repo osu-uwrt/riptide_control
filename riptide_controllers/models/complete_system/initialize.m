@@ -13,6 +13,4 @@ nlobj.Weights.OutputVariables = ones(1, 13);
 nlobj.Optimization.CustomCostFcn = [];
 nlobj.Optimization.ReplaceStandardCost = false;
 
-nlobj.Weights.OutputVariables = ones(1, 13);
-
 end

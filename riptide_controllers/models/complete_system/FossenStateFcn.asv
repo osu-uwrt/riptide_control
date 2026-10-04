@@ -1,20 +1,21 @@
-function dxdt = FossenStateFcn(x, thrusterForces, M, MA, DQ, DL, B, mass, buoyancy, com, cob, I, flipCost) 
-    
-    quat = x(4:7);
-    nu = x(8:13); %linear and angular velos
-    
-    C = getCoriolisMatrix(nu, MA, mass, com, I);
-    D = DL + DQ * diag(abs(nu));
-    R = bodyToWorldRotation(quat);
-    g = getRestoringVector(R, mass, buoyancy, com, cob);
-    tau = B * thrusterForces;
-    
-    nu_dot = M \ (tau - C * nu - D * nu - g); %Same as M^-1(tau - C*nu - D*nu - g)
-    position_dot = R * nu(1:3);
-    
-    quat_dot = getQuaternionDerivative(quat, nu);
-    
-    dxdt = [position_dot; quat_dot; nu_dot];
+function dxdt = FossenStateFcn(x, thrusterForces, ...
+    M, MA, DQ, DL, B, mass, buoyancy, com, cob, I, flipCost) 
+
+quat = x(4:7);
+nu = x(8:13);
+
+C = getCoriolisMatrix(nu, MA, mass, com, I);
+D = DL + DQ * diag(abs(nu));
+R = bodyToWorldRotation(quat);
+g = getRestoringVector(R, mass, buoyancy, com, cob);
+tau = B * thrusterForces;
+
+nu_dot = M \ (tau - C * nu - D * nu - g);
+position_dot = R * nu(1:3);
+
+quat_dot = getQuaternionDerivative(quat, nu);
+
+dxdt = [position_dot; quat_dot; nu_dot];
 end
 
 function quat_dot = getQuaternionDerivative(quat, nu)
@@ -59,15 +60,13 @@ end
 
 function g = getRestoringVector(R, mass, buoyancy, com, cob)
    
-    %rotate gravity and bouyancy into body
+    %get g
     weightBody = R.' * [0; 0; -mass * 9.80665];
     buoyancyBody = R.' * [0; 0; buoyancy];
-
-    %get forces and moments
     forceBody = weightBody + buoyancyBody;
     momentBody = cross(com, weightBody) + cross(cob, buoyancyBody);
     
-    g = [forceBody; momentBody];
+    g = -[forceBody; momentBody];
 end
 
 function R = bodyToWorldRotation(quat)
