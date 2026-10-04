@@ -1,0 +1,83 @@
+function dxdt = FossenStateFcn(x, thrusterForces, ...
+    M, MA, DQ, DL, B, mass, buoyancy, com, cob, I, flipCost) 
+
+quat = x(4:7);
+nu = x(8:13);
+
+C = getCoriolisMatrix(nu, MA, mass, com, I);
+D = DL + DQ * diag(abs(nu));
+R = bodyToWorldRotation(quat);
+g = getRestoringVector(R, mass, buoyancy, com, cob);
+tau = B * thrusterForces;
+
+nu_dot = M \ (tau - C * nu - D * nu - g);
+position_dot = R * nu(1:3);
+
+quat_dot = getQuaternionDerivative(quat, nu);
+
+dxdt = [position_dot; quat_dot; nu_dot];
+end
+
+function quat_dot = getQuaternionDerivative(quat, nu)
+    
+    %get quat
+    qw = quat(1);
+    qx = quat(2);
+    qy = quat(3);
+    qz = quat(4);
+
+    % Angular velocities
+    p = nu(4);   
+    q = nu(5);    
+    r = nu(6);    
+
+    %q derivative calc
+    quat_dot = 0.5 * [
+        -qx*p - qy*q - qz*r;
+         qw*p + qy*r - qz*q;
+         qw*q + qz*p - qx*r;
+         qw*r + qx*q - qy*p
+    ];
+end
+
+
+function C = getCoriolisMatrix(nu, MA, mass, com, I)
+    v = nu(1:3);
+    omega = nu(4:6);
+    %construct added coriolis
+    a = MA(1:3,1:3) * v + MA(1:3,4:6) * omega;
+    b = MA(4:6,1:3) * v + MA(4:6,4:6) * omega;
+    CA = [zeros(3), -skew(a); -skew(a), -skew(b)];
+    
+    %construct rigid body coriolis
+    Sw = skew(omega);
+    Sg = skew(com);
+    
+    CRB = [mass * Sw, -mass * Sw * Sg; ...
+           mass * Sg * Sw, -skew(I * omega)];
+    C = CRB + CA;
+end
+
+function g = getRestoringVector(R, mass, buoyancy, com, cob)
+   
+    
+    weightBody = R.' * [0; 0; -mass * 9.80665];
+    buoyancyBody = R.' * [0; 0; buoyancy];
+    forceBody = weightBody + buoyancyBody;
+    momentBody = cross(com, weightBody) + cross(cob, buoyancyBody);
+    
+    g = -[forceBody; momentBody];
+end
+
+function R = bodyToWorldRotation(quat)
+    %normalize quat
+    qnorm = sqrt(quat.' * quat);
+    q = quat ./ qnorm;
+    %make rotm
+    R = quat2rotm(q');
+end
+
+%helper function
+function S = skew(v)
+    S = [0, -v(3), v(2); v(3), 0, -v(1); -v(2), v(1), 0];
+end
