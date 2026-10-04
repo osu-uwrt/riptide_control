@@ -48,8 +48,8 @@
     odom_timeout: 0.5
     hardware.spin_bias: 0.0      # N; zero-wrench thrust pattern so no thruster idles near 0 rpm (these ESCs take
                                  # ~0.8 s to start a motor). Live; 2026-10-03 testing.
-    hardware.rpm_offset: 140.0   # rpm added to every nonzero ESC request; the ESCs settle ~140 rpm short
-                                 # (2026-10-03 telemetry). talos.yaml was identified with 140; keep them paired.
+    hardware.rpm_offset: 0.0     # rpm added to every nonzero ESC request. Was 140 for the ESC CAN decode bug
+                                 # (fixed in firmware); talos.yaml was identified with 140, so re-identify it.
     table_mode: false          # bench test out of the water: RPM = 500*(1 - e^(-|F|/2)), capped at 500
     motion:
       # Setpoints are approached along a speed/accel/jerk-limited (S-curve) profile

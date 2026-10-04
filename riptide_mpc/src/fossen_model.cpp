@@ -145,7 +145,8 @@ double HardwareConfig::forceToRpm(double f) const {
     if (f == 0 || !std::isfinite(f))
         return 0; // the fitted curves are meaningless at zero; stop the motor
     const auto &c = f > 0 ? rpm_positive : rpm_negative;
-    return c[0] + c[1] * f + c[2] * std::tanh(f) + c[3] * std::pow(std::abs(f), 0.25);
+    const double rpm = c[0] + c[1] * f + c[2] * std::tanh(f) + c[3] * std::pow(std::abs(f), 0.25);
+    return rpm * f > 0 ? rpm : 0; // the fitted curve's wrong-sign floor near zero force: stop the motor
 }
 
 VectorXd FossenModel::limitTotalThrust(const VectorXd &command) const {

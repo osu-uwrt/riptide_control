@@ -291,6 +291,11 @@ TEST(Hardware, ForceToRpmMatchesCompleteController) {
     EXPECT_NEAR(hw.forceToRpm(-f), 257.460623 - 42.948545 * f + 24.402056 * std::tanh(f) - 986.338071 * std::pow(f, 0.25),
                 1e-9);
     EXPECT_EQ(hw.forceToRpm(0.0), 0.0);
+    // Very near zero the fitted curves give the wrong sign (below ~0.012 N forward, ~0.005 N reverse):
+    // a stop, not a reversal.
+    EXPECT_EQ(hw.forceToRpm(0.005), 0.0);  // curve: about -93 rpm
+    EXPECT_EQ(hw.forceToRpm(-0.001), 0.0); // curve: about +82 rpm
+    EXPECT_LT(hw.forceToRpm(-0.01), 0.0);  // past the floor the curve applies
     EXPECT_GT(hw.forceToRpm(24.0), hw.forceToRpm(12.0)); // monotonic over the working range
     EXPECT_LT(hw.forceToRpm(-24.0), hw.forceToRpm(-12.0));
 }
