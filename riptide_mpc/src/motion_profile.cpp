@@ -5,22 +5,8 @@
 #include <cmath>
 
 namespace riptide_mpc {
-namespace {
-constexpr double kSubstep = 0.002; // s; switching resolution of the jerk decisions
-
+namespace scalar {
 using Limits = AxisLimits;
-
-// Near the target, time-optimal bang-bang jerk switching chatters at the
-// sampling resolution. Inside this capture region a critically damped linear
-// law (triple pole at -kCapturePole) takes over and settles smoothly.
-constexpr double kCapturePole = 10.0; // 1/s
-struct Capture {
-    double distance, speed, accel;
-    // Wider region for states not heading at the target (circling it after a
-    // corner or retarget, or backing off it), where bang-bang braking orbits
-    // the target instead of settling.
-    double stray_distance = 0, stray_speed = 0;
-};
 
 // Constant-jerk motion for time t; returns the distance covered.
 double advance(double &v, double &a, double j, double t) {
@@ -84,6 +70,20 @@ double brakingJerk(double v, double a, const Limits &l, double h) {
         return clampJerk(-std::min(l.jerk, (peak - a0) / h), a, l, h);
     return 0;
 }
+
+} // namespace scalar
+
+namespace {
+using namespace scalar;
+using Limits = AxisLimits;
+
+struct Capture {
+    double distance, speed, accel;
+    // Wider region for states not heading at the target (circling it after a
+    // corner or retarget, or backing off it), where bang-bang braking orbits
+    // the target instead of settling.
+    double stray_distance = 0, stray_speed = 0;
+};
 
 // One substep toward a point `offset` away (distance and direction); `v`/`a`
 // are the rate and its derivative. Braking is planned to stop `extra` beyond

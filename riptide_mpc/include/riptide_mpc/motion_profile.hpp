@@ -31,6 +31,24 @@ struct AxisLimits {
 // Linear limits for motion along `direction` (world frame, any length).
 AxisLimits linearLimitsAlong(const MotionLimits &limits, const Vector3d &direction);
 
+// One-dimensional S-curve pieces shared by MotionProfile and PathPlan; `v`/`a`
+// are a rate and its derivative, `h` the substep.
+namespace scalar {
+constexpr double kSubstep = 0.002; // s; switching resolution of the jerk decisions
+// Near the target, time-optimal bang-bang jerk switching chatters at the
+// sampling resolution. Inside a capture region a critically damped linear
+// law (triple pole at -kCapturePole) takes over and settles smoothly.
+constexpr double kCapturePole = 10.0; // 1/s
+// Constant-jerk motion for time t; returns the distance covered.
+double advance(double &v, double &a, double j, double t);
+// Distance to come to rest (v = a = 0) from (v >= 0, a), braking as hard as allowed.
+double stoppingDistance(double v, double a, const AxisLimits &l);
+// Jerk that drives velocity to `target` with acceleration ending at zero.
+double velocityJerk(double v, double a, double target, const AxisLimits &l, double h);
+// Jerk that follows the hardest-allowed braking plan from (v > 0, a).
+double brakingJerk(double v, double a, const AxisLimits &l, double h);
+} // namespace scalar
+
 struct MotionProfile {
     Vector3d position = Vector3d::Zero();
     Vector3d velocity = Vector3d::Zero();

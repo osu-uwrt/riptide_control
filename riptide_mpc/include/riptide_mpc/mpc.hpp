@@ -2,6 +2,7 @@
 
 #include "riptide_mpc/fossen_model.hpp"
 #include "riptide_mpc/motion_profile.hpp"
+#include "riptide_mpc/path_plan.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -9,11 +10,6 @@
 namespace riptide_mpc {
 // Same values as riptide_msgs2/ControllerCommand.
 enum class Mode : std::uint8_t { DISABLED = 0, FEEDFORWARD = 1, VELOCITY = 2, POSITION = 3 };
-
-struct Waypoint {
-    Vector3d position = Vector3d::Zero(); // base_link in the odometry frame
-    Quaterniond orientation = Quaterniond::Identity();
-};
 
 struct Reference {
     Mode linear_mode = Mode::DISABLED, angular_mode = Mode::DISABLED;
@@ -23,17 +19,10 @@ struct Reference {
     Quaterniond orientation = Quaterniond::Identity();
     Vector3d angular_velocity = Vector3d::Zero(); // body rates
     Vector6d feedforward = Vector6d::Zero();      // body wrench used in FEEDFORWARD mode
-    // POSITION mode path (both linear and angular): the profile passes through
-    // each waypoint, turning to the next once within corner_radius and
-    // corner_angle of it, and comes to rest only on the last, which
-    // position/orientation should equal. Empty: go straight to
-    // position/orientation.
-    std::vector<Waypoint> path;
-    double corner_radius = 0.3; // m
-    // rad; below pi/2 so waypoints a quarter turn apart spin one way.
-    double corner_angle = 0.8;
-    // Where the path started; the first leg blends attitude from here.
-    Waypoint path_start;
+    // POSITION mode path (both linear and angular): the reference moves along
+    // it and comes to rest on its end, which position/orientation should equal.
+    // Null: go straight to position/orientation. A new pointer restarts the path.
+    std::shared_ptr<const PathPlan> path;
 };
 
 struct MpcSettings {
@@ -138,9 +127,9 @@ class MpcController {
     const MotionProfile &profile() const {
         return live_.pose;
     }
-    // Waypoint of reference.path the profile is heading for.
-    std::size_t pathIndex() const {
-        return live_.waypoint;
+    // Where the profile is along reference.path.
+    const PathProgress &pathProgress() const {
+        return live_.progress;
     }
     double referenceLead() const {
         return settings_.compensate_delay ? model_.actuatorParameters().front().delay : 0.;
@@ -157,15 +146,13 @@ class MpcController {
         MotionProfile pose;
         Vector3d linear_velocity = Vector3d::Zero();  // VELOCITY mode, command frame
         Vector3d angular_velocity = Vector3d::Zero(); // VELOCITY mode, body
-        std::size_t waypoint = 0;                     // index into Reference::path
+        PathProgress progress;                        // along Reference::path
     };
 
     Point boxplus(const Point &p, const VectorXd &delta) const;
     VectorXd boxminus(const Point &a, const Point &b) const;
     Point stage(const Point &p, const VectorXd &command, bool fine) const;
     void stepReference(StageReference &s, const Reference &r, double dt) const;
-    double cornerAllowance(const StageReference &s, const Reference &r) const;
-    Quaterniond legAttitude(const StageReference &s, const Reference &r) const;
     void seedReference(const State13d &measured, const Reference &r);
     Output output(const State13d &x, const Reference &r, const StageReference &s) const;
     VectorXd feedforwardInput(const StageReference &s, const Reference &r, const State13d &x0) const;

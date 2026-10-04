@@ -13,7 +13,7 @@
       gyro_gain: 1.0                  # fraction of each gyro innovation applied
       fog_gain: 1.0
       dvl_gain: 0.7
-      dvl_latency: 0.12               # s; Nortek reports its velocity ~0.12 s after the measurement (dt2)
+      dvl_latency: 0.0                # s; extra age of DVL stamps. 0: nortek_dvl stamps at the measurement (arrival + dt2)
       tilt_time_constant: 1.0         # s; IMU gravity reference for roll/pitch
       depth_time_constant: 0.3        # s
       heading_time_constant: 2.0      # s; EKF yaw anchor
@@ -56,8 +56,8 @@
       # rather than chased directly. The MPC tracks its pose, velocity, and the
       # thrust it needs (inverse Fossen dynamics) as feedforward.
       profile: true
-      linear_speed: 0.5        # m/s; the sim model tops out near 0.9 m/s (drag vs 28 N thrusters)
-      linear_accel: 0.3        # m/s^2; above ~0.7 the vehicle starts lagging the profile
+      linear_speed: 0.7        # m/s; the sim model tops out near 0.9 m/s (drag vs 28 N thrusters)
+      linear_accel: 0.5        # m/s^2; above ~0.7 the vehicle starts lagging the profile
       linear_jerk: 2.0         # m/s^3; accel ramps over accel/jerk = 0.25 s
       # Straight up/down limits; linear_* above are then horizontal and a
       # diagonal move gets the ellipse between. -1: same as horizontal.
@@ -77,10 +77,12 @@
       governor_angle: 0.05        # rad
       governor_stop_angle: 0.25   # rad
     path:
-      # follow_path action (FollowPath BT node): the reference turns toward the next
-      # waypoint within corner_radius of the current one, slowing only enough that its
-      # swing through the corner stays inside that radius, and stops only on the last.
+      # follow_path action (FollowPath BT node): lines and arcs (riptide_msgs2/PathSegment)
+      # flown as one curve with a jerk-limited speed profile along it, stopping only on
+      # the last point. Sharp joins are rounded off within corner_radius of the corner.
       corner_radius: 0.3        # m
+      lateral_accel: 0.3        # m/s^2; sideways acceleration on arcs and rounded corners
+      kink_speed: 0.03          # m/s; joins that cannot be rounded (reversals) are crossed this slowly
       success_trust: 0.8        # result once trust (below) reaches this on the last waypoint
       progress_timeout: 10.0    # s without 5 cm of progress -> PROGRESS_FAIL
     trust:

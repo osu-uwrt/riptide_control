@@ -359,6 +359,19 @@ double yawOf(const Quaterniond &q) {
 double wrap(double a) {
     return std::atan2(std::sin(a), std::cos(a));
 }
+PathPoint point(const Vector3d &position, const Quaterniond &orientation = Quaterniond::Identity()) {
+    PathPoint p;
+    p.position = position;
+    p.orientation = orientation;
+    return p;
+}
+// Starts reference r on a path from where its profile is now.
+void startPath(Reference &r, const MpcController &c, const std::vector<PathPoint> &points,
+               const PathOptions &options = {}) {
+    r.path = PathPlan::build({c.profile().position, c.profile().orientation}, points, c.settings().motion, options);
+    r.position = r.path->end().position;
+    r.orientation = r.path->end().orientation;
+}
 } // namespace
 
 // A path of quarter turns in place spins through every one of them (the
@@ -370,10 +383,10 @@ TEST(Mpc, PathOfQuarterTurnsSpinsInPlace) {
     r.position = loop.position();
     loop.run(r, 3.0);
     const int turns = 2;
-    r.path_start = {r.position, r.orientation};
+    std::vector<PathPoint> points;
     for (int k = 1; k <= 4 * turns; ++k)
-        r.path.push_back({r.position, quaternionExp(Vector3d(0, 0, k * M_PI / 2))});
-    r.orientation = r.path.back().orientation;
+        points.push_back(point(r.position, quaternionExp(Vector3d(0, 0, k * M_PI / 2))));
+    startPath(r, loop.controller, points);
     double travelled = 0, last = yawOf(loop.orientation()), slowest_mid = 1e9;
     const double dt = loop.controller.settings().dt;
     const MotionLimits limits;
@@ -390,7 +403,7 @@ TEST(Mpc, PathOfQuarterTurnsSpinsInPlace) {
     EXPECT_NEAR(travelled, turns * 2 * M_PI, 0.02);
     EXPECT_GT(slowest_mid, 0.8 * limits.angular_speed);
     EXPECT_LT((loop.position() - r.position).norm(), 0.01);
-    EXPECT_EQ(loop.controller.pathIndex(), r.path.size() - 1);
+    EXPECT_TRUE(r.path->atEnd(loop.controller.pathProgress()));
 }
 
 // A heading change on a long leg is spread over the move rather than done
@@ -402,10 +415,7 @@ TEST(Mpc, PathSpreadsTurnOverTheLeg) {
     r.position = loop.position();
     loop.run(r, 3.0);
     const Vector3d start = r.position, goal = start + Vector3d(4, 0, 0);
-    r.path_start = {start, r.orientation};
-    r.path.push_back({goal, quaternionExp(Vector3d(0, 0, 2.5))});
-    r.position = goal;
-    r.orientation = r.path.back().orientation;
+    startPath(r, loop.controller, {point(goal, quaternionExp(Vector3d(0, 0, 2.5)))});
     const double dt = loop.controller.settings().dt;
     double yaw_at_quarter = 0, yaw_at_half = 0;
     for (int k = 0; k < static_cast<int>(20 / dt); ++k) {
@@ -424,23 +434,17 @@ TEST(Mpc, PathSpreadsTurnOverTheLeg) {
     EXPECT_NEAR(yawOf(loop.orientation()), 2.5, 1e-3);
 }
 
-// A path whose last leg turns sharply (a 5.6 m run, then 0.5 m straight up),
-// flown with the MPC's model of the real vehicle against the simulator plant:
+// A path whose last leg turns sharply (a 5.6 m run, then 0.5 m straight up):
 // the reference must come to rest on the goal instead of circling it.
-TEST(Mpc, PathSettlesAfterSharpFinalCornerWithModelError) {
-    std::string hydro = TALOS_HYDRO;
-    hydro.replace(hydro.find("talos_sim.yaml"), 14, "talos.yaml");
+TEST(Mpc, PathSettlesAfterSharpFinalCorner) {
     ClosedLoop loop;
-    loop.controller = MpcController(FossenModel::load(TALOS_VEHICLE, hydro), MpcSettings());
     Reference r;
     r.linear_mode = r.angular_mode = Mode::POSITION;
     r.position = loop.position();
     r.orientation = quaternionExp(Vector3d(0, 0, M_PI));
     loop.run(r, 6.0);
     const Vector3d a = r.position + Vector3d(0.4, 5.6, 0.07), b = a + Vector3d(0, 0, 0.5);
-    r.path_start = {loop.controller.profile().position, loop.controller.profile().orientation};
-    r.path = {{a, r.orientation}, {b, r.orientation}};
-    r.position = b;
+    startPath(r, loop.controller, {point(a, r.orientation), point(b, r.orientation)});
     const double dt = loop.controller.settings().dt;
     double rested = -1;
     for (double t = 0; t < 30; t += dt) {
@@ -455,6 +459,38 @@ TEST(Mpc, PathSettlesAfterSharpFinalCornerWithModelError) {
     EXPECT_LT(rested, 18);
     EXPECT_LT((loop.controller.profile().position - b).norm(), 1e-6);
     EXPECT_LT((loop.position() - b).norm(), 0.01);
+}
+
+// Half an orbit about a point 1.5 m ahead while looking at it (the pole in
+// prequal): the vehicle tracks the arc and keeps facing the point.
+TEST(Mpc, OrbitsAPointLookingAtIt) {
+    ClosedLoop loop;
+    Reference r;
+    r.linear_mode = r.angular_mode = Mode::POSITION;
+    r.position = loop.position();
+    loop.run(r, 3.0);
+    const Vector3d center = r.position + Vector3d(1.5, 0, 0);
+    PathPoint orbit = point(center + Vector3d(1.5, 0, 0));
+    orbit.shape = PathShape::ARC;
+    orbit.center = center;
+    orbit.sweep = M_PI;
+    orbit.heading = PathHeading::LOOK_AT;
+    orbit.look_at = center;
+    startPath(r, loop.controller, {orbit});
+    const double dt = loop.controller.settings().dt;
+    double worst_position = 0, worst_heading = 0, t = 0;
+    for (; t < 40 && !r.path->atEnd(loop.controller.pathProgress()); t += dt) {
+        loop.run(r, dt);
+        worst_position = std::max(worst_position, std::abs((loop.position() - center).head<2>().norm() - 1.5));
+        const Vector3d to = center - loop.position();
+        worst_heading = std::max(worst_heading, std::abs(wrap(yawOf(loop.orientation()) - std::atan2(to.y(), to.x()))));
+    }
+    loop.run(r, 3.0);
+    std::printf("orbit: %.1f s, worst radius error %.1f mm, worst heading error %.2f deg, end %.1f mm off\n", t,
+                worst_position * 1e3, worst_heading * 180 / M_PI, (loop.position() - r.position).norm() * 1e3);
+    EXPECT_LT(worst_position, 0.03);
+    EXPECT_LT(worst_heading, 0.05);
+    EXPECT_LT((loop.position() - r.position).norm(), 0.01);
 }
 
 // Separate vertical limits: flat moves cruise at the horizontal limit, straight

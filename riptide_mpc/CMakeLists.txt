@@ -25,7 +25,7 @@ find_package(ament_index_cpp REQUIRED)
 find_package(rosbag2_cpp REQUIRED)
 find_package(std_srvs REQUIRED)
 
-add_library(mpc_core src/marine_dynamics.cpp src/thruster_dynamics.cpp src/fossen_model.cpp src/box_qp.cpp src/mpc.cpp src/state_estimator.cpp src/motion_profile.cpp src/identification.cpp)
+add_library(mpc_core src/marine_dynamics.cpp src/thruster_dynamics.cpp src/fossen_model.cpp src/box_qp.cpp src/mpc.cpp src/state_estimator.cpp src/motion_profile.cpp src/path_plan.cpp src/identification.cpp)
 target_include_directories(mpc_core PUBLIC include)
 target_link_libraries(mpc_core Eigen3::Eigen yaml-cpp)
 set_target_properties(mpc_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -67,6 +67,8 @@ if(BUILD_TESTING)
   target_link_libraries(test_state_estimator mpc_core)
   ament_add_gtest(test_identification test/test_identification.cpp TIMEOUT 1200)
   target_link_libraries(test_identification mpc_core)
+  ament_add_gtest(test_path_plan test/test_path_plan.cpp TIMEOUT 120)
+  target_link_libraries(test_path_plan mpc_core)
   foreach(test_target test_mpc test_state_estimator test_identification)
     target_compile_definitions(${test_target} PRIVATE
       TALOS_VEHICLE="${CMAKE_CURRENT_SOURCE_DIR}/../../riptide_core/riptide_descriptions/config/talos.yaml"

@@ -7,17 +7,6 @@
 #include <stdexcept>
 
 namespace riptide_mpc {
-namespace {
-bool samePath(const std::vector<Waypoint> &a, const std::vector<Waypoint> &b) {
-    if (a.size() != b.size())
-        return false;
-    for (std::size_t i = 0; i < a.size(); ++i)
-        if (a[i].position != b[i].position || !a[i].orientation.coeffs().isApprox(b[i].orientation.coeffs(), 0))
-            return false;
-    return true;
-}
-} // namespace
-
 MpcController::MpcController(FossenModel model, MpcSettings settings)
     : model_(std::move(model)), settings_(settings), actuator_(model_.makeActuator()) {
     if (!(settings_.dt > 0) || settings_.horizon < 1 || !(settings_.model_step > 0) ||
@@ -41,18 +30,15 @@ void MpcController::advance(double dt) {
 
 void MpcController::stepReference(StageReference &s, const Reference &r, double dt) const {
     const MotionLimits &m = motion_;
-    const bool path = !r.path.empty();
-    if (path) { // turn toward the next waypoint once within the corner radius and angle of this one
-        s.waypoint = std::min(s.waypoint, r.path.size() - 1);
-        while (s.waypoint + 1 < r.path.size() &&
-               (s.pose.position - r.path[s.waypoint].position).norm() < r.corner_radius &&
-               s.pose.orientation.angularDistance(r.path[s.waypoint].orientation) < r.corner_angle)
-            ++s.waypoint;
+    if (r.path && r.linear_mode == Mode::POSITION && r.angular_mode == Mode::POSITION) {
+        // The governor's slowdown, as fractions of the configured cruise speeds.
+        r.path->step(s.progress, m.linear_speed / settings_.motion.linear_speed,
+                     m.angular_speed / settings_.motion.angular_speed, dt);
+        r.path->pose(s.progress, s.pose);
+        return;
     }
     if (r.linear_mode == Mode::POSITION) {
-        if (settings_.profile_motion && path)
-            s.pose.stepLinear(r.path[s.waypoint].position, m, dt, cornerAllowance(s, r));
-        else if (settings_.profile_motion)
+        if (settings_.profile_motion)
             s.pose.stepLinear(r.position, m, dt);
         else {
             s.pose.position = r.position;
@@ -67,7 +53,7 @@ void MpcController::stepReference(StageReference &s, const Reference &r, double 
     }
     if (r.angular_mode == Mode::POSITION) {
         if (settings_.profile_motion)
-            s.pose.stepAngular(path ? legAttitude(s, r) : r.orientation, m, dt);
+            s.pose.stepAngular(r.orientation, m, dt);
         else {
             s.pose.orientation = r.orientation;
             s.pose.angular_velocity.setZero();
@@ -79,40 +65,6 @@ void MpcController::stepReference(StageReference &s, const Reference &r, double 
                 ? MotionProfile::rateLimit(s.angular_velocity, r.angular_velocity, m.angular_accel, dt)
                 : r.angular_velocity;
     }
-}
-
-// Attitude on the leg into the current waypoint: the previous waypoint's,
-// blended toward this one's as the profile covers the leg, so a heading change
-// spreads over the move instead of finishing first at full rate. A leg shorter
-// than the corner radius (a turn in place) aims straight at the waypoint.
-Quaterniond MpcController::legAttitude(const StageReference &s, const Reference &r) const {
-    const Waypoint &to = r.path[s.waypoint];
-    const Waypoint &from = s.waypoint > 0 ? r.path[s.waypoint - 1] : r.path_start;
-    const double length = (to.position - from.position).norm();
-    if (length < r.corner_radius)
-        return to.orientation;
-    const double covered = std::clamp(1 - (to.position - s.pose.position).norm() / length, 0., 1.);
-    return from.orientation.slerp(covered, to.orientation);
-}
-
-// Braking allowance past the waypoint being approached: 0 for the last one;
-// otherwise arrive at the corner at the speed whose sideways swing after
-// turning, (v sin(turn))^2 / 2a, stays within the corner radius, and never plan
-// to stop beyond the next waypoint.
-double MpcController::cornerAllowance(const StageReference &s, const Reference &r) const {
-    if (s.waypoint + 1 >= r.path.size())
-        return 0;
-    const MotionLimits &m = motion_;
-    const Vector3d corner = r.path[s.waypoint].position;
-    const Vector3d in = corner - s.pose.position, out = r.path[s.waypoint + 1].position - corner;
-    if (in.norm() < 1e-9 || out.norm() < 1e-9)
-        return 0;
-    const double c = in.normalized().dot(out.normalized());
-    const double sin_turn = c > 0 ? std::sqrt(std::max(0., 1 - c * c)) : 1.; // past 90 deg all speed must go
-    const AxisLimits l_in = linearLimitsAlong(m, in), l_out = linearLimitsAlong(m, out);
-    const double corner_speed = std::min(
-        l_in.speed, std::sqrt(2 * std::min(l_in.accel, l_out.accel) * r.corner_radius) / std::max(sin_turn, 1e-3));
-    return std::min(MotionProfile::brakingDistance(corner_speed, m, in) - r.corner_radius, out.norm());
 }
 
 // Starts the profile from where the vehicle is and how it is moving, on mode
@@ -128,8 +80,22 @@ void MpcController::seedReference(const State13d &x, const Reference &r) {
         angular_seeded_ = false;
         live_.angular_velocity = w_body;
     }
-    if (!samePath(r.path, target_.path))
-        live_.waypoint = 0;
+    if (r.path && r.linear_mode == Mode::POSITION && r.angular_mode == Mode::POSITION) {
+        const Vector3d v_world = q * v_body;
+        if (r.path != target_.path) { // a new path starts from the profile, moving as it was
+            live_.progress = {};
+            live_.progress.v = std::max(0., r.path->tangent(0).dot(linear_seeded_ ? live_.pose.velocity : v_world));
+        } else if (!linear_seeded_ || (live_.pose.position - p).norm() > settings_.max_reference_lag) {
+            // Fallen too far behind: restart from the nearest point a little either side.
+            live_.progress.s = r.path->project(p, live_.progress.s, 2.0);
+            live_.progress.v = std::max(0., r.path->tangent(live_.progress.s).dot(v_world));
+            live_.progress.a = 0;
+        }
+        r.path->pose(live_.progress, live_.pose);
+        linear_seeded_ = angular_seeded_ = true;
+        target_ = r;
+        return;
+    }
     if (r.linear_mode == Mode::POSITION &&
         (!linear_seeded_ || (live_.pose.position - p).norm() > settings_.max_reference_lag)) {
         live_.pose.position = p;
@@ -351,12 +317,12 @@ MpcOutput MpcController::compute(const State13d &measured, const Reference &refe
         // Near the final stop the profile is left alone: it cannot run away there,
         // and cutting its speed while it brakes makes it overshoot and hunt (the
         // measured lag includes model error in the delay compensation).
-        const bool final_leg = reference.path.empty() || live_.waypoint + 1 >= reference.path.size();
-        const Vector3d goal = reference.path.empty() ? reference.position : reference.path.back().position;
-        const bool braking = final_leg && (goal - live_.pose.position).norm() <=
-                                              MotionProfile::brakingDistance(live_.pose.velocity.norm(), motion_,
-                                                                             goal - live_.pose.position) +
-                                                  settings_.governor_stop_lag;
+        const double to_go = reference.path ? reference.path->length() - live_.progress.s
+                                            : (reference.position - live_.pose.position).norm();
+        const Vector3d heading = reference.path ? reference.path->tangent(live_.progress.s)
+                                                : Vector3d(reference.position - live_.pose.position);
+        const bool braking =
+            to_go <= MotionProfile::brakingDistance(live_.pose.velocity.norm(), motion_, heading) + settings_.governor_stop_lag;
         if (reference.linear_mode == Mode::POSITION && !braking) {
             const double s_lin = scale((model_.baseLinkPosition(x0.x) - live_.pose.position).norm(),
                                        settings_.governor_lag, settings_.governor_stop_lag);

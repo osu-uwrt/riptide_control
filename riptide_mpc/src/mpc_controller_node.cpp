@@ -2,7 +2,7 @@
 // whose prediction model is the simulator's Fossen model. Same interface:
 //   in:  odometry/filtered, controller/linear, controller/angular (ControllerCommand),
 //        controller/FF_body_force, controller/motion_enabled, state/kill,
-//        follow_path (FollowPath action: pass through waypoints, settle on the last)
+//        follow_path (FollowPath action: lines and arcs with a heading mode, settle on the last)
 //   out: thruster_forces (Float32MultiArray, newtons), controller_debug_wrench,
 //        command/requested_rpm (DshotCommand) and, on the vehicle, the same RPM
 //        commands straight to the ESCs over CAN (as complete_controller does)
@@ -45,6 +45,7 @@ extern "C" int send_thruster_cmd_canbus(int16_t cmds[8]); // riptide_controllers
 using namespace std::chrono_literals;
 using riptide_msgs2::msg::ControllerCommand;
 using FollowPath = riptide_msgs2::action::FollowPath;
+using PathSegment = riptide_msgs2::msg::PathSegment;
 using PathGoal = rclcpp_action::ServerGoalHandle<FollowPath>;
 
 namespace riptide_mpc {
@@ -342,9 +343,9 @@ class MpcControllerNode : public rclcpp::Node {
             e.gyro_gain = declare_parameter("estimator.gyro_gain", e.gyro_gain);
             e.fog_gain = declare_parameter("estimator.fog_gain", e.fog_gain);
             e.dvl_gain = declare_parameter("estimator.dvl_gain", e.dvl_gain);
-            // The Nortek DVL's velocity is ~0.12 s old when it is sent (its dt2), and the driver
-            // stamps on arrival; the estimate compares it with its own state from that long ago.
-            dvl_latency_ = declare_parameter("estimator.dvl_latency", 0.12);
+            // How long before its stamp a DVL velocity was measured; the estimate compares it with its
+            // own state from that long ago. nortek_dvl already back-dates by the DVL's dt2 (~0.12 s).
+            dvl_latency_ = declare_parameter("estimator.dvl_latency", 0.0);
             e.tilt_time_constant = declare_parameter("estimator.tilt_time_constant", e.tilt_time_constant);
             e.depth_time_constant = declare_parameter("estimator.depth_time_constant", e.depth_time_constant);
             e.heading_time_constant = declare_parameter("estimator.heading_time_constant", e.heading_time_constant);
@@ -380,6 +381,9 @@ class MpcControllerNode : public rclcpp::Node {
         thruster_pub_ = create_publisher<std_msgs::msg::Float32MultiArray>("thruster_forces", 10);
         wrench_pub_ = create_publisher<geometry_msgs::msg::Twist>("controller_debug_wrench", 10);
         path_pub_ = create_publisher<nav_msgs::msg::Path>("controller/mpc/predicted_path", 10);
+        // The whole follow_path plan, latched for late viewers; empty once the path ends.
+        planned_path_pub_ =
+            create_publisher<nav_msgs::msg::Path>("controller/mpc/planned_path", rclcpp::QoS(1).transient_local());
         solve_pub_ = create_publisher<std_msgs::msg::Float64>("controller/mpc/solve_time_ms", 10);
         reference_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("controller/mpc/reference", 10);
         trust_pub_ = create_publisher<geometry_msgs::msg::Twist>("controller/scale/trust", 10);
@@ -424,10 +428,11 @@ class MpcControllerNode : public rclcpp::Node {
             killed_ = m.data;
         });
 
-        corner_radius_ = declare_parameter("path.corner_radius", 0.3);
+        path_options_.corner_radius = declare_parameter("path.corner_radius", path_options_.corner_radius);
+        path_options_.lateral_accel = declare_parameter("path.lateral_accel", path_options_.lateral_accel);
+        path_options_.kink_speed = declare_parameter("path.kink_speed", path_options_.kink_speed);
         path_success_trust_ = declare_parameter("path.success_trust", 0.8);
         path_progress_timeout_ = declare_parameter("path.progress_timeout", 10.0);
-        corner_angle_ = declare_parameter("path.corner_angle", 0.8);
         // Also done once the reference has arrived and the vehicle is this close
         // and slow, without waiting for full settle trust.
         finish_position_ = declare_parameter("path.finish_position", 0.10);
@@ -774,14 +779,18 @@ class MpcControllerNode : public rclcpp::Node {
             RCLCPP_WARN(get_logger(), "Path rejected: %s", why.c_str());
         };
         const auto &points = goal->get_goal()->path_points;
+        const auto &segments = goal->get_goal()->segments;
         const auto current = currentOrientation();
         if (points.empty())
             return reject(FollowPath::Result::BAD_WYPTS, "no waypoints");
+        if (!segments.empty() && segments.size() != points.size())
+            return reject(FollowPath::Result::BAD_WYPTS, "segments must be empty or one per path point");
         if (!odom_ || !current)
             return reject(FollowPath::Result::BAD_WYPTS, "no odometry yet");
         const std::string &frame = odom_->header.frame_id;
-        std::vector<Waypoint> path;
-        for (const auto &point : points) {
+        std::vector<PathPoint> path;
+        for (std::size_t i = 0; i < points.size(); ++i) {
+            const auto &point = points[i];
             if (point.header.frame_id.empty())
                 return reject(FollowPath::Result::MISSING_FRAME_ID, "waypoint without a frame_id");
             Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
@@ -798,20 +807,30 @@ class MpcControllerNode : public rclcpp::Node {
             const auto &p = point.pose.position;
             const auto &o = point.pose.orientation;
             const Quaterniond q(o.w, o.x, o.y, o.z);
-            Waypoint w;
+            PathPoint w;
             w.position = transform * Vector3d(p.x, p.y, p.z);
             // An empty quaternion keeps the previous waypoint's attitude (the current one for the first).
             w.orientation = q.norm() > 1e-6 ? Quaterniond(Quaterniond(transform.rotation()) * q.normalized())
                             : path.empty()  ? *current
                                             : path.back().orientation;
-            if (!w.position.allFinite() || !w.orientation.coeffs().allFinite())
-                return reject(FollowPath::Result::BAD_WYPTS, "nonfinite waypoint");
+            if (!segments.empty()) {
+                const auto &g = segments[i];
+                if (g.shape > PathSegment::ARC || g.heading > PathSegment::HEADING_LOOK_AT)
+                    return reject(FollowPath::Result::BAD_WYPTS, "unknown segment shape or heading");
+                // Turning about the frame's +z: the opposite way round if that points down here.
+                const double handed = (transform.rotation() * Vector3d::UnitZ()).z() < 0 ? -1. : 1.;
+                w.shape = static_cast<PathShape>(g.shape);
+                w.center = transform * Vector3d(g.center.x, g.center.y, g.center.z);
+                w.sweep = handed * g.sweep;
+                w.heading = static_cast<PathHeading>(g.heading);
+                w.look_at = transform * Vector3d(g.look_at.x, g.look_at.y, g.look_at.z);
+                w.yaw_offset = g.yaw_offset;
+                w.spin = g.spin;
+                w.spin_rate = g.spin_rate;
+            }
             path.push_back(w);
         }
-        finishPath(false, FollowPath::Result::NO_ERROR, "preempted by a new path");
 
-        path_cumulative_.assign(1, 0.);
-        path_cumulative_angle_.assign(1, 0.);
         Waypoint start{controller_->profile().position, controller_->profile().orientation};
         if (reference_.linear_mode != Mode::POSITION) { // the profile is seeded at the vehicle
             const auto &p = odom_->pose.pose.position;
@@ -819,36 +838,61 @@ class MpcControllerNode : public rclcpp::Node {
         }
         if (reference_.angular_mode != Mode::POSITION)
             start.orientation = *current;
-        Waypoint from = start;
-        for (const Waypoint &w : path) {
-            path_cumulative_.push_back(path_cumulative_.back() + (w.position - from.position).norm());
-            path_cumulative_angle_.push_back(path_cumulative_angle_.back() +
-                                             w.orientation.angularDistance(from.orientation));
-            from = w;
+        std::shared_ptr<const PathPlan> plan;
+        try {
+            plan = PathPlan::build(start, path, controller_->settings().motion, path_options_);
+        } catch (const std::exception &e) {
+            return reject(FollowPath::Result::BAD_WYPTS, e.what());
         }
-        path_cumulative_.erase(path_cumulative_.begin()); // length from the start to each waypoint
-        path_cumulative_angle_.erase(path_cumulative_angle_.begin()); // rotation, likewise
+        finishPath(false, FollowPath::Result::NO_ERROR, "preempted by a new path");
+
+        const Waypoint end = plan->end();
         reference_.linear_mode = reference_.angular_mode = Mode::POSITION;
-        reference_.path = path;
-        reference_.position = path.back().position;
-        reference_.orientation = path.back().orientation;
-        reference_.corner_radius = corner_radius_;
-        reference_.corner_angle = corner_angle_;
-        reference_.path_start = start;
+        reference_.path = plan;
+        reference_.position = end.position;
+        reference_.orientation = end.orientation;
         path_goal_ = goal;
         settle_trust_.reset(); // "settled" must mean on the new path's end
-        path_best_progress_ = path_best_progress_angle_ = 0;
+        path_best_progress_ = 0;
         path_progress_time_ = get_clock()->now();
-        RCLCPP_INFO(get_logger(), "Following a %zu-waypoint path (%.2f m) in %s", path.size(),
-                    path_cumulative_.back(), frame.c_str());
+        RCLCPP_INFO(get_logger(), "Following a %zu-point path (%.2f m) in %s", path.size(), plan->length(),
+                    frame.c_str());
+        publishPlannedPath(plan.get(), frame);
+    }
+
+    // The plan sampled every 10 cm (turns in place included, so their headings show).
+    void publishPlannedPath(const PathPlan *plan, const std::string &frame) {
+        nav_msgs::msg::Path msg;
+        msg.header.stamp = get_clock()->now();
+        msg.header.frame_id = frame;
+        if (plan) {
+            const int n = std::max(1, static_cast<int>(std::ceil(plan->length() / 0.1)));
+            for (int i = 0; i <= n; ++i) {
+                const double s = plan->length() * i / n;
+                const Vector3d p = plan->position(s);
+                const Quaterniond q = plan->orientation(s);
+                geometry_msgs::msg::PoseStamped pose;
+                pose.header = msg.header;
+                pose.pose.position.x = p.x();
+                pose.pose.position.y = p.y();
+                pose.pose.position.z = p.z();
+                pose.pose.orientation.w = q.w();
+                pose.pose.orientation.x = q.x();
+                pose.pose.orientation.y = q.y();
+                pose.pose.orientation.z = q.z();
+                msg.poses.push_back(pose);
+            }
+        }
+        planned_path_pub_->publish(msg);
     }
 
     // Ends the active path goal: success, abort, or cancel (holding where the
     // reference can stop). The last waypoint stays the setpoint otherwise.
     void finishPath(bool success, uint8_t code, const std::string &message, bool canceled = false) {
-        reference_.path.clear();
+        reference_.path.reset();
         if (!path_goal_)
             return;
+        publishPlannedPath(nullptr, odom_ ? odom_->header.frame_id : "");
         auto result = std::make_shared<FollowPath::Result>();
         result->error_code = code;
         result->error_msg = message;
@@ -881,21 +925,17 @@ class MpcControllerNode : public rclcpp::Node {
             finishPath(false, FollowPath::Result::NO_ERROR, "canceled", true);
             return;
         }
-        // Progress of the reference along the path; the governor stalls it when
-        // the vehicle cannot keep up.
-        const std::size_t k = std::min(controller_->pathIndex(), path_cumulative_.size() - 1);
+        // Progress of the reference along the path (turning in place counts); the
+        // governor stalls it when the vehicle cannot keep up.
+        const PathProgress &progress = controller_->pathProgress();
         const MotionProfile &profile = controller_->profile();
-        const double progress =
-            std::max(0., path_cumulative_[k] - (reference_.path[k].position - profile.position).norm());
-        const double progress_angle = std::max(
-            0., path_cumulative_angle_[k] - reference_.path[k].orientation.angularDistance(profile.orientation));
         auto feedback = std::make_shared<FollowPath::Feedback>();
         feedback->has_generated = true;
-        feedback->current_prog = static_cast<float>(progress);
-        feedback->expected_prog = static_cast<float>(path_cumulative_.back());
+        feedback->current_prog = static_cast<float>(progress.s);
+        feedback->expected_prog = static_cast<float>(reference_.path->length());
         path_goal_->publish_feedback(feedback);
 
-        if (k + 1 == reference_.path.size()) {
+        if (progress.s >= reference_.path->length() - 1e-3) {
             // The profile's last fraction of a millimetre can take seconds; near and
             // slow is arrived enough to judge the vehicle.
             const bool arrived = (profile.position - reference_.position).norm() < 0.01 &&
@@ -915,9 +955,8 @@ class MpcControllerNode : public rclcpp::Node {
                 return;
             }
         }
-        if (progress > path_best_progress_ + 0.05 || progress_angle > path_best_progress_angle_ + 0.05) {
-            path_best_progress_ = std::max(progress, path_best_progress_);
-            path_best_progress_angle_ = std::max(progress_angle, path_best_progress_angle_);
+        if (progress.s > path_best_progress_ + 0.05) {
+            path_best_progress_ = progress.s;
             path_progress_time_ = now;
         } else if ((now - *path_progress_time_).seconds() > path_progress_timeout_) {
             finishPath(false, FollowPath::Result::PROGRESS_FAIL, "no progress along the path");
@@ -1119,7 +1158,7 @@ class MpcControllerNode : public rclcpp::Node {
     bool can_enabled_ = false;
     bool table_mode_ = false;
     std::string vehicle_path_;
-    double dvl_latency_ = 0.12;
+    double dvl_latency_ = 0.0;
     double rpm_offset_ = 0, spin_bias_ = 0;
     VectorXd spin_pattern_;
     std::vector<ThrusterParameters> thruster_file_; // the model file's thruster model
@@ -1135,10 +1174,9 @@ class MpcControllerNode : public rclcpp::Node {
     Reference reference_;
     rclcpp_action::Server<FollowPath>::SharedPtr path_server_;
     std::shared_ptr<PathGoal> path_goal_;
-    std::vector<double> path_cumulative_; // path length from the start to each waypoint
-    double path_best_progress_ = 0, path_best_progress_angle_ = 0;
-    std::vector<double> path_cumulative_angle_;
-    double corner_angle_ = 0.8, finish_position_ = 0.10, finish_angle_ = 0.10, finish_speed_ = 0.10, finish_rate_ = 0.15;
+    double path_best_progress_ = 0;
+    PathOptions path_options_;
+    double finish_position_ = 0.10, finish_angle_ = 0.10, finish_speed_ = 0.10, finish_rate_ = 0.15;
     struct VehicleSample { // latest base_link state, for the path finish check
         rclcpp::Time stamp;
         Vector3d position;
@@ -1147,7 +1185,7 @@ class MpcControllerNode : public rclcpp::Node {
     };
     std::optional<VehicleSample> vehicle_;
     std::optional<rclcpp::Time> path_progress_time_;
-    double corner_radius_ = 0.3, path_success_trust_ = 0.8, path_progress_timeout_ = 10.;
+    double path_success_trust_ = 0.8, path_progress_timeout_ = 10.;
     nav_msgs::msg::Odometry::ConstSharedPtr odom_;
     std::optional<rclcpp::Time> last_tick_, last_trust_;
     SettleTrust settle_trust_;
@@ -1156,7 +1194,7 @@ class MpcControllerNode : public rclcpp::Node {
 
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr thruster_pub_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr wrench_pub_;
-    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
+    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_, planned_path_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr solve_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr reference_pub_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr trust_pub_;
