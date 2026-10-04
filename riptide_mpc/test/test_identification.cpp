@@ -17,7 +17,7 @@ double entry(const YAML::Node &m, int r, int c) {
 // The MPC's model with pool-plausible errors it does not know about. Thrust is
 // left exact: the identification assumes load-cell calibrated thrusters.
 YAML::Node truthPlant() {
-    YAML::Node d = YAML::Clone(YAML::LoadFile(TALOS_MODEL));
+    YAML::Node d = YAML::Clone(YAML::LoadFile(TALOS_MODEL_SIM));
     d["displaced_volume"] = d["displaced_volume"].as<double>() * 1.02;
     d["cob_relative"][0] = d["cob_relative"][0].as<double>() + 0.01;
     d["cob_relative"][2] = d["cob_relative"][2].as<double>() - 0.005;
@@ -130,7 +130,7 @@ TEST(Identification, RecoversThePoolParametersFromTheSequence) {
     const YAML::Node truth = truthPlant();
     const std::string plant_path = testing::TempDir() + "/identification_truth.yaml";
     std::ofstream(plant_path) << truth;
-    expectRecovered(flyAndFit(plant_path, TALOS_MODEL), truth, TALOS_MODEL);
+    expectRecovered(flyAndFit(plant_path, TALOS_MODEL_SIM), truth, TALOS_MODEL_SIM);
 }
 
 // From a prior with zero drag/added mass and wrong statics (config/models/talos_untuned.yaml),

@@ -3,6 +3,7 @@
 #include "riptide_mpc/settle_trust.hpp"
 
 #include <gtest/gtest.h>
+#include <yaml-cpp/yaml.h>
 
 #include <algorithm>
 #include <cmath>
@@ -75,7 +76,7 @@ TEST(BoxQp, MatchesKktConditions) {
 TEST(FossenModel, LoadsSimulatorConfiguration) {
     const FossenModel m = talos();
     EXPECT_EQ(m.thrusterCount(), 8);
-    EXPECT_NEAR(m.mass(), 34.708, 1e-9);
+    EXPECT_NEAR(m.mass(), YAML::LoadFile(TALOS_VEHICLE)["mass"].as<double>(), 1e-12);
     Eigen::FullPivLU<MatrixXd> lu(m.thrusterMatrix());
     EXPECT_EQ(lu.rank(), 6);
     // Round trip between odometry (base_link) and simulator (COM) state.

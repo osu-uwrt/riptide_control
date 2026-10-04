@@ -243,7 +243,7 @@ TEST(OffsetFree, RemovesSteadyStateErrorUnderModelMismatch) {
     for (bool learn : {false, true}) {
         EstimatorSettings e;
         e.estimate_disturbance = learn;
-        SimRig rig(TALOS_VEHICLE, plant, TALOS_MODEL, MpcSettings(), e);
+        SimRig rig(TALOS_VEHICLE, plant, TALOS_MODEL_SIM, MpcSettings(), e);
         rig.feed_disturbance = learn;
         Reference r;
         r.linear_mode = r.angular_mode = Mode::POSITION;
@@ -280,8 +280,22 @@ TEST(OffsetFree, LearnsNothingWhenTheModelIsRight) {
     EXPECT_LT(rig.estimator.disturbance().tail<3>().norm(), 0.1);
 }
 
+namespace {
+// The simulator's model with the vehicle's hardware section: complete_controller's force->RPM
+// curves and the 73 N power budget (the tests never read the robot's own model file).
+std::string simModelWithHardware() {
+    YAML::Node d = YAML::LoadFile(TALOS_MODEL_SIM);
+    d["hardware"]["total_thrust_limit"] = 73.0;
+    d["hardware"]["force_to_rpm_positive"] = std::vector<double>{-475.886186, 32.327429, -324.744664, 1443.832105};
+    d["hardware"]["force_to_rpm_negative"] = std::vector<double>{257.460623, 42.948545, -24.402056, -986.338071};
+    const std::string path = testing::TempDir() + "/talos_sim_hardware.yaml";
+    std::ofstream(path) << d;
+    return path;
+}
+} // namespace
+
 TEST(Hardware, ForceToRpmMatchesCompleteController) {
-    const FossenModel model = FossenModel::load(TALOS_VEHICLE, TALOS_MODEL);
+    const FossenModel model = FossenModel::load(TALOS_VEHICLE, simModelWithHardware());
     const HardwareConfig &hw = model.hardware();
     ASSERT_TRUE(hw.present);
     // complete_controller's transform: c0 + c1 F + c2 tanh F + c3 |F|^0.25, split by sign.
@@ -301,11 +315,12 @@ TEST(Hardware, ForceToRpmMatchesCompleteController) {
 }
 
 TEST(Hardware, TotalThrustBudgetScalesCommands) {
-    const FossenModel model = FossenModel::load(TALOS_VEHICLE, TALOS_MODEL);
+    const FossenModel model = FossenModel::load(TALOS_VEHICLE, simModelWithHardware());
+    const double max_force = YAML::LoadFile(TALOS_MODEL_SIM)["thruster_dynamics"]["forward_max_force"].as<double>();
     Eigen::VectorXd u(8);
     u << 20, -20, 20, -20, 10, 10, -5, 5;
     const Eigen::VectorXd limited = model.limitTotalThrust(u);
     EXPECT_NEAR(limited.cwiseAbs().sum(), 73.0, 1e-9);
     EXPECT_NEAR((limited.normalized() - u.normalized()).norm(), 0, 1e-12); // same direction
-    EXPECT_LT(model.commandUpperBound().maxCoeff(), 24.0 + 1e-9);
+    EXPECT_LT(model.commandUpperBound().maxCoeff(), max_force + 1e-9);
 }

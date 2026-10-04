@@ -71,9 +71,10 @@ if(BUILD_TESTING)
   target_link_libraries(test_path_plan mpc_core)
   foreach(test_target test_mpc test_state_estimator test_identification)
     target_compile_definitions(${test_target} PRIVATE
-      TALOS_VEHICLE="${CMAKE_CURRENT_SOURCE_DIR}/../../riptide_core/riptide_descriptions/config/talos.yaml"
+      # Frozen vehicle + the simulator's plant: robot-side retuning (riptide_descriptions,
+      # config/models/talos.yaml) must not change test results.
+      TALOS_VEHICLE="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/talos_vehicle.yaml"
       TALOS_HYDRO="${CMAKE_CURRENT_SOURCE_DIR}/config/models/talos_sim.yaml"
-      TALOS_MODEL="${CMAKE_CURRENT_SOURCE_DIR}/config/models/talos.yaml"
       TALOS_MODEL_SIM="${CMAKE_CURRENT_SOURCE_DIR}/config/models/talos_sim.yaml"
       TALOS_MODEL_UNTUNED="${CMAKE_CURRENT_SOURCE_DIR}/config/models/talos_untuned.yaml")
   endforeach()
@@ -85,7 +86,7 @@ if(BUILD_TESTING)
     ament_add_gtest(test_dynamics_parity test/test_dynamics_parity.cpp)
     target_link_libraries(test_dynamics_parity mpc_core c_simulator::marine_dynamics)
     target_compile_definitions(test_dynamics_parity PRIVATE
-      TALOS_VEHICLE="${CMAKE_CURRENT_SOURCE_DIR}/../../riptide_core/riptide_descriptions/config/talos.yaml"
+      TALOS_VEHICLE="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/talos_vehicle.yaml"
       TALOS_MODEL_SIM="${CMAKE_CURRENT_SOURCE_DIR}/config/models/talos_sim.yaml")
   else()
     message(STATUS "c_simulator not found: skipping the dynamics parity test")
