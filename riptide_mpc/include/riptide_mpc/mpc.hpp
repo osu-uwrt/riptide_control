@@ -23,6 +23,10 @@ struct Reference {
     // it and comes to rest on its end, which position/orientation should equal.
     // Null: go straight to position/orientation. A new pointer restarts the path.
     std::shared_ptr<const PathPlan> path;
+    // Where the path's moving look targets are now (odometry frame), indexed by
+    // PathPoint::look_target. The reference turns toward them on top of the
+    // planned heading, within the angular limits.
+    std::vector<Vector3d> look_targets;
 };
 
 struct MpcSettings {
@@ -139,6 +143,11 @@ class MpcController {
     const PathProgress &pathProgress() const {
         return live_.progress;
     }
+    // Yaw the profile has turned away from the path's planned attitude to face
+    // its moving look targets (world frame; identity when there are none).
+    const Quaterniond &lookOffset() const {
+        return live_.look.orientation;
+    }
     double referenceLead() const {
         return settings_.compensate_delay ? model_.actuatorParameters().front().delay : 0.;
     }
@@ -155,12 +164,14 @@ class MpcController {
         Vector3d linear_velocity = Vector3d::Zero();  // VELOCITY mode, command frame
         Vector3d angular_velocity = Vector3d::Zero(); // VELOCITY mode, body
         PathProgress progress;                        // along Reference::path
+        MotionProfile look; // yaw toward Reference::look_targets, applied on the path's attitude
     };
 
     Point boxplus(const Point &p, const VectorXd &delta) const;
     VectorXd boxminus(const Point &a, const Point &b) const;
     Point stage(const Point &p, const VectorXd &command, bool fine) const;
     void stepReference(StageReference &s, const Reference &r, double dt) const;
+    void pathPose(StageReference &s, const PathPlan &path) const;
     void seedReference(const State13d &measured, const Reference &r);
     Output output(const State13d &x, const Reference &r, const StageReference &s) const;
     VectorXd feedforwardInput(const StageReference &s, const Reference &r, const State13d &x0) const;

@@ -216,6 +216,11 @@ std::shared_ptr<const PathPlan> PathPlan::build(const Waypoint &start, const std
         g.last = k;
         g.start_yaw = yaw_before;
         g.spin = q.spin;
+        if (q.heading == PathHeading::LOOK_AT && q.look_target >= 0) {
+            g.look_target = q.look_target;
+            g.look_at = q.look_at;
+            plan->follows_targets_ = true;
+        }
         g.tilt0 = tilt_before;
         g.tilt1 = tilt(q.orientation);
         const bool in_place = g.last - g.first == 1 && plan->pieces_[g.first].kind == Piece::TURN;
@@ -385,6 +390,19 @@ std::size_t PathPlan::segmentAt(double s) const {
         if (s < segments_[i].s1)
             return i;
     return segments_.size() - 1;
+}
+
+double PathPlan::lookYaw(double s, const std::vector<Vector3d> &targets) const {
+    s = std::clamp(s, 0., length_);
+    const Segment &g = segments_[segmentAt(s)];
+    if (g.look_target < 0 || static_cast<std::size_t>(g.look_target) >= targets.size() ||
+        !targets[g.look_target].allFinite())
+        return 0;
+    const Vector3d p = position(s);
+    const Vector2d live = targets[g.look_target].head<2>() - p.head<2>(), planned = g.look_at.head<2>() - p.head<2>();
+    if (live.norm() < 0.05 || planned.norm() < 0.05) // on top of it: no direction to face
+        return 0;
+    return wrap(std::atan2(live.y(), live.x()) - std::atan2(planned.y(), planned.x()));
 }
 
 Vector3d PathPlan::position(double s) const {

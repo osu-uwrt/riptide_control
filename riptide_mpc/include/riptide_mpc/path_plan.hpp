@@ -29,6 +29,9 @@ struct PathPoint {
     double sweep = 0;
     PathHeading heading = PathHeading::WAYPOINT;
     Vector3d look_at = Vector3d::Zero();
+    // LOOK_AT: >= 0 follows a moving target, look targets[look_target] in lookYaw();
+    // look_at is where that target was when the path was planned.
+    int look_target = -1;
     double yaw_offset = 0; // added to the PATH / LOOK_AT yaw
     double spin = 0;       // extra yaw over the segment, spread by progress
     // Steady spin: extra yaw per metre of s, one continuous spin across segments.
@@ -83,6 +86,14 @@ class PathPlan {
     Quaterniond orientation(double s) const;
     // s of the point nearest `p` within `window` of s = `near`.
     double project(const Vector3d &p, double near, double window) const;
+    // Whether any segment follows a moving look target (PathPoint::look_target).
+    bool followsTargets() const {
+        return follows_targets_;
+    }
+    // Yaw to add to orientation(s) so a segment that follows a look target faces
+    // `targets[look_target]` (odometry frame) instead of the look_at it was
+    // planned with; 0 elsewhere, or for a missing target.
+    double lookYaw(double s, const std::vector<Vector3d> &targets) const;
 
   private:
     struct Piece {
@@ -108,6 +119,8 @@ class PathPlan {
         double delta = 0, blend = 1;  // alignment from start_yaw, faded out over `blend` metres
         double spin = 0;
         double phase0 = 0, spin_rate = 0; // steady spin: its yaw at s0, and per metre after
+        int look_target = -1;              // PathPoint::look_target, if a LOOK_AT segment
+        Vector3d look_at = Vector3d::Zero(); // the planned look point
         Quaterniond tilt0 = Quaterniond::Identity(), tilt1 = Quaterniond::Identity();
     };
     struct Sample {
@@ -128,5 +141,6 @@ class PathPlan {
     std::vector<Segment> segments_;
     std::vector<Sample> samples_;
     double length_ = 0;
+    bool follows_targets_ = false;
 };
 } // namespace riptide_mpc

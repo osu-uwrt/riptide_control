@@ -786,7 +786,9 @@ class MpcControllerNode : public rclcpp::Node {
             twist << controller_->model().baseLinkVelocity(x), x.tail<3>();
             vehicle_ = VehicleSample{now, controller_->model().baseLinkPosition(x),
                                      Quaterniond(x[3], x[4], x[5], x[6]).normalized(), twist};
-            trust = settle_trust_.update(std::max(dt, 0.), reference_, controller_->profile(), vehicle_->position,
+            Reference settle = reference_;
+            settle.orientation = endOrientation();
+            trust = settle_trust_.update(std::max(dt, 0.), settle, controller_->profile(), vehicle_->position,
                                          vehicle_->orientation, twist);
         }
         geometry_msgs::msg::Twist msg;
@@ -839,6 +841,17 @@ class MpcControllerNode : public rclcpp::Node {
         return Quaterniond(o.w, o.x, o.y, o.z).normalized();
     }
 
+    // `frame` -> odometry frame, latest; throws tf2::TransformException.
+    Eigen::Isometry3d toOdom(const std::string &frame) const {
+        Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
+        if (frame != odom_->header.frame_id) {
+            const auto t = tf_buffer_->lookupTransform(odom_->header.frame_id, frame, tf2::TimePointZero).transform;
+            transform.translate(Vector3d(t.translation.x, t.translation.y, t.translation.z));
+            transform.rotate(Quaterniond(t.rotation.w, t.rotation.x, t.rotation.y, t.rotation.z).normalized());
+        }
+        return transform;
+    }
+
     // Waypoints (any TF frame) become a POSITION path in the odometry frame. The
     // result arrives once the vehicle has settled on the last one (trust).
     void startPath(const std::shared_ptr<PathGoal> &goal) {
@@ -860,20 +873,18 @@ class MpcControllerNode : public rclcpp::Node {
             return reject(FollowPath::Result::BAD_WYPTS, "no odometry yet");
         const std::string &frame = odom_->header.frame_id;
         std::vector<PathPoint> path;
+        std::vector<LookTarget> look_targets;
+        std::vector<Vector3d> look_positions;
         for (std::size_t i = 0; i < points.size(); ++i) {
             const auto &point = points[i];
             if (point.header.frame_id.empty())
                 return reject(FollowPath::Result::MISSING_FRAME_ID, "waypoint without a frame_id");
-            Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
-            if (point.header.frame_id != frame) {
-                try {
-                    const auto t = tf_buffer_->lookupTransform(frame, point.header.frame_id, tf2::TimePointZero).transform;
-                    transform.translate(Vector3d(t.translation.x, t.translation.y, t.translation.z));
-                    transform.rotate(Quaterniond(t.rotation.w, t.rotation.x, t.rotation.y, t.rotation.z).normalized());
-                } catch (const tf2::TransformException &e) {
-                    return reject(FollowPath::Result::BAD_WYPTS,
-                                  "cannot transform " + point.header.frame_id + " to " + frame + ": " + e.what());
-                }
+            Eigen::Isometry3d transform;
+            try {
+                transform = toOdom(point.header.frame_id);
+            } catch (const tf2::TransformException &e) {
+                return reject(FollowPath::Result::BAD_WYPTS,
+                              "cannot transform " + point.header.frame_id + " to " + frame + ": " + e.what());
             }
             const auto &p = point.pose.position;
             const auto &o = point.pose.orientation;
@@ -895,6 +906,20 @@ class MpcControllerNode : public rclcpp::Node {
                 w.sweep = handed * g.sweep;
                 w.heading = static_cast<PathHeading>(g.heading);
                 w.look_at = transform * Vector3d(g.look_at.x, g.look_at.y, g.look_at.z);
+                if (!g.look_at_frame.empty()) { // followed live; planned from where it is now
+                    if (g.heading != PathSegment::HEADING_LOOK_AT)
+                        return reject(FollowPath::Result::BAD_WYPTS, "look_at_frame needs HEADING_LOOK_AT");
+                    const LookTarget target{g.look_at_frame, Vector3d(g.look_at.x, g.look_at.y, g.look_at.z)};
+                    try {
+                        w.look_at = toOdom(target.frame) * target.point;
+                    } catch (const tf2::TransformException &e) {
+                        return reject(FollowPath::Result::BAD_WYPTS,
+                                      "cannot transform look_at_frame " + target.frame + " to " + frame + ": " + e.what());
+                    }
+                    w.look_target = static_cast<int>(look_targets.size());
+                    look_targets.push_back(target);
+                    look_positions.push_back(w.look_at);
+                }
                 w.yaw_offset = g.yaw_offset;
                 w.spin = g.spin;
                 w.spin_rate = g.spin_rate;
@@ -920,14 +945,16 @@ class MpcControllerNode : public rclcpp::Node {
         const Waypoint end = plan->end();
         reference_.linear_mode = reference_.angular_mode = Mode::POSITION;
         reference_.path = plan;
+        reference_.look_targets = look_positions;
+        look_targets_ = look_targets;
         reference_.position = end.position;
         reference_.orientation = end.orientation;
         path_goal_ = goal;
         settle_trust_.reset(); // "settled" must mean on the new path's end
         path_best_progress_ = 0;
         path_progress_time_ = get_clock()->now();
-        RCLCPP_INFO(get_logger(), "Following a %zu-point path (%.2f m) in %s", path.size(), plan->length(),
-                    frame.c_str());
+        RCLCPP_INFO(get_logger(), "Following a %zu-point path (%.2f m) in %s%s", path.size(), plan->length(),
+                    frame.c_str(), look_targets.empty() ? "" : ", following look_at frames");
         publishPlannedPath(plan.get(), frame);
     }
 
@@ -960,7 +987,10 @@ class MpcControllerNode : public rclcpp::Node {
     // Ends the active path goal: success, abort, or cancel (holding where the
     // reference can stop). The last waypoint stays the setpoint otherwise.
     void finishPath(bool success, uint8_t code, const std::string &message, bool canceled = false) {
+        reference_.orientation = endOrientation(); // keep facing the look targets' last direction
         reference_.path.reset();
+        reference_.look_targets.clear();
+        look_targets_.clear();
         if (!path_goal_)
             return;
         publishPlannedPath(nullptr, odom_ ? odom_->header.frame_id : "");
@@ -1009,12 +1039,13 @@ class MpcControllerNode : public rclcpp::Node {
         if (progress.s >= reference_.path->length() - 1e-3) {
             // The profile's last fraction of a millimetre can take seconds; near and
             // slow is arrived enough to judge the vehicle.
+            const Quaterniond end = endOrientation();
             const bool arrived = (profile.position - reference_.position).norm() < 0.01 &&
-                                 profile.orientation.angularDistance(reference_.orientation) < 0.02 &&
+                                 profile.orientation.angularDistance(end) < 0.02 &&
                                  profile.velocity.norm() < 0.02 && profile.angular_velocity.norm() < 0.05;
             const bool close = vehicle_ && (now - vehicle_->stamp).seconds() < 0.5 &&
                                (vehicle_->position - reference_.position).norm() < finish_position_ &&
-                               vehicle_->orientation.angularDistance(reference_.orientation) < finish_angle_ &&
+                               vehicle_->orientation.angularDistance(end) < finish_angle_ &&
                                vehicle_->twist.head<3>().norm() < finish_speed_ &&
                                vehicle_->twist.tail<3>().norm() < finish_rate_;
             if (settle_trust_.trust() >= path_success_trust_ || (arrived && close)) {
@@ -1031,6 +1062,27 @@ class MpcControllerNode : public rclcpp::Node {
             path_progress_time_ = now;
         } else if ((now - *path_progress_time_).seconds() > path_progress_timeout_) {
             finishPath(false, FollowPath::Result::PROGRESS_FAIL, "no progress along the path");
+        }
+    }
+
+    // The setpoint attitude: a path's end, turned toward its moving look targets.
+    Quaterniond endOrientation() const {
+        return reference_.path ? Quaterniond(controller_->lookOffset() * reference_.orientation)
+                               : reference_.orientation;
+    }
+
+    // Moves the path's look targets to where their frames are now; a frame that
+    // stops resolving keeps its last position.
+    void updateLookTargets() {
+        if (!reference_.path)
+            return;
+        for (std::size_t i = 0; i < look_targets_.size(); ++i) {
+            try {
+                reference_.look_targets[i] = toOdom(look_targets_[i].frame) * look_targets_[i].point;
+            } catch (const tf2::TransformException &e) {
+                RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "look_at_frame %s unavailable, holding: %s",
+                                     look_targets_[i].frame.c_str(), e.what());
+            }
         }
     }
 
@@ -1197,6 +1249,7 @@ class MpcControllerNode : public rclcpp::Node {
                                                   Vector3d(t.linear.x, t.linear.y, t.linear.z),
                                                   Vector3d(t.angular.x, t.angular.y, t.angular.z));
         }
+        updateLookTargets();
         MpcOutput out;
         try {
             out = controller_->compute(x, reference_);
@@ -1306,6 +1359,11 @@ class MpcControllerNode : public rclcpp::Node {
     Reference reference_;
     rclcpp_action::Server<FollowPath>::SharedPtr path_server_;
     std::shared_ptr<PathGoal> path_goal_;
+    struct LookTarget { // a PathSegment look_at in its look_at_frame
+        std::string frame;
+        Vector3d point;
+    };
+    std::vector<LookTarget> look_targets_; // Reference::look_targets' sources
     double path_best_progress_ = 0;
     PathOptions path_options_;
     double finish_position_ = 0.10, finish_angle_ = 0.10, finish_speed_ = 0.10, finish_rate_ = 0.15;

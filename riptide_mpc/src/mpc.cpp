@@ -33,7 +33,11 @@ void MpcController::stepReference(StageReference &s, const Reference &r, double 
         // The governor's slowdown, as fractions of the configured cruise speeds.
         r.path->step(s.progress, m.linear_speed / settings_.motion.linear_speed,
                      m.angular_speed / settings_.motion.angular_speed, dt);
-        r.path->pose(s.progress, s.pose);
+        if (r.path->followsTargets()) // turns toward the moving look targets as a separate profile
+            s.look.stepAngular(Quaterniond(Eigen::AngleAxisd(r.path->lookYaw(s.progress.s, r.look_targets),
+                                                             Vector3d::UnitZ())),
+                               m, dt);
+        pathPose(s, *r.path);
         return;
     }
     if (r.linear_mode == Mode::POSITION) {
@@ -66,6 +70,20 @@ void MpcController::stepReference(StageReference &s, const Reference &r, double 
     }
 }
 
+// The path's pose at s.progress, its attitude turned about world z by s.look
+// (the rates and their change carry over).
+void MpcController::pathPose(StageReference &s, const PathPlan &path) const {
+    path.pose(s.progress, s.pose);
+    if (!path.followsTargets())
+        return;
+    const Quaterniond &c = s.look.orientation;
+    const Vector3d w = c * s.pose.angular_velocity;
+    s.pose.orientation = (c * s.pose.orientation).normalized();
+    s.pose.angular_acceleration =
+        s.look.angular_acceleration + c * s.pose.angular_acceleration + s.look.angular_velocity.cross(w);
+    s.pose.angular_velocity = s.look.angular_velocity + w;
+}
+
 // Starts the profile from where the vehicle is and how it is moving, on mode
 // entry or when the vehicle has fallen too far behind it.
 void MpcController::seedReference(const State13d &x, const Reference &r) {
@@ -83,6 +101,7 @@ void MpcController::seedReference(const State13d &x, const Reference &r) {
         const Vector3d v_world = q * v_body;
         if (r.path != target_.path) { // a new path starts from the profile, moving as it was
             live_.progress = {};
+            live_.look = {};
             live_.progress.v = std::max(0., r.path->tangent(0).dot(linear_seeded_ ? live_.pose.velocity : v_world));
         } else if (!linear_seeded_ || (live_.pose.position - p).norm() > settings_.max_reference_lag) {
             // Fallen too far behind: restart from the nearest point a little either side.
@@ -90,7 +109,7 @@ void MpcController::seedReference(const State13d &x, const Reference &r) {
             live_.progress.v = std::max(0., r.path->tangent(live_.progress.s).dot(v_world));
             live_.progress.a = 0;
         }
-        r.path->pose(live_.progress, live_.pose);
+        pathPose(live_, *r.path);
         linear_seeded_ = angular_seeded_ = true;
         target_ = r;
         return;

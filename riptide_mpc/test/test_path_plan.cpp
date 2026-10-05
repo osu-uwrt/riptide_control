@@ -223,6 +223,29 @@ TEST(PathPlan, TurningInPlaceIsProgress) {
     EXPECT_TRUE(fly(*q).ended);
 }
 
+// A segment that follows a moving look target: the planned yaw plus lookYaw faces
+// where the target is now, all the way round; other segments are left alone.
+TEST(PathPlan, LookYawFacesAMovedTarget) {
+    PathPoint orbit = arc(Vector3d::Zero(), M_PI, Vector3d(1.5, 0, 0), PathHeading::LOOK_AT);
+    orbit.look_target = 0;
+    const auto p = plan(Vector3d(-1.5, 0, 0), 0, {orbit, line(Vector3d(1.5, -1, 0))});
+    ASSERT_TRUE(p->followsTargets());
+    const Vector3d moved(0.3, 0.5, 0);
+    double worst = 0;
+    const double end = p->project(Vector3d(1.5, 0, 0), p->length() / 2, p->length());
+    for (double s = 0; s < end - 1e-3; s += 0.01) {
+        const Vector3d to = moved - p->position(s);
+        worst = std::max(worst, std::abs(wrap(yawOf(p->orientation(s)) + p->lookYaw(s, {moved}) - std::atan2(to.y(), to.x()))));
+        EXPECT_EQ(p->lookYaw(s, {Vector3d::Zero()}), 0.); // not moved: as planned
+        EXPECT_EQ(p->lookYaw(s, {}), 0.);                 // no target yet
+    }
+    std::printf("looking at a moved target: worst heading error %.2e rad\n", worst);
+    EXPECT_LT(worst, 1e-3);
+    EXPECT_EQ(p->lookYaw(p->length(), {moved}), 0.); // the last leg looks nowhere
+    EXPECT_FALSE(plan(Vector3d(-1.5, 0, 0), 0, {arc(Vector3d::Zero(), M_PI, Vector3d(1.5, 0, 0), PathHeading::LOOK_AT)})
+                     ->followsTargets());
+}
+
 TEST(PathPlan, ReversalSlowsToTheKinkSpeed) {
     PathOptions o;
     const auto p = plan(Vector3d::Zero(), 0, {line(Vector3d(2, 0, 0)), line(Vector3d::Zero())}, o);

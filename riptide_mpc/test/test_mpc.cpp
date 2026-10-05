@@ -495,6 +495,46 @@ TEST(Mpc, OrbitsAPointLookingAtIt) {
     EXPECT_LT((loop.position() - r.position).norm(), 0.01);
 }
 
+// The same orbit while the point drifts sideways (a pole re-estimated by mapping):
+// the vehicle keeps facing where it is now, and still faces it after the path ends.
+TEST(Mpc, OrbitKeepsFacingAMovingLookTarget) {
+    ClosedLoop loop;
+    Reference r;
+    r.linear_mode = r.angular_mode = Mode::POSITION;
+    r.position = loop.position();
+    loop.run(r, 3.0);
+    const Vector3d center = r.position + Vector3d(1.5, 0, 0), drift(0.02, 0.04, 0); // m/s
+    PathPoint orbit = point(center + Vector3d(1.5, 0, 0));
+    orbit.shape = PathShape::ARC;
+    orbit.center = center;
+    orbit.sweep = M_PI;
+    orbit.heading = PathHeading::LOOK_AT;
+    orbit.look_at = center;
+    orbit.look_target = 0;
+    startPath(r, loop.controller, {orbit});
+    r.look_targets = {center};
+    const double dt = loop.controller.settings().dt;
+    double worst_heading = 0, t = 0;
+    for (; t < 40 && !r.path->atEnd(loop.controller.pathProgress()); t += dt) {
+        r.look_targets[0] = center + drift * t;
+        loop.run(r, dt);
+        const Vector3d to = r.look_targets[0] - loop.position();
+        worst_heading = std::max(worst_heading, std::abs(wrap(yawOf(loop.orientation()) - std::atan2(to.y(), to.x()))));
+    }
+    loop.run(r, 3.0);
+    const Vector3d to = r.look_targets[0] - loop.position();
+    const double end_heading = std::abs(wrap(yawOf(loop.orientation()) - std::atan2(to.y(), to.x())));
+    std::printf("orbit of a target drifting %.0f mm/s: %.1f s, worst heading error %.2f deg, at the end %.2f deg\n",
+                drift.norm() * 1e3, t, worst_heading * 180 / M_PI, end_heading * 180 / M_PI);
+    EXPECT_LT((r.look_targets[0] - center).norm(), 0.5); // it really moved
+    EXPECT_GT((r.look_targets[0] - center).norm(), 0.2);
+    EXPECT_LT(worst_heading, 0.06);
+    EXPECT_LT(end_heading, 0.02);
+    // The planned end faces the original point; the profile faces the moved one.
+    EXPECT_GT(loop.controller.profile().orientation.angularDistance(r.orientation), 0.05);
+    EXPECT_LT(loop.controller.profile().orientation.angularDistance(loop.controller.lookOffset() * r.orientation), 1e-6);
+}
+
 // Identification: one thruster's command is given (pool_identify ramps it) and the MPC holds the pose with
 // the other seven; then every thruster fixed at zero (a release) turns them all off.
 TEST(Mpc, HoldsWithOneThrusterCommandedThenReleases) {
