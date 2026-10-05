@@ -2,6 +2,10 @@
 // running MPC (POSITION setpoints on controller/linear|angular, speed limits via
 // the MPC's live motion.* parameters), records the realized thrust and raw
 // sensors, fits buoyancy/COB, drag and added mass, and writes a new model file.
+// Optional blocks drive the MPC's identification inputs (controller/identification/
+// thrusters, allowed through its identification.allow parameter for the session):
+// per-thruster ramps and null-space patterns while it holds (per-thruster gains),
+// and releases with every thruster off (heave and roll/pitch dynamics).
 //
 // The operator arms the vehicle as usual and keeps the physical kill in hand. The
 // session starts from wherever the vehicle is (it must be at depth), stays inside
@@ -9,7 +13,7 @@
 // ends the session; whatever was recorded is saved and fitted.
 #include "riptide_mpc/identification.hpp"
 
-#include <ament_index_cpp/get_package_share_directory.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_with_covariance_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
@@ -18,6 +22,7 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
 #include <chrono>
@@ -28,6 +33,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <optional>
 
 using namespace std::chrono_literals;
@@ -37,12 +43,10 @@ namespace riptide_mpc {
 class PoolIdentifyNode : public rclcpp::Node {
   public:
     PoolIdentifyNode() : Node("pool_identify") {
-        const std::string robot = robotName();
-        const std::string share = ament_index_cpp::get_package_share_directory("riptide_mpc");
-        vehicle_ = declare_parameter<std::string>(
-            "vehicle_config",
-            ament_index_cpp::get_package_share_directory("riptide_descriptions2") + "/config/" + robot + ".yaml");
-        model_path_ = declare_parameter<std::string>("hydrodynamics_config", share + "/config/models/" + robot + ".yaml");
+        // Empty (default): the files the running MPC uses (its vehicle_config / hydrodynamics_config), read
+        // from it before the session starts, so the prior is always the model being flown.
+        vehicle_ = declare_parameter<std::string>("vehicle_config", "");
+        model_path_ = declare_parameter<std::string>("hydrodynamics_config", "");
         const char *home = std::getenv("HOME");
         output_root_ = declare_parameter<std::string>("output_dir", std::string(home ? home : ".") + "/osu-uwrt/mpc_identification");
         mpc_node_ = declare_parameter<std::string>("mpc_node", "mpc_controller");
@@ -65,6 +69,20 @@ class PoolIdentifyNode : public rclcpp::Node {
         s.hold_secs = declare_parameter("hold_secs", s.hold_secs);
         s.repeats = static_cast<int>(declare_parameter("repeats", static_cast<int64_t>(s.repeats)));
         s.settle_timeout = declare_parameter("settle_timeout", s.settle_timeout);
+        s.thruster_ramps = declare_parameter("thruster_ramps", s.thruster_ramps);
+        s.ramp_force = declare_parameter("ramp_force", s.ramp_force);
+        s.ramp_secs = declare_parameter("ramp_secs", s.ramp_secs);
+        s.null_space = declare_parameter("null_space", s.null_space);
+        s.null_amplitude = declare_parameter("null_amplitude", s.null_amplitude);
+        s.null_secs = declare_parameter("null_secs", s.null_secs);
+        s.releases = declare_parameter("releases", s.releases);
+        s.release_tilted = declare_parameter("release_tilted", s.release_tilted);
+        s.release_secs = declare_parameter("release_secs", s.release_secs);
+        s.recover_timeout = declare_parameter("recover_timeout", s.recover_timeout);
+        s.release_tilt = declare_parameter("release_tilt", s.release_tilt);
+        release_min_depth_ = declare_parameter("release_min_depth", 1.0); // m; a release ends shallower than this
+        release_max_tilt_ = declare_parameter("release_max_tilt", 0.8);   // rad; or tilted more than this
+        max_depth_margin_ = declare_parameter("max_depth_margin", 1.0);   // m below the deepest planned point
         min_start_depth_ = declare_parameter("min_start_depth", 0.8);
         min_depth_ = declare_parameter("min_depth", 0.4);
         abort_margin_ = declare_parameter("abort_margin", 1.5);
@@ -74,6 +92,7 @@ class PoolIdentifyNode : public rclcpp::Node {
         max_iterations_ = static_cast<int>(declare_parameter("max_iterations", static_cast<int64_t>(1)));
         tolerance_ = declare_parameter("convergence_tolerance", 0.10); // relative: drag, inertia, volume
         cob_tolerance_ = declare_parameter("cob_tolerance", 0.002);    // m
+        gain_tolerance_ = declare_parameter("gain_tolerance", 0.03);   // thruster gains, absolute
         guard_tilt_ = declare_parameter("guard_tilt_error", 0.45);     // rad off the commanded tilt, for 1 s
         guard_rate_ = declare_parameter("guard_tilt_rate", 0.8);       // rad/s roll/pitch rate RMS over 1 s
         current_model_ = model_path_;
@@ -81,24 +100,34 @@ class PoolIdentifyNode : public rclcpp::Node {
         // report pool_identify/done (2 Hz), and stay up after finishing so the tree can read it.
         wait_for_trigger_ = declare_parameter("wait_for_trigger", false);
 
-        const FossenModel model = FossenModel::load(vehicle_, model_path_);
-        recorder_.emplace(model, SensorMounts::load(vehicle_));
-        RCLCPP_INFO(get_logger(), "Identification model prior: %s", model_path_.c_str());
+        if (!vehicle_.empty() && !model_path_.empty())
+            loadModel();
+        else
+            RCLCPP_INFO(get_logger(), "Identification model prior: the running MPC's (read from %s)", mpc_node_.c_str());
 
         const auto sensor_qos = rclcpp::SensorDataQoS().keep_last(50);
         odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
             "odometry/filtered", 10, [this](nav_msgs::msg::Odometry::ConstSharedPtr m) { odom_ = m; });
+        // The MPC's profiled reference: where the attitude should be right now, mid-move included.
+        reference_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+            "controller/mpc/reference", 10, [this](const geometry_msgs::msg::PoseStamped &m) {
+                const auto &o = m.pose.orientation;
+                reference_q_ = Quaterniond(o.w, o.x, o.y, o.z).normalized();
+                reference_time_ = now_s();
+            });
         trust_sub_ = create_subscription<geometry_msgs::msg::Twist>(
             "controller/scale/trust", 10, [this](const geometry_msgs::msg::Twist &m) {
                 trust_ = std::min({m.linear.x, m.linear.y, m.linear.z, m.angular.x, m.angular.y, m.angular.z});
             });
         kill_sub_ = create_subscription<std_msgs::msg::Bool>("state/kill", 10, [this](const std_msgs::msg::Bool &m) {
-            if (m.data && killed_ == false)
+            if (m.data && killed_ == false && recorder_)
                 recorder_->stopThrusters(now_s());
             killed_ = m.data;
         });
         thrust_sub_ = create_subscription<std_msgs::msg::Float32MultiArray>(
             "thruster_forces", 10, [this](const std_msgs::msg::Float32MultiArray &m) {
+                if (!recorder_)
+                    return;
                 Eigen::VectorXd u(m.data.size());
                 for (std::size_t i = 0; i < m.data.size(); ++i)
                     u[i] = m.data[i];
@@ -107,22 +136,27 @@ class PoolIdentifyNode : public rclcpp::Node {
         imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
             "vectornav/imu", sensor_qos, [this](const sensor_msgs::msg::Imu &m) {
                 const double t = now_s();
+                have_imu_ = true;
+                if (!recorder_)
+                    return;
                 recorder_->imuRate(t, Vector3d(m.angular_velocity.x, m.angular_velocity.y, m.angular_velocity.z));
                 const auto &o = m.orientation;
                 if (m.orientation_covariance[0] >= 0)
                     recorder_->imuOrientation(t, Quaterniond(o.w, o.x, o.y, o.z));
-                have_imu_ = true;
             });
         fog_sub_ = create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
             "gyro/twist", sensor_qos, [this](const geometry_msgs::msg::TwistWithCovarianceStamped &m) {
-                recorder_->fogRate(now_s(), m.twist.twist.angular.z);
+                if (recorder_)
+                    recorder_->fogRate(now_s(), m.twist.twist.angular.z);
             });
         dvl_sub_ = create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
             "dvl_twist", sensor_qos, [this](const geometry_msgs::msg::TwistWithCovarianceStamped &m) {
                 const auto &v = m.twist.twist.linear;
-                recorder_->dvlVelocity(now_s(), Vector3d(v.x, v.y, v.z));
                 last_dvl_ = now_s();
+                if (recorder_)
+                    recorder_->dvlVelocity(now_s(), Vector3d(v.x, v.y, v.z));
             });
+        ident_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>("controller/identification/thrusters", 10);
         lin_pub_ = create_publisher<ControllerCommand>("controller/linear", 10);
         ang_pub_ = create_publisher<ControllerCommand>("controller/angular", 10);
         params_ = std::make_shared<rclcpp::AsyncParametersClient>(this, mpc_node_);
@@ -240,6 +274,47 @@ class PoolIdentifyNode : public rclcpp::Node {
             return false;
         }
 
+        // The prior is the model the MPC is flying (unless given): read its files once.
+        if (!recorder_) {
+            if (!model_requested_) {
+                model_requested_ = true;
+                params_->get_parameters({"vehicle_config", "hydrodynamics_config"},
+                                        [this](std::shared_future<std::vector<rclcpp::Parameter>> f) {
+                                            try {
+                                                const auto v = f.get();
+                                                if (vehicle_.empty())
+                                                    vehicle_ = v.at(0).as_string();
+                                                if (model_path_.empty())
+                                                    model_path_ = v.at(1).as_string();
+                                                loadModel();
+                                            } catch (const std::exception &e) {
+                                                RCLCPP_ERROR(get_logger(), "Cannot use the MPC's model (%s); give "
+                                                             "model:=<file> (and vehicle_config)", e.what());
+                                                model_requested_ = false;
+                                            }
+                                        });
+            }
+            return false;
+        }
+        // The identification blocks drive the MPC's identification inputs: allow them for this session.
+        if (usesInputs() && !allow_ok_) {
+            if (!allow_requested_) {
+                allow_requested_ = true;
+                params_->set_parameters({rclcpp::Parameter("identification.allow", true)},
+                                        [this](std::shared_future<std::vector<rcl_interfaces::msg::SetParametersResult>> f) {
+                                            const auto r = f.get();
+                                            if (r.empty() || !r.front().successful) {
+                                                RCLCPP_ERROR(get_logger(), "MPC refused identification.allow (%s): "
+                                                             "thruster/null-space/release blocks off",
+                                                             r.empty() ? "no reply" : r.front().reason.c_str());
+                                                settings_.thruster_ramps = settings_.null_space = settings_.releases = false;
+                                            }
+                                            allow_ok_ = true;
+                                        });
+            }
+            return false;
+        }
+
         start_ = position();
         const auto &o = odom_->pose.pose.orientation;
         const Quaterniond q(o.w, o.x, o.y, o.z);
@@ -253,7 +328,7 @@ class PoolIdentifyNode : public rclcpp::Node {
         stamp_ = stamp;
         dir_ = output_root_ + "/" + robotName() + "_" + stamp_;
         std::filesystem::create_directories(dir_);
-        sequencer_.emplace(ident::buildSequence(settings_, start_, yaw, base_));
+        sequencer_.emplace(ident::buildSequence(settings_, start_, yaw, base_, thrusters_, null_space_));
         abort_radius_ = std::max(settings_.lane_length, settings_.heave_span) + abort_margin_;
         RCLCPP_WARN(get_logger(), "Starting identification from [%.2f %.2f %.2f], heading %.0f deg: %zu steps, "
                     "up to %d iteration(s); session %s",
@@ -275,12 +350,15 @@ class PoolIdentifyNode : public rclcpp::Node {
             return;
         }
         const Vector3d p = position();
-        if ((p - start_).norm() > abort_radius_ || p.z() > -min_depth_) {
+        // Horizontal box around the start, and depth limits: a release rises freely toward release_min_depth.
+        const double deepest = start_.z() - (settings_.heave ? settings_.heave_span : 0.) - max_depth_margin_;
+        if ((p - start_).head<2>().norm() > abort_radius_ || p.z() > -min_depth_ || p.z() < deepest) {
+            publishInputs(ident::Sequencer::Output());
             publish(start_, start_q_);
-            finish("left the safe box (or too shallow): holding the start pose");
+            finish("left the safe box (or too shallow/deep): holding the start pose");
             return;
         }
-        if (const std::string why = unstable(t); !why.empty()) {
+        if (const std::string why = sequencer_->guarded() ? unstable(t) : ""; !why.empty()) {
             if (iteration_ > 0) { // our model did this: back to the one that flew
                 RCLCPP_ERROR(get_logger(), "%s with %s: reverting the MPC to %s", why.c_str(), current_model_.c_str(),
                              previous_model_.c_str());
@@ -295,7 +373,14 @@ class PoolIdentifyNode : public rclcpp::Node {
             publish(setpoint_, setpoint_q_);
             return;
         }
-        const auto out = sequencer_->update(t, trust_ > trust_threshold_);
+        bool cut = false;
+        if (sequencer_->releasing()) {
+            const auto &o = odom_->pose.pose.orientation;
+            const Vector3d up = Quaterniond(o.w, o.x, o.y, o.z).normalized().conjugate() * Vector3d::UnitZ();
+            cut = p.z() > -release_min_depth_ || std::acos(std::clamp(up.z(), -1., 1.)) > release_max_tilt_;
+        }
+        const auto out = sequencer_->update(t, trust_ > trust_threshold_, cut);
+        publishInputs(out);
         if (!out.message.empty())
             RCLCPP_INFO(get_logger(), "%s", out.message.c_str());
         if (out.end)
@@ -314,11 +399,13 @@ class PoolIdentifyNode : public rclcpp::Node {
             publish(setpoint_, setpoint_q_);
     }
 
-    // Divergence guard: tilt far off the commanded tilt, or fast roll/pitch, for about a second.
+    // Divergence guard: tilt far off the MPC's reference tilt (its profile, which moves between holds at the
+    // angular limits; the step's attitude if the reference is not coming), or fast roll/pitch, for about a second.
     std::string unstable(double t) {
         const auto &o = odom_->pose.pose.orientation;
         const Quaterniond q = Quaterniond(o.w, o.x, o.y, o.z).normalized();
-        const Vector3d up = q.conjugate() * Vector3d::UnitZ(), up_cmd = setpoint_q_.conjugate() * Vector3d::UnitZ();
+        const Quaterniond commanded = reference_q_ && t - reference_time_ < 0.5 ? *reference_q_ : setpoint_q_;
+        const Vector3d up = q.conjugate() * Vector3d::UnitZ(), up_cmd = commanded.conjugate() * Vector3d::UnitZ();
         const double tilt_error = std::acos(std::clamp(up.dot(up_cmd), -1., 1.));
         const auto &w = odom_->twist.twist.angular;
         rates_.push_back({t, w.x * w.x + w.y * w.y});
@@ -359,7 +446,8 @@ class PoolIdentifyNode : public rclcpp::Node {
             if (it == a.axes.end())
                 return false;
             const ident::AxisFit &fa = *it;
-            const std::string name = fb.axis == 0 ? "surge" : fb.axis == 1 ? "sway" : fb.axis == 2 ? "heave" : "yaw";
+            static const char *names[] = {"surge", "sway", "heave", "roll", "pitch", "yaw"};
+            const std::string name = names[fb.axis];
             ok = ok && fa.drag_ok == fb.drag_ok && fa.mass_ok == fb.mass_ok;
             if (fa.drag_ok && fb.drag_ok) { // compare drag where it is flown; its D1/D2 split is ill-conditioned
                 double worst = 0;
@@ -374,7 +462,46 @@ class PoolIdentifyNode : public rclcpp::Node {
                 ok = ok && dm <= tolerance_;
             }
         }
+        // Thruster gains are all relative to the same (the recorder's) model, so they compare directly.
+        if (a.thrusters.ok && b.thrusters.ok && a.thrusters.forward.size() == b.thrusters.forward.size()) {
+            const double df = (b.thrusters.forward - a.thrusters.forward).cwiseAbs().maxCoeff();
+            const double dr = (b.thrusters.reverse - a.thrusters.reverse).cwiseAbs().maxCoeff();
+            changes["thrusters"]["forward_gain"] = df;
+            changes["thrusters"]["reverse_gain"] = dr;
+            ok = ok && df <= gain_tolerance_ && dr <= gain_tolerance_;
+        } else if (a.thrusters.ok != b.thrusters.ok) {
+            ok = false;
+        }
         return ok;
+    }
+
+    // The prior (model_path_ with vehicle_): the recorder's thrust model, the fit's starting point.
+    void loadModel() {
+        const FossenModel model = FossenModel::load(vehicle_, model_path_);
+        recorder_.emplace(model, SensorMounts::load(vehicle_));
+        thruster_matrix_ = model.thrusterMatrix();
+        null_space_ = ident::nullSpacePatterns(thruster_matrix_);
+        thrusters_ = model.thrusterCount();
+        current_model_ = model_path_;
+        RCLCPP_INFO(get_logger(), "Identification model prior: %s (vehicle %s)", model_path_.c_str(), vehicle_.c_str());
+    }
+
+    bool usesInputs() const {
+        return settings_.thruster_ramps || settings_.null_space || settings_.releases;
+    }
+
+    // The MPC's identification inputs: the step's (fixed commands and bias) or none, every tick of the session
+    // (the MPC drops them 0.5 s after the last message anyway).
+    void publishInputs(const ident::Sequencer::Output &out) {
+        if (!allow_requested_)
+            return;
+        std_msgs::msg::Float64MultiArray m;
+        m.data.assign(2 * thrusters_, 0.);
+        for (int i = 0; i < thrusters_; ++i) {
+            m.data[i] = i < out.fixed.size() ? out.fixed[i] : std::numeric_limits<double>::quiet_NaN();
+            m.data[thrusters_ + i] = i < out.bias.size() ? out.bias[i] : 0.;
+        }
+        ident_pub_->publish(m);
     }
 
     // One pass of the sequence is done: fit all data so far, write the model, then either
@@ -385,11 +512,13 @@ class PoolIdentifyNode : public rclcpp::Node {
             recorder_->end(t);
         const YAML::Node prior = YAML::LoadFile(current_model_);
         const double mass = YAML::LoadFile(vehicle_)["mass"].as<double>();
-        const auto result = ident::fit(prior, mass, recorder_->samples(), recorder_->segments());
+        const auto result = ident::fit(prior, mass, recorder_->samples(), recorder_->segments(), thruster_matrix_,
+                                       YAML::LoadFile(vehicle_));
         const std::string path = dir_ + "/model_iter" + std::to_string(iteration_ + 1) + ".yaml";
         std::ofstream(path) << ident::identifiedModel(prior, result,
                                                       "pool identification " + stamp_ + " iteration " +
-                                                          std::to_string(iteration_ + 1) + " from " + current_model_)
+                                                          std::to_string(iteration_ + 1) + " from " + current_model_,
+                                                      YAML::LoadFile(model_path_))
                             << "\n";
         YAML::Node entry;
         entry["iteration"] = iteration_ + 1;
@@ -434,7 +563,8 @@ class PoolIdentifyNode : public rclcpp::Node {
                     return;
                 }
                 ++iteration_;
-                sequencer_.emplace(ident::buildSequence(settings_, start_, start_yaw_, base_), 1000 * iteration_);
+                sequencer_.emplace(ident::buildSequence(settings_, start_, start_yaw_, base_, thrusters_, null_space_),
+                                   1000 * iteration_);
                 bad_since_.reset();
                 RCLCPP_WARN(get_logger(), "Iteration %d of up to %d: flying with %s", iteration_ + 1,
                             max_iterations_, current_model_.c_str());
@@ -450,9 +580,18 @@ class PoolIdentifyNode : public rclcpp::Node {
     void finish(const std::string &why) {
         finished_ = true;
         const double t = now_s();
+        if (!recorder_) {
+            RCLCPP_ERROR(get_logger(), "Identification finished before it started: %s", why.c_str());
+            end();
+            return;
+        }
         if (recorder_->recording())
             recorder_->end(t);
         RCLCPP_WARN(get_logger(), "Identification finished: %s", why.c_str());
+        if (allow_requested_) { // back to normal control, and no more inputs accepted
+            publishInputs(ident::Sequencer::Output());
+            params_->set_parameters({rclcpp::Parameter("identification.allow", false)});
+        }
         if (sequencer_) {
             params_->set_parameters(motionParameters(base_));
             if (!killed_.value_or(false))
@@ -467,7 +606,8 @@ class PoolIdentifyNode : public rclcpp::Node {
         ident::writeRecording(dir, recorder_->samples(), recorder_->segments());
         const YAML::Node prior = YAML::LoadFile(current_model_);
         const double mass = YAML::LoadFile(vehicle_)["mass"].as<double>();
-        const auto result = ident::fit(prior, mass, recorder_->samples(), recorder_->segments());
+        const auto result = ident::fit(prior, mass, recorder_->samples(), recorder_->segments(), thruster_matrix_,
+                                       YAML::LoadFile(vehicle_));
         YAML::Node report = ident::report(prior, result);
         report["session"] = why;
         report["iterations_fitted"] = static_cast<int>(iterations_.size());
@@ -475,7 +615,8 @@ class PoolIdentifyNode : public rclcpp::Node {
         report["mpc_model_loaded"] = current_model_;
         std::ofstream(dir + "/report.yaml") << report << "\n";
         std::ofstream(dir + "/model_identified.yaml")
-            << ident::identifiedModel(prior, result, "pool identification " + stamp_ + " from " + current_model_)
+            << ident::identifiedModel(prior, result, "pool identification " + stamp_ + " from " + current_model_,
+                                      YAML::LoadFile(model_path_))
             << "\n";
         std::ofstream(dir + "/iterations.yaml") << iterations_ << "\n";
         RCLCPP_WARN(get_logger(), "Saved %zu samples to %s\n%s", recorder_->samples().size(), dir.c_str(),
@@ -495,6 +636,14 @@ class PoolIdentifyNode : public rclcpp::Node {
     rclcpp::TimerBase::SharedPtr done_timer_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv_;
     double tolerance_ = 0.1, cob_tolerance_ = 0.002, guard_tilt_ = 0.45, guard_rate_ = 0.8, start_yaw_ = 0;
+    double gain_tolerance_ = 0.03, release_min_depth_ = 1.0, release_max_tilt_ = 0.8, max_depth_margin_ = 1.0;
+    bool allow_requested_ = false, allow_ok_ = false, model_requested_ = false;
+    std::optional<Quaterniond> reference_q_;
+    double reference_time_ = -1e9;
+    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr reference_sub_;
+    int thrusters_ = 0;
+    Eigen::MatrixXd thruster_matrix_, null_space_;
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr ident_pub_;
     std::string current_model_, previous_model_, dir_, stamp_;
     std::optional<ident::Result> previous_result_;
     YAML::Node iterations_;

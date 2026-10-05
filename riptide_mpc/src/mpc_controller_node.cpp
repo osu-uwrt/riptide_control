@@ -26,6 +26,7 @@
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -123,8 +124,9 @@ class MpcControllerNode : public rclcpp::Node {
             t.fall = declare_parameter("thruster_model.fall_time_constant", p.fall);
             t.slew = declare_parameter("thruster_model.slew_rate", p.slew);
             t.deadband = declare_parameter("thruster_model.force_deadband", p.deadband);
-            t.forward_scale = declare_parameter("thruster_model.forward_scale", p.forwardScale);
-            t.reverse_scale = declare_parameter("thruster_model.reverse_scale", p.reverseScale);
+            // Multipliers on the model file's (possibly per-thruster) scales; 1 = the file's values.
+            t.forward_scale = declare_parameter("thruster_model.forward_scale", 1.0);
+            t.reverse_scale = declare_parameter("thruster_model.reverse_scale", 1.0);
             t.efficiencies = declare_parameter("thruster_model.efficiencies", efficiencies);
             t.startup = declare_parameter("thruster_model.startup_time_constant", p.startup);
             t.startup_force = declare_parameter("thruster_model.startup_force", p.startupForce);
@@ -141,6 +143,20 @@ class MpcControllerNode : public rclcpp::Node {
                 o << (i ? " " : "") << std::fixed << std::setprecision(2) << spin_pattern_[i];
             RCLCPP_INFO(get_logger(), "Spin bias pattern [%s], bias %.1f N", o.str().c_str(), spin_bias_);
         }
+        // Identification inputs (pool_identify): off unless identification.allow is set (pool_identify
+        // sets it for its session only). See identificationInputs().
+        ident_allow_ = declare_parameter("identification.allow", false);
+        ident_timeout_ = declare_parameter("identification.timeout", 0.5);
+        ident_max_bias_ = declare_parameter("identification.max_bias", 8.0);
+        ident_max_fixed_ = declare_parameter("identification.max_fixed", 12.0); // N, largest commanded thruster
+        ident_auto_off_ = declare_parameter("identification.auto_off", 10.0);   // s without inputs -> allow off
+        if (ident_allow_)
+            ident_allowed_at_ = get_clock()->now();
+        {
+            const MatrixXd T = controller_->model().thrusterMatrix();
+            Eigen::JacobiSVD<MatrixXd> svd(T, Eigen::ComputeFullV);
+            null_space_ = svd.matrixV().rightCols(std::max<Eigen::Index>(0, T.cols() - T.rows()));
+        }
         // Motion limits, table mode and the thruster model can be changed live (e.g. by
         // the identification sequence or thruster_sweep).
         param_callback_ = add_on_set_parameters_callback([this](const std::vector<rclcpp::Parameter> &params) {
@@ -152,6 +168,7 @@ class MpcControllerNode : public rclcpp::Node {
             bool weights_changed = false;
             std::optional<FossenModel> new_model;
             std::optional<double> new_rpm_offset, new_spin_bias;
+            std::optional<bool> new_ident_allow;
             std::string new_model_path;
             std::string weights_error;
             for (const auto &p : params) {
@@ -166,6 +183,10 @@ class MpcControllerNode : public rclcpp::Node {
                         r.reason = "hydrodynamics_config " + p.as_string() + ": " + e.what();
                         return r;
                     }
+                    continue;
+                }
+                if (n == "identification.allow" && p.get_type() == rclcpp::ParameterType::PARAMETER_BOOL) {
+                    new_ident_allow = p.as_bool();
                     continue;
                 }
                 if (n == "hardware.spin_bias" && p.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
@@ -280,6 +301,12 @@ class MpcControllerNode : public rclcpp::Node {
                 }
             }
             controller_->setMotionLimits(m);
+            if (new_ident_allow) {
+                ident_allow_ = *new_ident_allow;
+                ident_stamp_.reset();
+                ident_allowed_at_ = get_clock()->now();
+                RCLCPP_WARN(get_logger(), "Identification inputs %s", ident_allow_ ? "ALLOWED" : "off");
+            }
             if (new_spin_bias) {
                 spin_bias_ = *new_spin_bias;
                 RCLCPP_WARN(get_logger(), "Thruster spin bias: %.1f N", spin_bias_);
@@ -289,16 +316,32 @@ class MpcControllerNode : public rclcpp::Node {
                 RCLCPP_WARN(get_logger(), "ESC rpm offset: %.0f rpm", rpm_offset_);
             }
             if (new_model) {
+                // The new file's per-thruster thrust model (scales, efficiencies: e.g. identified per thruster)
+                // comes with it; the live thruster_model.* multipliers and timings stay on top.
+                const std::vector<ThrusterParameters> old_file = thruster_file_;
+                ThrusterModel swapped = thrusters;
+                swapped.efficiencies.clear();
+                for (const auto &a : new_model->actuatorParameters())
+                    swapped.efficiencies.push_back(a.efficiency);
                 try {
+                    thruster_file_ = new_model->actuatorParameters();
+                    const auto parameters = thrusterParameters(swapped);
                     controller_->setModel(*new_model);
-                    if (estimator_)
+                    controller_->setActuatorParameters(parameters);
+                    if (estimator_) {
                         estimator_->setModel(*new_model);
+                        estimator_->setActuatorParameters(parameters, controller_->lastCommand());
+                    }
                 } catch (const std::exception &e) {
+                    thruster_file_ = old_file;
                     r.successful = false;
                     r.reason = std::string("hydrodynamics_config: ") + e.what();
                     return r;
                 }
-                RCLCPP_WARN(get_logger(), "MPC model swapped live: %s", new_model_path.c_str());
+                thruster_model_ = swapped;
+                thrusters_changed = false; // applied with the new file
+                RCLCPP_WARN(get_logger(), "MPC model swapped live: %s (thrusters: %s)", new_model_path.c_str(),
+                            describe(swapped).c_str());
             }
             if (weights_changed) {
                 controller_->setCostWeights(weights);
@@ -391,6 +434,36 @@ class MpcControllerNode : public rclcpp::Node {
         rpm_pub_ = create_publisher<riptide_msgs2::msg::DshotCommand>("command/requested_rpm", 10);
         configureHardwareOutput(declare_parameter<std::string>("hardware_output", "auto"));
 
+        // [8 fixed commands (NaN = free)] or [8 fixed, 8 bias], newtons, thruster order; see identificationInputs().
+        ident_sub_ = create_subscription<std_msgs::msg::Float64MultiArray>(
+            "controller/identification/thrusters", 10, [this](const std_msgs::msg::Float64MultiArray &m) {
+                const int n = controller_->model().thrusterCount();
+                if (!ident_allow_) {
+                    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+                                         "Ignoring identification inputs: identification.allow is false");
+                    return;
+                }
+                if (static_cast<int>(m.data.size()) != n && static_cast<int>(m.data.size()) != 2 * n) {
+                    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+                                         "Identification inputs need %d or %d values, got %zu", n, 2 * n,
+                                         m.data.size());
+                    return;
+                }
+                ident_fixed_ = Eigen::Map<const VectorXd>(m.data.data(), n);
+                for (int i = 0; i < n; ++i) // finite = commanded: never beyond max_fixed
+                    if (std::isfinite(ident_fixed_[i]))
+                        ident_fixed_[i] = std::clamp(ident_fixed_[i], -ident_max_fixed_, ident_max_fixed_);
+                ident_bias_ = static_cast<int>(m.data.size()) == 2 * n ? VectorXd(Eigen::Map<const VectorXd>(m.data.data() + n, n))
+                                                                       : VectorXd::Zero(n);
+                if (!ident_bias_.allFinite())
+                    ident_bias_.setZero();
+                // Only the zero-wrench part of the bias, at most max_bias on any thruster.
+                ident_bias_ = null_space_ * (null_space_.transpose() * ident_bias_);
+                const double peak = ident_bias_.cwiseAbs().maxCoeff();
+                if (peak > ident_max_bias_)
+                    ident_bias_ *= ident_max_bias_ / peak;
+                ident_stamp_ = get_clock()->now();
+            });
         odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
             odom_topic, 10, [this](nav_msgs::msg::Odometry::ConstSharedPtr m) {
                 odom_ = m;
@@ -626,14 +699,12 @@ class MpcControllerNode : public rclcpp::Node {
             p.fall = t.fall;
             p.slew = t.slew;
             p.deadband = t.deadband;
-            p.forwardScale = t.forward_scale;
-            p.reverseScale = t.reverse_scale;
+            p.forwardScale = file.forwardScale * t.forward_scale;
+            p.reverseScale = file.reverseScale * t.reverse_scale;
             p.startup = t.startup;
             p.startupForce = t.startup_force;
-            p.forwardLimit = (file.forwardScale > 0 ? file.forwardLimit / file.forwardScale : file.forwardLimit) *
-                             t.forward_scale;
-            p.reverseLimit = (file.reverseScale > 0 ? file.reverseLimit / file.reverseScale : file.reverseLimit) *
-                             t.reverse_scale;
+            p.forwardLimit = file.forwardLimit * t.forward_scale;
+            p.reverseLimit = file.reverseLimit * t.reverse_scale;
             p.efficiency = t.efficiencies[i];
             out.push_back(p);
         }
@@ -1013,7 +1084,9 @@ class MpcControllerNode : public rclcpp::Node {
     // which adds no wrench, so their models stay valid without it.
     void publish(const VectorXd &command, bool active = false) {
         VectorXd hw = command;
-        if (active && spin_bias_ > 0 && spin_pattern_.size() == command.size())
+        // No spin bias under identification inputs: a release must be thrusters off, a ramp exactly its command.
+        if (active && spin_bias_ > 0 && spin_pattern_.size() == command.size() &&
+            controller_->fixedCommands().size() == 0)
             hw = controller_->model().limitTotalThrust(command + spin_bias_ * spin_pattern_);
         std_msgs::msg::Float32MultiArray msg;
         msg.data.assign(hw.data(), hw.data() + hw.size());
@@ -1022,6 +1095,55 @@ class MpcControllerNode : public rclcpp::Node {
         controller_->issue(command);
         if (estimator_)
             estimator_->command(get_clock()->now().seconds(), command);
+    }
+
+    // Applies (or clears) the identification inputs: only while allowed, fresh (identification.timeout) and
+    // the vehicle is enabled, so a crashed or stopped pool_identify leaves the MPC in normal control.
+    void identificationInputs(const rclcpp::Time &now, bool enabled) {
+        // Allowed but nobody sending (pool_identify crashed or forgot): turn the permission off again.
+        if (ident_allow_ && ident_auto_off_ > 0 && ident_allowed_at_ &&
+            (now - (ident_stamp_ && *ident_stamp_ > *ident_allowed_at_ ? *ident_stamp_ : *ident_allowed_at_)).seconds() >
+                ident_auto_off_) {
+            RCLCPP_WARN(get_logger(), "No identification inputs for %.0f s: identification.allow off", ident_auto_off_);
+            ident_allow_ = false;
+            ident_auto_off_pending_ = true; // the parameter itself is reset from the timer below
+        }
+        const bool active = enabled && ident_allow_ && ident_stamp_ && (now - *ident_stamp_).seconds() <= ident_timeout_;
+        std::string state = "normal control";
+        if (active) {
+            int fixed = 0, zero = 0, which = -1;
+            for (int i = 0; i < ident_fixed_.size(); ++i)
+                if (std::isfinite(ident_fixed_[i])) {
+                    ++fixed;
+                    zero += ident_fixed_[i] == 0;
+                    which = i;
+                }
+            if (fixed == ident_fixed_.size() && zero == fixed)
+                state = "released (all thrusters off)";
+            else if (fixed == 1)
+                state = "thruster " + std::to_string(which) + " commanded by identification";
+            else if (fixed > 0)
+                state = std::to_string(fixed) + " thrusters commanded by identification";
+            else if (ident_bias_.norm() > 0)
+                state = "null-space bias";
+            else
+                state = "identification (no inputs)";
+            controller_->setIdentificationInputs(ident_fixed_, ident_bias_);
+        } else if (controller_->fixedCommands().size() != 0 || ident_state_ != state) {
+            controller_->setIdentificationInputs(VectorXd(), VectorXd());
+        }
+        // A release (every thruster commanded to zero): the free float must not be learned as a disturbance.
+        const bool released = active && ident_fixed_.size() > 0 && ident_fixed_.allFinite() && ident_fixed_.isZero();
+        if (estimator_)
+            estimator_->pauseDisturbanceLearning(released);
+        if (state != ident_state_) {
+            RCLCPP_WARN(get_logger(), "Identification: %s", state.c_str());
+            ident_state_ = state;
+        }
+        if (ident_auto_off_pending_) {
+            ident_auto_off_pending_ = false;
+            set_parameter(rclcpp::Parameter("identification.allow", false));
+        }
     }
 
     void tick() {
@@ -1058,9 +1180,11 @@ class MpcControllerNode : public rclcpp::Node {
                 finishPath(false, FollowPath::Result::PROGRESS_FAIL,
                            killed_ ? "vehicle killed" : !odom_fresh ? "no fresh odometry" : "motion disabled");
             controller_->clearWarmStart();
+            identificationInputs(now, false);
             publish(zero);
             return;
         }
+        identificationInputs(now, true);
 
         State13d x;
         if (estimator_) {
@@ -1160,6 +1284,14 @@ class MpcControllerNode : public rclcpp::Node {
     std::string vehicle_path_;
     double dvl_latency_ = 0.0;
     double rpm_offset_ = 0, spin_bias_ = 0;
+    bool ident_allow_ = false;
+    double ident_timeout_ = 0.5, ident_max_bias_ = 8.0, ident_max_fixed_ = 12.0, ident_auto_off_ = 10.0;
+    bool ident_auto_off_pending_ = false;
+    std::optional<rclcpp::Time> ident_stamp_, ident_allowed_at_;
+    VectorXd ident_fixed_, ident_bias_;
+    std::string ident_state_ = "normal control";
+    MatrixXd null_space_; // orthonormal basis of the thruster matrix's null space
+    rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr ident_sub_;
     VectorXd spin_pattern_;
     std::vector<ThrusterParameters> thruster_file_; // the model file's thruster model
     ThrusterModel thruster_model_;                  // live thruster_model.* values

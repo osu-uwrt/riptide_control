@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 using namespace riptide_mpc;
 
@@ -492,6 +493,58 @@ TEST(Mpc, OrbitsAPointLookingAtIt) {
     EXPECT_LT(worst_position, 0.03);
     EXPECT_LT(worst_heading, 0.05);
     EXPECT_LT((loop.position() - r.position).norm(), 0.01);
+}
+
+// Identification: one thruster's command is given (pool_identify ramps it) and the MPC holds the pose with
+// the other seven; then every thruster fixed at zero (a release) turns them all off.
+TEST(Mpc, HoldsWithOneThrusterCommandedThenReleases) {
+    ClosedLoop loop;
+    Reference r;
+    r.linear_mode = r.angular_mode = Mode::POSITION;
+    r.position = loop.position();
+    loop.run(r, 3.0);
+    VectorXd fixed = VectorXd::Constant(8, std::numeric_limits<double>::quiet_NaN());
+    fixed[3] = 6.0;
+    loop.controller.setIdentificationInputs(fixed, VectorXd());
+    double worst = 0;
+    for (int k = 0; k < 120; ++k) {
+        loop.run(r, 0.05);
+        worst = std::max(worst, (loop.position() - r.position).norm());
+    }
+    std::printf("thruster 3 held at %.2f N; worst position error %.1f mm\n", loop.controller.lastCommand()[3],
+                worst * 1e3);
+    EXPECT_NEAR(loop.controller.lastCommand()[3], 6.0, 1e-9);
+    EXPECT_LT(worst, 0.02);
+    loop.controller.setIdentificationInputs(VectorXd::Zero(8), VectorXd());
+    loop.run(r, 0.1);
+    EXPECT_EQ(loop.controller.lastCommand().cwiseAbs().maxCoeff(), 0.0);
+    loop.controller.setIdentificationInputs(VectorXd(), VectorXd()); // back to normal control
+    loop.run(r, 0.1);
+    EXPECT_GT(loop.controller.lastCommand().cwiseAbs().maxCoeff(), 0.0);
+}
+
+// A zero-wrench bias is flown on top of the hold at no cost: the commands carry it, the pose stays.
+TEST(Mpc, NullSpaceBiasDoesNotMoveTheVehicle) {
+    ClosedLoop loop;
+    Reference r;
+    r.linear_mode = r.angular_mode = Mode::POSITION;
+    r.position = loop.position();
+    loop.run(r, 3.0);
+    const VectorXd before = loop.controller.lastCommand();
+    const MatrixXd T = loop.controller.model().thrusterMatrix();
+    Eigen::JacobiSVD<MatrixXd> svd(T, Eigen::ComputeFullV);
+    VectorXd bias = svd.matrixV().col(7);
+    bias *= 4.0 / bias.cwiseAbs().maxCoeff();
+    loop.controller.setIdentificationInputs(VectorXd::Constant(8, std::numeric_limits<double>::quiet_NaN()), bias);
+    double worst = 0;
+    for (int k = 0; k < 100; ++k) {
+        loop.run(r, 0.05);
+        worst = std::max(worst, (loop.position() - r.position).norm());
+    }
+    const double carried = (loop.controller.lastCommand() - before).dot(bias) / bias.squaredNorm();
+    std::printf("bias carried %.2f of the pattern; worst position error %.1f mm\n", carried, worst * 1e3);
+    EXPECT_GT(carried, 0.8);
+    EXPECT_LT(worst, 0.005);
 }
 
 // Separate vertical limits: flat moves cruise at the horizontal limit, straight

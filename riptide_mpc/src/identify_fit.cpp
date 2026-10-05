@@ -31,7 +31,11 @@ int main(int argc, char **argv) {
     std::vector<ident::Segment> segments;
     ident::readRecording(dir, samples, segments);
     const YAML::Node prior = YAML::LoadFile(model);
-    const auto result = ident::fit(prior, YAML::LoadFile(vehicle)["mass"].as<double>(), samples, segments);
+    // The recording's per-thruster thrust was computed with the session's model; --model should be that one.
+    const MatrixXd thruster_matrix = FossenModel::load(vehicle, model).thrusterMatrix();
+    const auto result =
+        ident::fit(prior, YAML::LoadFile(vehicle)["mass"].as<double>(), samples, segments, thruster_matrix,
+                   YAML::LoadFile(vehicle));
     YAML::Node report = ident::report(prior, result);
     report["prior_model"] = model;
     std::ofstream(dir + "/report.yaml") << report << "\n";

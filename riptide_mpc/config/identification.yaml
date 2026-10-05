@@ -11,16 +11,16 @@
     sway: true
     heave: true
     yaw: true
-    lane_length: 1.5          # m of clear water ahead (+x) and to port (+y) of the start
-    heave_span: 0.8           # m below the start depth (keep clear of the floor); 0.4 never reached cruise
+    lane_length: 5.0          # m of clear water ahead (+x) and to port (+y) of the start
+    heave_span: 2.0           # m below the start depth (keep clear of the floor); 0.4 never reached cruise
     yaw_span: 3.14159         # rad, centred on the start heading
-    linear_speeds: [0.15, 0.25, 0.35, 0.5]   # 0.65 saturated the 73 N limit; slow levels cruise longest in 1.5 m lanes
+    linear_speeds: [0.2, 0.35, 0.5, 0.7]   # 0.65 saturated the 73 N limit; slow levels cruise longest in 1.5 m lanes
     heave_speeds: [0.1, 0.2, 0.3]     # MPC vertical accel cap 0.2 m/s^2: these reach cruise in 0.8 m
     yaw_rates: [0.3, 0.6, 0.9]
     linear_accel: 0.5
     angular_accel: 1.2
-    tilt: 0.1745              # rad (10 deg) roll/pitch holds for the vertical COB offset
-    max_iterations: 3         # fly, fit all data so far, load the fit into the MPC, fly again; stops early
+    tilt: 0.44                # rad (25 deg) roll/pitch holds for the vertical COB offset (more tilt, more torque)
+    max_iterations: 1         # >1: fly, fit all data so far, load the fit into the MPC, fly again; stops early
                               # when two fits agree (convergence_tolerance 10%, cob_tolerance 2 mm)
     repeats: 2                # out-and-back pairs per speed: more data in a small pool
     hold_secs: 10.0           # long enough to average out a hold wobble (Talos: ~0.8 Hz)
@@ -29,3 +29,17 @@
     min_depth: 0.4            # m; shallower than this ends the session
     abort_margin: 1.5         # m beyond the lanes before the session ends
     trust_threshold: 0.95     # controller/scale/trust meaning "settled"
+    # v3 blocks (need the MPC's identification inputs; pool_identify allows them for the session):
+    thruster_ramps: true      # each thruster ramped 0 -> +ramp_force -> 0 -> -ramp_force -> 0 while the MPC holds
+    ramp_force: 8.0           # N
+    ramp_secs: 40.0           # s per thruster
+    null_space: true          # zero-wrench thrust patterns (+-null_amplitude) while holding
+    null_amplitude: 4.0       # N on the largest thruster
+    null_secs: 10.0
+    releases: true            # thrusters off: the vehicle floats up and rights itself (deep pool: start >= 3 m down)
+    release_tilted: true      # also from +-release_tilt pitch and roll holds
+    release_tilt: 0.785       # rad (45 deg): the righting signal grows with it
+    release_secs: 30.0        # s, or until shallower than release_min_depth / tilted beyond release_max_tilt
+    release_min_depth: 1.0    # m below the surface
+    release_max_tilt: 1.05    # rad (60 deg); must exceed release_tilt or every release is cut at once
+    recover_timeout: 90.0     # s to get back to the start after a release

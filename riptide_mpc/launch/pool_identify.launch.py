@@ -48,8 +48,9 @@ def generate_launch_description():
         DeclareLaunchArgument("config", default_value=os.path.join(share, "config", "identification.yaml")),
         DeclareLaunchArgument("use_sim_time", default_value="false"),
         DeclareLaunchArgument("model", default_value="",
-                              description="Prior model: a name in riptide_mpc config/models or a path "
-                                          "(default: config/models/<robot>.yaml). Use the model the MPC is running."),
+                              description="Prior model override: a name in riptide_mpc config/models or a path. "
+                                          "Default: whatever the running MPC flies (its hydrodynamics_config and "
+                                          "vehicle_config, read from it)."),
         DeclareLaunchArgument("wait_for_trigger", default_value="false",
                               description="Start only on the pool_identify/start service (IdentificationTree, "
                                           "untethered) and stay up reporting pool_identify/done"),

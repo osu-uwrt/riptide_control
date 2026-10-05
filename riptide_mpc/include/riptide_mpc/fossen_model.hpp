@@ -4,6 +4,7 @@
 #include "riptide_mpc/thruster_dynamics.hpp"
 
 #include <Eigen/Dense>
+#include <yaml-cpp/yaml.h>
 #include <array>
 #include <string>
 #include <vector>
@@ -35,6 +36,8 @@ struct HardwareConfig {
 class FossenModel {
   public:
     static FossenModel load(const std::string &vehicle_yaml, const std::string &hydrodynamics_yaml);
+    // Same, from already parsed documents (e.g. a model edited in memory).
+    static FossenModel fromNodes(const YAML::Node &vehicle, const YAML::Node &hydrodynamics);
 
     int thrusterCount() const {
         return static_cast<int>(positions_.size());

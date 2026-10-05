@@ -32,6 +32,7 @@ from rclpy.signals import SignalHandlerOptions
 from riptide_msgs2.msg import ControllerCommand
 from std_msgs.msg import Bool, Float32MultiArray
 
+# forward_scale / reverse_scale multiply the model file's (possibly per-thruster) scales; 1 = the file's.
 KEYS = ["delay", "rise_time_constant", "fall_time_constant", "slew_rate", "force_deadband",
         "forward_scale", "reverse_scale", "efficiencies", "startup_time_constant", "startup_force"]
 

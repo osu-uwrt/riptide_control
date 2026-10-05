@@ -60,8 +60,10 @@ Vector3d quaternionLog(const Quaterniond &input) {
 }
 
 FossenModel FossenModel::load(const std::string &vehicle_yaml, const std::string &hydrodynamics_yaml) {
-    const YAML::Node vehicle = YAML::LoadFile(vehicle_yaml);
-    const YAML::Node hydro = YAML::LoadFile(hydrodynamics_yaml);
+    return fromNodes(YAML::LoadFile(vehicle_yaml), YAML::LoadFile(hydrodynamics_yaml));
+}
+
+FossenModel FossenModel::fromNodes(const YAML::Node &vehicle, const YAML::Node &hydro) {
     if (hydro["schema_version"].as<int>() != 1)
         throw std::invalid_argument("Unsupported hydrodynamic schema");
 
@@ -95,6 +97,18 @@ FossenModel FossenModel::load(const std::string &vehicle_yaml, const std::string
     const auto efficiencies = hydro["thruster_efficiencies"].as<std::vector<double>>();
     if (efficiencies.size() != thrusters.size())
         throw std::invalid_argument("Expected one efficiency per thruster");
+    // Optional per-thruster forward/reverse scales (identified per thruster); else thruster_dynamics' shared ones.
+    const auto perThruster = [&](const char *key, double shared) {
+        std::vector<double> v(thrusters.size(), shared);
+        if (hydro[key]) {
+            v = hydro[key].as<std::vector<double>>();
+            if (v.size() != thrusters.size())
+                throw std::invalid_argument(std::string("Expected one ") + key + " entry per thruster");
+        }
+        return v;
+    };
+    const auto forward_scales = perThruster("thruster_forward_scales", dynamics["forward_scale"].as<double>(1.0));
+    const auto reverse_scales = perThruster("thruster_reverse_scales", dynamics["reverse_scale"].as<double>(1.0));
     model.propeller_radius_ = dynamics["propeller_radius"].as<double>(.05);
     model.command_timeout_ = dynamics["command_timeout"].as<double>(.5);
     const double max_thrust = dynamics["forward_max_force"].as<double>();
@@ -108,8 +122,8 @@ FossenModel FossenModel::load(const std::string &vehicle_yaml, const std::string
         p.deadband = dynamics["force_deadband"].as<double>(0.0);
         p.forwardLimit = max_thrust;
         p.reverseLimit = dynamics["reverse_max_force"].as<double>(max_thrust);
-        p.forwardScale = dynamics["forward_scale"].as<double>(1.0);
-        p.reverseScale = dynamics["reverse_scale"].as<double>(1.0);
+        p.forwardScale = forward_scales[i];
+        p.reverseScale = reverse_scales[i];
         p.startup = dynamics["startup_time_constant"].as<double>(0.0);
         p.startupForce = dynamics["startup_force"].as<double>(0.0);
         p.efficiency = efficiencies[i];

@@ -110,6 +110,14 @@ class MpcController {
     const VectorXd &lastCommand() const {
         return last_command_;
     }
+    // Identification (pool_identify): `fixed` holds a thruster's command at a value over the whole horizon
+    // (NaN = free; all zero = released, thrusters off); `bias` is added to the feedforward of the free
+    // thrusters (a null-space pattern adds no wrench, so tracking costs nothing). Empty vectors clear them.
+    // The MPC predicts with both, so it holds the vehicle with the remaining thrusters.
+    void setIdentificationInputs(const VectorXd &fixed, const VectorXd &bias);
+    const VectorXd &fixedCommands() const {
+        return fixed_;
+    }
 
     MpcOutput compute(const State13d &measured, const Reference &reference);
 
@@ -159,12 +167,14 @@ class MpcController {
     Output weights(const Reference &r) const;
     MatrixXd effectiveThrusterMatrix(const State13d &x) const;
     VectorXd allocate(const State13d &x, const Vector6d &wrench) const;
+    void applyBounds();
 
     FossenModel model_;
     MpcSettings settings_;
     ThrusterDynamics actuator_;
     VectorXd warm_, last_command_, lb_, ub_;
     VectorXd issued_feedforward_, last_deviation_; // for the smoothness term on u - u_ref
+    VectorXd fixed_, bias_;                         // identification inputs (empty = none)
     StageReference live_; // profile state "now"; advanced with the actuator replica
     MotionLimits motion_; // settings_.motion with the governor's speed scaling
     Reference target_;    // latest setpoints the profile moves toward

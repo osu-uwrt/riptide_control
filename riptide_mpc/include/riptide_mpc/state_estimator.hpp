@@ -100,6 +100,11 @@ class StateEstimator {
     void setActuatorParameters(const std::vector<ThrusterParameters> &parameters, const VectorXd &last_command);
     // Live hydrodynamic model swap; keeps the thruster parameters, actuator replica and disturbance.
     void setModel(FossenModel model);
+    // Holds the learned disturbance (no learning) while paused, e.g. during an identification release, when
+    // the free-floating vehicle would otherwise teach it a wrench the MPC then applies when control resumes.
+    void pauseDisturbanceLearning(bool paused) {
+        learning_paused_ = paused;
+    }
 
     void imuRate(double t, const Vector3d &rate_imu_frame);
     void imuOrientation(double t, const Quaterniond &orientation_imu_frame);
@@ -148,6 +153,7 @@ class StateEstimator {
     State13d x_ = State13d::Zero();
     double t_ = 0;
     bool initialized_ = false;
+    bool learning_paused_ = false;
     double last_gyro_ = kNever, last_fog_ = kNever, last_tilt_ = kNever, last_dvl_ = kNever, last_depth_ = kNever,
            last_odom_ = kNever;
 };

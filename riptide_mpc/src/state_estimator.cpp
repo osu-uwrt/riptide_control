@@ -158,7 +158,7 @@ double StateEstimator::gate() const {
 }
 
 void StateEstimator::learnForce(const Vector3d &e) {
-    if (!settings_.estimate_disturbance || !(settings_.disturbance_force_time_constant > 0))
+    if (learning_paused_ || !settings_.estimate_disturbance || !(settings_.disturbance_force_time_constant > 0))
         return;
     Vector6d d = model_.disturbance();
     const Vector3d force = model_.dynamics().mass().topLeftCorner<3, 3>() * e;
@@ -169,7 +169,7 @@ void StateEstimator::learnForce(const Vector3d &e) {
 }
 
 void StateEstimator::learnTorque(const Vector3d &e) {
-    if (!settings_.estimate_disturbance || !(settings_.disturbance_torque_time_constant > 0))
+    if (learning_paused_ || !settings_.estimate_disturbance || !(settings_.disturbance_torque_time_constant > 0))
         return;
     Vector6d d = model_.disturbance();
     d.tail<3>() +=

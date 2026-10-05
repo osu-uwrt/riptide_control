@@ -14,8 +14,7 @@ MpcController::MpcController(FossenModel model, MpcSettings settings)
         throw std::invalid_argument("Invalid MPC settings");
     nu_ = model_.thrusterCount();
     nx_ = 12 + nu_;
-    lb_ = model_.commandLowerBound().replicate(settings_.horizon, 1);
-    ub_ = model_.commandUpperBound().replicate(settings_.horizon, 1);
+    applyBounds();
     motion_ = settings_.motion;
     last_command_ = VectorXd::Zero(nu_);
     last_deviation_ = issued_feedforward_ = VectorXd::Zero(nu_);
@@ -115,9 +114,28 @@ void MpcController::seedReference(const State13d &x, const Reference &r) {
 
 void MpcController::setActuatorParameters(const std::vector<ThrusterParameters> &parameters) {
     model_.setActuatorParameters(parameters);
-    lb_ = model_.commandLowerBound().replicate(settings_.horizon, 1);
-    ub_ = model_.commandUpperBound().replicate(settings_.horizon, 1);
+    applyBounds();
     actuator_ = model_.settledActuator(last_command_);
+}
+
+// Command bounds per stage: the thrusters' own, with any fixed command pinned (inside them).
+void MpcController::applyBounds() {
+    VectorXd lo = model_.commandLowerBound(), hi = model_.commandUpperBound();
+    for (int i = 0; i < fixed_.size(); ++i)
+        if (std::isfinite(fixed_[i]))
+            lo[i] = hi[i] = std::clamp(fixed_[i], lo[i], hi[i]);
+    lb_ = lo.replicate(settings_.horizon, 1);
+    ub_ = hi.replicate(settings_.horizon, 1);
+}
+
+void MpcController::setIdentificationInputs(const VectorXd &fixed, const VectorXd &bias) {
+    if ((fixed.size() != 0 && fixed.size() != nu_) || (bias.size() != 0 && bias.size() != nu_))
+        throw std::invalid_argument("identification inputs need one value per thruster");
+    if (bias.size() != 0 && !bias.allFinite())
+        throw std::invalid_argument("identification bias must be finite");
+    fixed_ = fixed;
+    bias_ = bias;
+    applyBounds();
 }
 
 void MpcController::setModel(FossenModel model) {
@@ -266,8 +284,34 @@ MatrixXd MpcController::effectiveThrusterMatrix(const State13d &x) const {
 
 VectorXd MpcController::allocate(const State13d &x, const Vector6d &wrench) const {
     const MatrixXd T = effectiveThrusterMatrix(x);
-    const VectorXd u = T.completeOrthogonalDecomposition().solve(wrench);
-    return model_.limitTotalThrust(u.cwiseMax(model_.commandLowerBound()).cwiseMin(model_.commandUpperBound()));
+    VectorXd u;
+    std::vector<int> free;
+    for (int i = 0; i < nu_; ++i)
+        if (i >= fixed_.size() || !std::isfinite(fixed_[i]))
+            free.push_back(i);
+    if (static_cast<int>(free.size()) == nu_) {
+        u = T.completeOrthogonalDecomposition().solve(wrench);
+    } else { // fixed thrusters are given; the free ones make up the rest of the wrench
+        u = VectorXd::Zero(nu_);
+        Vector6d rest = wrench;
+        for (int i = 0; i < nu_; ++i)
+            if (std::isfinite(fixed_[i])) {
+                u[i] = fixed_[i];
+                rest -= T.col(i) * fixed_[i];
+            }
+        if (!free.empty()) {
+            MatrixXd T_free(6, free.size());
+            for (std::size_t k = 0; k < free.size(); ++k)
+                T_free.col(k) = T.col(free[k]);
+            const VectorXd u_free = T_free.completeOrthogonalDecomposition().solve(rest);
+            for (std::size_t k = 0; k < free.size(); ++k)
+                u[free[k]] = u_free[k];
+        }
+    }
+    if (bias_.size() == nu_)
+        for (int i : free)
+            u[i] += bias_[i];
+    return model_.limitTotalThrust(u.cwiseMax(lb_.head(nu_)).cwiseMin(ub_.head(nu_)));
 }
 
 MpcOutput MpcController::compute(const State13d &measured, const Reference &reference) {

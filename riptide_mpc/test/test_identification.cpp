@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 
@@ -37,9 +38,12 @@ YAML::Node truthPlant() {
 }
 } // namespace
 
-// Flies the default sequence with the MPC on `model_path` against `plant_path`, then fits.
-ident::Result flyAndFit(const std::string &plant_path, const std::string &model_path) {
-    SimRig rig(TALOS_VEHICLE, plant_path, model_path);
+// Flies the sequence with the MPC on `model_path` against `plant_path`, then fits (per thruster too when
+// the settings fly thruster ramps or null-space patterns). Releases are cut 1 m below the surface.
+ident::Result flyAndFit(const std::string &plant_path, const std::string &model_path,
+                        const ident::SequenceSettings &settings = ident::SequenceSettings(),
+                        const Vector3d &start = Vector3d(0, 0, -2)) {
+    SimRig rig(TALOS_VEHICLE, plant_path, model_path, MpcSettings(), EstimatorSettings(), start);
     ident::Recorder recorder(FossenModel::load(TALOS_VEHICLE, model_path), SensorMounts::load(TALOS_VEHICLE));
     rig.hooks.command = [&](double t, const VectorXd &u) { recorder.command(t, u); };
     rig.hooks.fog = [&](double t, double r) { recorder.fogRate(t, r); };
@@ -48,15 +52,18 @@ ident::Result flyAndFit(const std::string &plant_path, const std::string &model_
     rig.hooks.dvl = [&](double t, const Vector3d &v) { recorder.dvlVelocity(t, v); };
 
     const MotionLimits base = rig.mpc.settings().motion;
-    ident::Sequencer sequencer(ident::buildSequence(ident::SequenceSettings(), rig.position(), 0.0, base));
+    const MatrixXd T = rig.mpc.model().thrusterMatrix();
+    ident::Sequencer sequencer(ident::buildSequence(settings, rig.position(), 0.0, base, rig.mpc.model().thrusterCount(),
+                                                    ident::nullSpacePatterns(T)));
     SettleTrust trust;
     Reference r;
     r.linear_mode = r.angular_mode = Mode::POSITION;
     r.position = rig.position();
     const double dt = rig.mpc.settings().dt;
     bool done = false;
-    for (int tick = 0; tick < 20 * 900 && !done; ++tick) {
-        const auto out = sequencer.update(rig.t, trust.trust() > 0.95);
+    for (int tick = 0; tick < 20 * 1500 && !done; ++tick) {
+        const auto out = sequencer.update(rig.t, trust.trust() > 0.95, sequencer.releasing() && rig.position().z() > -1.0);
+        rig.mpc.setIdentificationInputs(out.fixed, out.bias);
         if (!out.message.empty())
             std::printf("[%6.1f s] %s\n", rig.t, out.message.c_str());
         if (out.new_step)
@@ -87,7 +94,9 @@ ident::Result flyAndFit(const std::string &plant_path, const std::string &model_
 
     const YAML::Node prior = YAML::LoadFile(model_path);
     const double mass = YAML::LoadFile(TALOS_VEHICLE)["mass"].as<double>();
-    const ident::Result result = ident::fit(prior, mass, samples, segments);
+    const bool per_thruster = settings.thruster_ramps || settings.null_space;
+    const ident::Result result = ident::fit(prior, mass, samples, segments, per_thruster ? T : MatrixXd(),
+                                            settings.releases ? YAML::LoadFile(TALOS_VEHICLE) : YAML::Node());
     std::printf("%s\n", YAML::Dump(ident::report(prior, result)).c_str());
     return result;
 }
@@ -138,4 +147,95 @@ TEST(Identification, RecoversThePoolParametersFromTheSequence) {
 TEST(Identification, LearnsFromAnUntunedPrior) {
     expectRecovered(flyAndFit(TALOS_MODEL_SIM, TALOS_MODEL_UNTUNED), YAML::LoadFile(TALOS_MODEL_SIM),
                     TALOS_MODEL_UNTUNED);
+}
+
+// The full identification with the v3 blocks, in deep water, against a plant whose thrusters differ from the
+// model one by one and forward vs reverse, with wrong statics and wrong heave/roll/pitch dynamics: thruster
+// ramps and null-space patterns while holding give each thruster's gains, the runs the drag and inertia, and
+// the releases roll/pitch damping and a heave cross-check.
+TEST(Identification, IdentifiesEachThrusterAndTheReleases) {
+    // Each group's forward mean is 1 (surge 0,1,6,7; vectored 2..5): the load-cell scale the fit assumes.
+    YAML::Node truth = YAML::Clone(YAML::LoadFile(TALOS_MODEL_SIM));
+    const std::vector<double> efficiency{1.05, 0.95, 1.03, 0.92, 1.05, 1.0, 1.04, 0.96};
+    const std::vector<double> reverse{0.75, 0.8, 0.7, 0.75, 0.85, 0.75, 0.7, 0.8};
+    truth["thruster_forward_scales"] = efficiency;
+    truth["thruster_reverse_scales"] = reverse;
+    truth["displaced_volume"] = truth["displaced_volume"].as<double>() * 1.01;
+    // A COB like the real Talos' (floats ~20 deg nose up): the simulator copy's (x = z) floats ~50 deg, where
+    // rolling about the body x axis is mostly turning about the vertical and nothing rights it.
+    truth["cob_relative"] = std::vector<double>{0.006, 0.0, 0.016};
+    const auto set = [](YAML::Node m, int r, double v) {
+        if (m.size() == 36)
+            m[r * 7] = v;
+        else
+            m[r][r] = v;
+    };
+    set(truth["added_mass6x6"], 2, entry(truth["added_mass6x6"], 2, 2) * 1.3);
+    set(truth["linear_damping6x6"], 2, entry(truth["linear_damping6x6"], 2, 2) * 1.5);
+    set(truth["added_mass6x6"], 3, 0.4);
+    set(truth["added_mass6x6"], 4, 0.3);
+    set(truth["linear_damping6x6"], 3, entry(truth["linear_damping6x6"], 3, 3) * 1.3);
+    set(truth["linear_damping6x6"], 4, entry(truth["linear_damping6x6"], 4, 4) * 1.3);
+    const std::string plant_path = testing::TempDir() + "/thruster_truth.yaml";
+    std::ofstream(plant_path) << truth;
+
+    ident::SequenceSettings s; // the full identification, as flown in the pool, plus the v3 blocks
+    s.thruster_ramps = s.null_space = s.releases = true;
+    const ident::Result result = flyAndFit(plant_path, TALOS_MODEL_SIM, s, Vector3d(0, 0, -4.5)); // the dive well
+
+    // The statics feed the release fit (it only sees ratios to them), so they must be right too.
+    ASSERT_TRUE(result.statics.ok) << result.statics.note;
+    EXPECT_NEAR(result.statics.volume / truth["displaced_volume"].as<double>(), 1.0, 0.003);
+    for (int i = 0; i < 3; ++i)
+        EXPECT_NEAR(result.statics.cob[i], truth["cob_relative"][i].as<double>(), 0.002) << "cob " << i;
+
+    // Gains are relative to the model's thrust with each group's forward mean pinned: truth / mean(group).
+    const auto &f = result.thrusters;
+    ASSERT_TRUE(f.ok) << f.note;
+    EXPECT_EQ(f.group, (std::vector<int>{0, 0, 1, 1, 1, 1, 0, 0})); // surge thrusters, vectored thrusters
+    // The vectored four only ever move together while holding (their null-space pattern), so their reverse
+    // mean is pinned as well; the surge four mix signs, so theirs is measured against their forward mean.
+    EXPECT_EQ(f.reverse_pinned, (std::vector<bool>{false, true}));
+    std::vector<double> mean_reverse(2, 0.);
+    for (int i = 0; i < 8; ++i)
+        mean_reverse[f.group[i]] += reverse[i] / 4;
+    const auto expected_forward = [&](int i) { return efficiency[i]; };
+    const auto expected_reverse = [&](int i) {
+        return f.reverse_pinned[f.group[i]] ? reverse[i] / mean_reverse[f.group[i]] : reverse[i];
+    };
+    for (int i = 0; i < 8; ++i) {
+        EXPECT_TRUE(f.forward_ok[i] && f.reverse_ok[i]) << "thruster " << i;
+        EXPECT_NEAR(f.forward[i], expected_forward(i), 0.03) << "forward gain " << i;
+        EXPECT_NEAR(f.reverse[i], expected_reverse(i), 0.04) << "reverse gain " << i;
+    }
+    const double mass = YAML::LoadFile(TALOS_VEHICLE)["mass"].as<double>();
+    const YAML::Node prior = YAML::LoadFile(TALOS_MODEL_SIM);
+    for (const auto &a : result.axes) {
+        if (a.axis < 2)
+            continue;
+        const int d = a.axis;
+        const double rigid = d < 3 ? mass : prior["rigid_body_inertia3x3"][(d - 3) * 4].as<double>();
+        EXPECT_TRUE(a.drag_ok) << "axis " << d << ": " << a.note;
+        EXPECT_NEAR(a.d1 / entry(truth["linear_damping6x6"], d, d), 1.0, 0.2) << "linear damping axis " << d;
+        // Inertia only where the releases determine it: a release barely accelerates in heave, and righting
+        // from a tilt is overdamped, so the fit keeps the prior's unless it is determined to 10%.
+        std::printf("axis %d: %s\n", d, a.note.c_str());
+        if (a.mass_ok)
+            EXPECT_NEAR(a.mass_total / (rigid + entry(truth["added_mass6x6"], d, d)), 1.0, 0.15) << "inertia axis " << d;
+    }
+    EXPECT_EQ(std::count_if(result.axes.begin(), result.axes.end(),
+                            [](const ident::AxisFit &a) { return a.axis >= 2 && a.axis <= 4; }),
+              3); // heave (runs, release cross-check), roll and pitch (releases)
+
+    // The identified model flies the plant's thrusters (relative to the pinned mean) and loads in the MPC.
+    const YAML::Node model = ident::identifiedModel(prior, result, "test");
+    const std::string model_path = testing::TempDir() + "/identified_thrusters.yaml";
+    std::ofstream(model_path) << model;
+    const FossenModel identified = FossenModel::load(TALOS_VEHICLE, model_path);
+    for (int i = 0; i < 8; ++i) {
+        const ThrusterParameters &p = identified.actuatorParameters()[i];
+        EXPECT_NEAR(p.efficiency * p.forwardScale, expected_forward(i), 0.03);
+        EXPECT_NEAR(p.efficiency * p.reverseScale, expected_reverse(i), 0.04);
+        EXPECT_LE(p.efficiency, 1.0);
+    }
 }
