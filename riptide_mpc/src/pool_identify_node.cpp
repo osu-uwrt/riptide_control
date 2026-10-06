@@ -10,7 +10,8 @@
 // The operator arms the vehicle as usual and keeps the physical kill in hand. The
 // session starts from wherever the vehicle is (it must be at depth), stays inside
 // a box around that point, and ends holding the start pose. Killing the vehicle
-// ends the session; whatever was recorded is saved and fitted.
+// ends the session; whatever was recorded is saved and fitted. With record_bag, a
+// `ros2 bag record` of bag_topics runs for the whole session into <session>/bag.
 #include "riptide_mpc/identification.hpp"
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -35,6 +36,13 @@
 #include <fstream>
 #include <limits>
 #include <optional>
+#include <thread>
+
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/prctl.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 using namespace std::chrono_literals;
 using riptide_msgs2::msg::ControllerCommand;
@@ -50,6 +58,15 @@ class PoolIdentifyNode : public rclcpp::Node {
         const char *home = std::getenv("HOME");
         output_root_ = declare_parameter<std::string>("output_dir", std::string(home ? home : ".") + "/osu-uwrt/mpc_identification");
         mpc_node_ = declare_parameter<std::string>("mpc_node", "mpc_controller");
+        record_bag_ = declare_parameter("record_bag", true);
+        bag_topics_ = declare_parameter<std::vector<std::string>>(
+            "bag_topics", {"command/requested_rpm", "thruster_forces", "state/thrusters/telemetry",
+                           "state/thrusters/rpm", "state/kill", "odometry/filtered", "controller/mpc/state",
+                           "controller/mpc/reference", "controller/mpc/disturbance", "controller/mpc/solve_time_ms",
+                           "controller_debug_wrench", "controller/linear", "controller/angular",
+                           "controller/motion_enabled", "controller/scale/trust", "controller/identification/thrusters",
+                           "vectornav/imu", "gyro/twist", "dvl_twist", "depth/pose", "pool_identify/done", "/tf",
+                           "/tf_static"});
 
         auto &s = settings_;
         s.statics = declare_parameter("statics", s.statics);
@@ -179,6 +196,10 @@ class PoolIdentifyNode : public rclcpp::Node {
         timer_ = rclcpp::create_timer(this, get_clock(), 50ms, [this] { tick(); });
         RCLCPP_WARN(get_logger(), "Pool identification: arm the vehicle at depth with the kill switch in hand. "
                                   "Do not run an autonomy tree at the same time.");
+    }
+
+    ~PoolIdentifyNode() override {
+        stopBag();
     }
 
   private:
@@ -328,6 +349,7 @@ class PoolIdentifyNode : public rclcpp::Node {
         stamp_ = stamp;
         dir_ = output_root_ + "/" + robotName() + "_" + stamp_;
         std::filesystem::create_directories(dir_);
+        startBag();
         sequencer_.emplace(ident::buildSequence(settings_, start_, yaw, base_, thrusters_, null_space_));
         abort_radius_ = std::max(settings_.lane_length, settings_.heave_span) + abort_margin_;
         RCLCPP_WARN(get_logger(), "Starting identification from [%.2f %.2f %.2f], heading %.0f deg: %zu steps, "
@@ -573,8 +595,70 @@ class PoolIdentifyNode : public rclcpp::Node {
 
     // Standalone: exit. Trigger mode: stay up publishing done=true for the tree.
     void end() {
+        stopBag();
         if (!wait_for_trigger_)
             rclcpp::shutdown();
+    }
+
+    // Runs `ros2 bag record` into <session>/bag. Forked from the executor (main) thread: PR_SET_PDEATHSIG
+    // fires when the forking THREAD exits, which for that thread means the process, so the recorder stops
+    // with the node. Everything the child needs is built before fork() (the process has middleware threads).
+    void startBag() {
+        if (!record_bag_ || bag_pid_ > 0)
+            return;
+        std::vector<std::string> args{"ros2", "bag", "record", "-o", dir_ + "/bag"};
+        if (get_parameter("use_sim_time").as_bool())
+            args.push_back("--use-sim-time");
+        for (const auto &t : bag_topics_)
+            args.push_back(get_node_topics_interface()->resolve_topic_name(t));
+        std::vector<char *> argv;
+        for (auto &a : args)
+            argv.push_back(a.data());
+        argv.push_back(nullptr);
+        const std::string log = dir_ + "/bag.log";
+        const pid_t parent = getpid();
+        const pid_t pid = fork();
+        if (pid == 0) {
+            prctl(PR_SET_PDEATHSIG, SIGINT);
+            if (getppid() != parent)
+                _exit(0);
+            const int fd = open(log.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd >= 0) {
+                dup2(fd, STDOUT_FILENO);
+                dup2(fd, STDERR_FILENO);
+                close(fd);
+            }
+            execvp(argv[0], argv.data());
+            _exit(127);
+        }
+        if (pid < 0) {
+            RCLCPP_ERROR(get_logger(), "Could not start the session bag (fork failed)");
+            return;
+        }
+        bag_pid_ = pid;
+        RCLCPP_WARN(get_logger(), "Recording %zu topics to %s/bag (recorder log: bag.log)", bag_topics_.size(),
+                    dir_.c_str());
+    }
+
+    // SIGINT lets the recorder close the bag cleanly; SIGKILL only if it hangs.
+    void stopBag() {
+        if (bag_pid_ <= 0)
+            return;
+        kill(bag_pid_, SIGINT);
+        int status = 0;
+        pid_t r = 0;
+        for (int i = 0; i < 100 && (r = waitpid(bag_pid_, &status, WNOHANG)) == 0; ++i)
+            std::this_thread::sleep_for(100ms);
+        if (r == 0) {
+            kill(bag_pid_, SIGKILL);
+            waitpid(bag_pid_, &status, 0);
+            RCLCPP_ERROR(get_logger(), "Session bag recorder did not stop in 10 s: killed (bag may be incomplete)");
+        } else if (r == bag_pid_ && WIFEXITED(status) && WEXITSTATUS(status) == 127) {
+            RCLCPP_ERROR(get_logger(), "Session bag was not recorded: could not run ros2 (see bag.log)");
+        } else {
+            RCLCPP_WARN(get_logger(), "Session bag saved to %s/bag", dir_.c_str());
+        }
+        bag_pid_ = -1;
     }
 
     void finish(const std::string &why) {
@@ -628,6 +712,9 @@ class PoolIdentifyNode : public rclcpp::Node {
     }
 
     std::string vehicle_, model_path_, output_root_, mpc_node_;
+    bool record_bag_ = true;
+    std::vector<std::string> bag_topics_;
+    pid_t bag_pid_ = -1;
     ident::SequenceSettings settings_;
     double min_start_depth_, min_depth_, abort_margin_, trust_threshold_, abort_radius_ = 0;
     int max_iterations_ = 1, iteration_ = 0;

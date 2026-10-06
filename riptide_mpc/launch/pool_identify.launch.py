@@ -28,6 +28,9 @@ def overrides(context, *args, **kwargs):
     iterations = LaunchConfiguration("max_iterations").perform(context)
     if iterations:
         params["max_iterations"] = int(iterations)
+    record_bag = LaunchConfiguration("record_bag").perform(context).lower()
+    if record_bag:
+        params["record_bag"] = record_bag in ("true", "1")
     output_dir = LaunchConfiguration("output_dir").perform(context)
     if output_dir:
         params["output_dir"] = os.path.expanduser(output_dir)
@@ -56,6 +59,8 @@ def generate_launch_description():
                                           "untethered) and stay up reporting pool_identify/done"),
         DeclareLaunchArgument("max_iterations", default_value="",
                               description="Override identification.yaml max_iterations"),
+        DeclareLaunchArgument("record_bag", default_value="",
+                              description="Override identification.yaml record_bag (session bag in <session>/bag)"),
         DeclareLaunchArgument("output_dir", default_value="",
                               description="Session folder root (default ~/osu-uwrt/mpc_identification)"),
         OpaqueFunction(function=overrides),

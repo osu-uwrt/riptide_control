@@ -38,6 +38,8 @@
     null_secs: 10.0
     releases: true            # thrusters off: the vehicle floats up and rights itself (deep pool: start >= 3 m down)
     release_tilted: true      # also from +-release_tilt pitch and roll holds
+    record_bag: true          # ros2 bag record of the whole session into <session>/bag (topic list: bag_topics,
+                              # default in pool_identify_node.cpp: thrust/rpm/telemetry, MPC state, raw sensors, tf)
     release_tilt: 0.785       # rad (45 deg): the righting signal grows with it
     release_secs: 30.0        # s, or until shallower than release_min_depth / tilted beyond release_max_tilt
     release_min_depth: 1.0    # m below the surface
