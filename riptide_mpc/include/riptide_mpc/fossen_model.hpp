@@ -20,7 +20,18 @@ struct HardwareConfig {
     bool present = false;
     double total_thrust_limit = 0; // N, sum of |force| over thrusters; 0 = none
     std::array<double, 4> rpm_positive{}, rpm_negative{};
+    // Load-cell thrust curve |F| = k2 rpm^2 + k1 rpm per direction ([k2, k1], rpm >= 0). When set
+    // (thrust_curve_forward/reverse), forceToRpm is its exact inverse instead of the legacy curves.
+    bool quadratic = false;
+    std::array<double, 2> thrust_forward{}, thrust_reverse{};
+    // Propeller law |F| = K_T rho D^4 (rpm/60)^2 with K_T = a + b rpm per direction ([a > 0, b >= 0]).
+    // When set (thrust_coefficient_forward/reverse + propeller_diameter; rho is the model's water_density),
+    // forceToRpm is its exact inverse.
+    bool propeller = false;
+    std::array<double, 2> kt_forward{}, kt_reverse{};
+    double kt_scale = 0; // rho D^4 / 3600: newtons per (K_T rpm^2)
 
+    // Propeller inverse when `propeller`, quadratic inverse when `quadratic`, otherwise
     // complete_controller's "Force to RPM Transform": c0 + c1 F + c2 tanh(F) + c3 |F|^(1/4).
     double forceToRpm(double force) const;
 };

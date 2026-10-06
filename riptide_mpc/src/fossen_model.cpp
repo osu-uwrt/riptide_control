@@ -147,10 +147,44 @@ FossenModel FossenModel::fromNodes(const YAML::Node &vehicle, const YAML::Node &
                 throw std::invalid_argument(std::string("hardware.") + key + ": expected four coefficients");
             return std::array<double, 4>{c[0], c[1], c[2], c[3]};
         };
+        auto thrust = [&](const char *key) {
+            const auto k = hw[key].as<std::vector<double>>();
+            if (k.size() != 2 || !(k[0] > 0) || !std::isfinite(k[1]))
+                throw std::invalid_argument(std::string("hardware.") + key + ": expected [k2 > 0, k1]");
+            return std::array<double, 2>{k[0], k[1]};
+        };
+        auto coefficient = [&](const char *key) {
+            const auto k = hw[key].as<std::vector<double>>();
+            if (k.size() != 2 || !(k[0] > 0) || !(k[1] >= 0) || !std::isfinite(k[0] + k[1]))
+                throw std::invalid_argument(std::string("hardware.") + key + ": expected [a > 0, b >= 0]");
+            return std::array<double, 2>{k[0], k[1]};
+        };
         model.hardware_.present = true;
         model.hardware_.total_thrust_limit = hw["total_thrust_limit"].as<double>(0.);
-        model.hardware_.rpm_positive = curve("force_to_rpm_positive");
-        model.hardware_.rpm_negative = curve("force_to_rpm_negative");
+        const bool propeller = hw["thrust_coefficient_forward"] || hw["thrust_coefficient_reverse"];
+        const bool quadratic = hw["thrust_curve_forward"] || hw["thrust_curve_reverse"];
+        const bool legacy = hw["force_to_rpm_positive"] || hw["force_to_rpm_negative"];
+        if (propeller + quadratic + legacy > 1)
+            throw std::invalid_argument(
+                "hardware: give one of thrust_coefficient_*, thrust_curve_* or force_to_rpm_*");
+        model.hardware_.propeller = propeller;
+        model.hardware_.quadratic = quadratic;
+        if (propeller) {
+            const double diameter = hw["propeller_diameter"].as<double>(0.);
+            const double rho = hydro["water_density"].as<double>(0.);
+            if (!(diameter > 0) || !(rho > 0))
+                throw std::invalid_argument("hardware.thrust_coefficient_*: need propeller_diameter > 0 and "
+                                            "water_density > 0");
+            model.hardware_.kt_forward = coefficient("thrust_coefficient_forward");
+            model.hardware_.kt_reverse = coefficient("thrust_coefficient_reverse");
+            model.hardware_.kt_scale = rho * std::pow(diameter, 4) / 3600.0;
+        } else if (quadratic) {
+            model.hardware_.thrust_forward = thrust("thrust_curve_forward");
+            model.hardware_.thrust_reverse = thrust("thrust_curve_reverse");
+        } else {
+            model.hardware_.rpm_positive = curve("force_to_rpm_positive");
+            model.hardware_.rpm_negative = curve("force_to_rpm_negative");
+        }
     }
     return model;
 }
@@ -158,6 +192,26 @@ FossenModel FossenModel::fromNodes(const YAML::Node &vehicle, const YAML::Node &
 double HardwareConfig::forceToRpm(double f) const {
     if (f == 0 || !std::isfinite(f))
         return 0; // the fitted curves are meaningless at zero; stop the motor
+    if (propeller) {
+        // Root of kt_scale (a + b R) R^2 = |F|. Convex and increasing for R > 0, and R0 (b = 0) is at or right
+        // of the root, so Newton descends monotonically onto it.
+        const auto &[a, b] = f > 0 ? kt_forward : kt_reverse;
+        const double target = std::abs(f) / kt_scale;
+        double r = std::sqrt(target / a);
+        for (int i = 0; i < 50; ++i) {
+            const double step = ((a + b * r) * r * r - target) / ((2 * a + 3 * b * r) * r);
+            r -= step;
+            if (std::abs(step) <= 1e-12 * r)
+                break;
+        }
+        return std::copysign(r, f);
+    }
+    if (quadratic) {
+        // Positive root of k2 R^2 + k1 R = |F|, in the form without cancellation for either sign of k1.
+        const auto &[k2, k1] = f > 0 ? thrust_forward : thrust_reverse;
+        const double a = std::abs(f), s = std::sqrt(k1 * k1 + 4 * k2 * a);
+        return std::copysign(k1 <= 0 ? (s - k1) / (2 * k2) : 2 * a / (k1 + s), f);
+    }
     const auto &c = f > 0 ? rpm_positive : rpm_negative;
     const double rpm = c[0] + c[1] * f + c[2] * std::tanh(f) + c[3] * std::pow(std::abs(f), 0.25);
     return rpm * f > 0 ? rpm : 0; // the fitted curve's wrong-sign floor near zero force: stop the motor

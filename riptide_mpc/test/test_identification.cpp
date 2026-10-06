@@ -142,11 +142,25 @@ TEST(Identification, RecoversThePoolParametersFromTheSequence) {
     expectRecovered(flyAndFit(plant_path, TALOS_MODEL_SIM), truth, TALOS_MODEL_SIM);
 }
 
-// From a prior with zero drag/added mass and wrong statics (config/models/talos_untuned.yaml),
-// flying against the simulator's own plant.
+// From a prior with zero drag/added mass and wrong statics (the simulator's model with every identified
+// diagonal zeroed, 3.7% less buoyancy and a shifted COB), flying against the simulator's own plant.
 TEST(Identification, LearnsFromAnUntunedPrior) {
-    expectRecovered(flyAndFit(TALOS_MODEL_SIM, TALOS_MODEL_UNTUNED), YAML::LoadFile(TALOS_MODEL_SIM),
-                    TALOS_MODEL_UNTUNED);
+    YAML::Node prior = YAML::Clone(YAML::LoadFile(TALOS_MODEL_SIM));
+    for (int d = 0; d < 6; ++d) {
+        for (const char *key : {"added_mass6x6", "linear_damping6x6"}) {
+            YAML::Node m = prior[key];
+            if (m.size() == 36)
+                m[d * 7] = 0.0;
+            else
+                m[d][d] = 0.0;
+        }
+        prior["quadratic_damping"][d] = 0.0;
+    }
+    prior["displaced_volume"] = 0.03117;
+    prior["cob_relative"] = std::vector<double>{-0.00025, -0.0003, 0.0252};
+    const std::string prior_path = testing::TempDir() + "/identification_untuned.yaml";
+    std::ofstream(prior_path) << prior;
+    expectRecovered(flyAndFit(TALOS_MODEL_SIM, prior_path), YAML::LoadFile(TALOS_MODEL_SIM), prior_path);
 }
 
 // The full identification with the v3 blocks, in deep water, against a plant whose thrusters differ from the

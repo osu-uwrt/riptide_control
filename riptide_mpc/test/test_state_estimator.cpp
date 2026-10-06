@@ -314,6 +314,71 @@ TEST(Hardware, ForceToRpmMatchesCompleteController) {
     EXPECT_LT(hw.forceToRpm(-24.0), hw.forceToRpm(-12.0));
 }
 
+TEST(Hardware, QuadraticThrustCurveInverts) {
+    YAML::Node d = YAML::LoadFile(simModelWithHardware());
+    d["hardware"].remove("force_to_rpm_positive");
+    d["hardware"].remove("force_to_rpm_negative");
+    const std::array<double, 2> fwd{3.5e-6, -1.1e-3}, rev{2.8e-6, 4e-4}; // k1 of both signs
+    d["hardware"]["thrust_curve_forward"] = std::vector<double>{fwd[0], fwd[1]};
+    d["hardware"]["thrust_curve_reverse"] = std::vector<double>{rev[0], rev[1]};
+    const std::string path = testing::TempDir() + "/talos_sim_quadratic.yaml";
+    std::ofstream(path) << d;
+    const HardwareConfig hw = FossenModel::load(TALOS_VEHICLE, path).hardware();
+    ASSERT_TRUE(hw.quadratic);
+    EXPECT_EQ(hw.forceToRpm(0.0), 0.0);
+    for (double f : {0.01, 1.0, 12.0, 24.0}) {
+        const double r = hw.forceToRpm(f), q = hw.forceToRpm(-f);
+        EXPECT_GT(r, 0);
+        EXPECT_LT(q, 0);
+        EXPECT_NEAR(fwd[0] * r * r + fwd[1] * r, f, 1e-9); // exact inverse of the thrust curve
+        EXPECT_NEAR(rev[0] * q * q - rev[1] * q, f, 1e-9);
+    }
+    EXPECT_GT(hw.forceToRpm(24.0), hw.forceToRpm(12.0));
+
+    d["hardware"]["force_to_rpm_positive"] = std::vector<double>{0, 0, 0, 1};
+    std::ofstream(path) << d;
+    EXPECT_THROW(FossenModel::load(TALOS_VEHICLE, path), std::invalid_argument); // both forms given
+}
+
+TEST(Hardware, PropellerThrustCoefficientInverts) {
+    YAML::Node d = YAML::LoadFile(simModelWithHardware());
+    d["hardware"].remove("force_to_rpm_positive");
+    d["hardware"].remove("force_to_rpm_negative");
+    const std::array<double, 2> fwd{0.3964, 1.48e-5}, rev{0.3114, 1.25e-5};
+    const double diameter = 0.076, rho = d["water_density"].as<double>();
+    d["hardware"]["propeller_diameter"] = diameter;
+    d["hardware"]["thrust_coefficient_forward"] = std::vector<double>{fwd[0], fwd[1]};
+    d["hardware"]["thrust_coefficient_reverse"] = std::vector<double>{rev[0], rev[1]};
+    const std::string path = testing::TempDir() + "/talos_sim_propeller.yaml";
+    std::ofstream(path) << d;
+    const HardwareConfig hw = FossenModel::load(TALOS_VEHICLE, path).hardware();
+    ASSERT_TRUE(hw.propeller);
+    const auto thrust = [&](const std::array<double, 2> &k, double rpm) {
+        return (k[0] + k[1] * rpm) * rho * std::pow(diameter, 4) * (rpm / 60) * (rpm / 60);
+    };
+    EXPECT_EQ(hw.forceToRpm(0.0), 0.0);
+    for (double f : {0.001, 0.5, 1.0, 12.0, 24.0, 40.0}) {
+        const double r = hw.forceToRpm(f), q = hw.forceToRpm(-f);
+        EXPECT_GT(r, 0);
+        EXPECT_LT(q, 0);
+        EXPECT_NEAR(thrust(fwd, r), f, 1e-9 * f); // exact inverse of the propeller law
+        EXPECT_NEAR(thrust(rev, -q), f, 1e-9 * f);
+    }
+    // Blue Robotics T200 data at 16 V: 1994.08 rpm forward gives 1.5876 kgf.
+    EXPECT_NEAR(hw.forceToRpm(1.5876 * 9.80665), 1994.08, 30.0);
+    EXPECT_GT(hw.forceToRpm(24.0), hw.forceToRpm(12.0));
+
+    d["hardware"]["thrust_curve_forward"] = std::vector<double>{3.5e-6, -1.1e-3};
+    d["hardware"]["thrust_curve_reverse"] = std::vector<double>{2.8e-6, 4e-4};
+    std::ofstream(path) << d;
+    EXPECT_THROW(FossenModel::load(TALOS_VEHICLE, path), std::invalid_argument); // two forms given
+    d["hardware"].remove("thrust_curve_forward");
+    d["hardware"].remove("thrust_curve_reverse");
+    d["hardware"]["thrust_coefficient_reverse"] = std::vector<double>{0.3114, -1e-5};
+    std::ofstream(path) << d;
+    EXPECT_THROW(FossenModel::load(TALOS_VEHICLE, path), std::invalid_argument); // b < 0
+}
+
 TEST(Hardware, TotalThrustBudgetScalesCommands) {
     const FossenModel model = FossenModel::load(TALOS_VEHICLE, simModelWithHardware());
     const double max_force = YAML::LoadFile(TALOS_MODEL_SIM)["thruster_dynamics"]["forward_max_force"].as<double>();

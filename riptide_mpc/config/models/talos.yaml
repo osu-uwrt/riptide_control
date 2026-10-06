@@ -163,5 +163,9 @@ thruster_efficiencies:
 hardware:
   can_interface: can0
   total_thrust_limit: 73.0
-  force_to_rpm_positive: [-475.886186, 32.327429, -324.744664, 1443.832105]
-  force_to_rpm_negative: [257.460623, 42.948545, -24.402056, -986.338071]
+  # Propeller law |F| = K_T * water_density * D^4 * (rpm/60)^2 with K_T = a + b*rpm, [a, b] per direction.
+  # Linear fit of K_T to the Blue Robotics T200 bollard data (all 10-20 V sheets, rpm and force columns):
+  # https://cad.bluerobotics.com/T200-Public-Performance-Data-10-20V-September-2019.xlsx
+  propeller_diameter: 0.076
+  thrust_coefficient_forward: [0.3964, 1.48e-5]
+  thrust_coefficient_reverse: [0.3114, 1.25e-5]

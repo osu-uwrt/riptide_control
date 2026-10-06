@@ -75,8 +75,7 @@ if(BUILD_TESTING)
       # config/models/talos.yaml) must not change test results.
       TALOS_VEHICLE="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/talos_vehicle.yaml"
       TALOS_HYDRO="${CMAKE_CURRENT_SOURCE_DIR}/config/models/talos_sim.yaml"
-      TALOS_MODEL_SIM="${CMAKE_CURRENT_SOURCE_DIR}/config/models/talos_sim.yaml"
-      TALOS_MODEL_UNTUNED="${CMAKE_CURRENT_SOURCE_DIR}/config/models/talos_untuned.yaml")
+      TALOS_MODEL_SIM="${CMAKE_CURRENT_SOURCE_DIR}/config/models/talos_sim.yaml")
   endforeach()
 
   # The dynamics are a copy of the simulator's; when c_simulator is installed, prove
