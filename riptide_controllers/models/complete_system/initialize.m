@@ -11,7 +11,7 @@ nlobj.Model.IsContinuousTime = true;
 nlobj.Model.NumberOfParameters = 11;
 nlobj.Model.StateFcn = 'FossenStateFcn';
 nlobj.Weights.OutputVariables = ones(1, 13);
-nlobj.Optimization.CustomCostFcn = [];
+nlobj.Optimization.CustomCostFcn = 'FossenCostFunction';
 nlobj.Optimization.ReplaceStandardCost = false;
 
 end
