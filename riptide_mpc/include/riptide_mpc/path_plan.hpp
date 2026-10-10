@@ -43,6 +43,8 @@ struct PathOptions {
     double corner_radius = 0.3; // m; a sharp join is rounded off within this of the corner
     double lateral_accel = 0.3; // m/s^2; sideways acceleration allowed on arcs and rounded corners
     double kink_speed = 0.03;   // m/s; a join that cannot be rounded is crossed this slowly
+    double turn_drift = 0.05;   // m; a point this close is reached while turning in place, not by a line
+    double heading_blend = 0.3; // m of s; changes in the turn rate are spread over this (0: off)
 };
 
 // Where a reference is along a plan: distance s and its rates.
@@ -53,10 +55,13 @@ struct PathProgress {
 // A path as one curve parameterized by distance s: lines, arcs (spirals,
 // helices) and quadratic blends rounding off sharp joins. A rotation in place
 // counts as rotation * (linear_speed / angular_speed) metres of s, so turning
-// is progress too. The attitude is a function of s: yaw from the segment's
-// heading mode, roll and pitch blended between the points. A reference moves
-// along s with a jerk-limited profile that slows for curvature (lateral
-// acceleration), turn rate and joins, and stops exactly on the last point.
+// is progress too; a point within turn_drift is reached during such a turn.
+// The attitude is a function of s: yaw from the segment's heading mode,
+// averaged over heading_blend so the turn rate never steps, and roll and pitch
+// blended between the points. A reference moves along s with a jerk-limited
+// profile that keeps both the linear and the angular speed, acceleration and
+// jerk limits: it slows for curvature (lateral acceleration), turn rate and
+// joins, and stops exactly on the last point.
 class PathPlan {
   public:
     // From `start` (where the reference is) through `points`. Throws
@@ -98,7 +103,8 @@ class PathPlan {
   private:
     struct Piece {
         enum Kind { LINE, ARC, BEZIER, TURN } kind = LINE;
-        Vector3d a = Vector3d::Zero(), b = Vector3d::Zero(), c = Vector3d::Zero(); // LINE a->b, BEZIER, TURN at a
+        // LINE a->b, BEZIER, TURN drifting from a to b (within turn_drift) as it turns
+        Vector3d a = Vector3d::Zero(), b = Vector3d::Zero(), c = Vector3d::Zero();
         double cx = 0, cy = 0, phi0 = 0, sweep = 0, r0 = 0, r1 = 0, z0 = 0, z1 = 0; // ARC
         double t0 = 0, t1 = 1; // parameter range in use
         double s0 = 0, length = 0;
@@ -122,6 +128,7 @@ class PathPlan {
         int look_target = -1;              // PathPoint::look_target, if a LOOK_AT segment
         Vector3d look_at = Vector3d::Zero(); // the planned look point
         Quaterniond tilt0 = Quaterniond::Identity(), tilt1 = Quaterniond::Identity();
+        Vector3d tilt_rate = Vector3d::Zero(); // tilt0 -> tilt1 per metre of s, before the yaw
     };
     struct Sample {
         double s = 0;
@@ -134,12 +141,27 @@ class PathPlan {
 
     std::size_t pieceAt(double s, std::size_t begin, std::size_t end) const;
     void geometry(double s, std::size_t begin, std::size_t end, Vector3d &p, Vector3d &t, Vector3d &k) const;
-    double yaw(const Segment &g, double s) const;
+    // Position change per metre of s (unit tangent; a turn's drift).
+    Vector3d travel(const Piece &piece, double s) const;
+    double yaw(const Segment &g, double s) const; // the heading mode's yaw, before the blend and steady spin
+    // The blended yaw (unwrapped), and its first and second derivatives in s.
+    double heading(double s) const;
+    double headingRate(double s) const;
+    double headingBend(double s) const;
+    // Attitude rate per metre of s (world frame), using `segment`'s roll and pitch.
+    Vector3d attitudeRate(double s, std::size_t segment) const;
     std::size_t sampleAt(double s) const;
 
     std::vector<Piece> pieces_;
     std::vector<Segment> segments_;
     std::vector<Sample> samples_;
+    // Yaw before the blend at s = (i - yaw_half_) * yaw_step_, reflected about
+    // both ends, and its running integral; the blend averages it over
+    // +-yaw_half_ steps.
+    std::vector<double> yaw_, yaw_area_;
+    double yaw_step_ = 1;
+    int yaw_half_ = 0;
+    double end_scale_ = 1; // s per "metre" near the end: the arrival thresholds shrink by this
     double length_ = 0;
     bool follows_targets_ = false;
 };

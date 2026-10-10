@@ -65,8 +65,8 @@ void PathPlan::Piece::derivatives(double t, Vector3d &p, Vector3d &d1, Vector3d 
         d1 = 2 * (1 - t) * (b - a) + 2 * t * (c - b);
         d2 = 2 * (a - 2 * b + c);
         return;
-    case TURN:
-        p = a;
+    case TURN: // no tangent: turning in place (any drift is under turn_drift)
+        p = a + t * (b - a);
         d1.setZero();
         d2.setZero();
         return;
@@ -152,13 +152,14 @@ std::shared_ptr<const PathPlan> PathPlan::build(const Waypoint &start, const std
                                : std::atan2(q.position.y() - c.y(), q.position.x() - c.x()) - q.sweep;
             p.z0 = from.z();
             p.z1 = q.position.z();
-        } else if ((q.position - from).norm() > 1e-6) {
+        } else if ((q.position - from).norm() > std::max(o.turn_drift, 1e-6)) {
             p.kind = Piece::LINE;
             p.a = from;
             p.b = q.position;
-        } else {
+        } else { // e.g. a spin where odometry put the vehicle, a few mm from the reference
             p.kind = Piece::TURN;
             p.a = from;
+            p.b = q.position;
         }
         p.finalize();
         from = p.at(1); // an arc ends where its sweep takes it
@@ -224,7 +225,7 @@ std::shared_ptr<const PathPlan> PathPlan::build(const Waypoint &start, const std
         g.tilt0 = tilt_before;
         g.tilt1 = tilt(q.orientation);
         const bool in_place = g.last - g.first == 1 && plan->pieces_[g.first].kind == Piece::TURN;
-        const Vector3d here = plan->pieces_[g.first].kind == Piece::TURN ? plan->pieces_[g.first].a : Vector3d::Zero();
+        const Vector3d here = plan->pieces_[g.first].kind == Piece::TURN ? plan->pieces_[g.first].b : Vector3d::Zero();
         if (q.heading == PathHeading::WAYPOINT) {
             g.turn = wrap(twist(q.orientation) - yaw_before);
         } else if (in_place) { // nothing to face along; looking at a point still turns to it
@@ -238,7 +239,8 @@ std::shared_ptr<const PathPlan> PathPlan::build(const Waypoint &start, const std
         g.s0 = s;
         if (in_place) {
             Piece &p = plan->pieces_[g.first];
-            p.length = rho * (std::abs(g.turn) + std::abs(g.spin) + g.tilt0.angularDistance(g.tilt1));
+            p.length = std::max(rho * (std::abs(g.turn) + std::abs(g.spin) + g.tilt0.angularDistance(g.tilt1)),
+                                (p.b - p.a).norm());
             p.s0 = s;
             s += p.length;
         } else {
@@ -248,6 +250,8 @@ std::shared_ptr<const PathPlan> PathPlan::build(const Waypoint &start, const std
             }
         }
         g.s1 = s;
+        if (g.s1 > g.s0)
+            g.tilt_rate = quaternionLog(g.tilt1 * g.tilt0.conjugate()) / (g.s1 - g.s0);
         if (!g.linear) {
             const double len = g.s1 - g.s0;
             const int n = std::max(8, static_cast<int>(std::ceil(len / kYawStep)));
@@ -295,8 +299,42 @@ std::shared_ptr<const PathPlan> PathPlan::build(const Waypoint &start, const std
         }
     }
 
+    // Yaw on a grid along s, averaged over a heading_blend window: the turn rate
+    // per metre then changes gradually instead of stepping at the joins, so the
+    // angular acceleration stays bounded at any speed. Reflecting the yaw about
+    // each end (odd) keeps the start and end headings exact.
+    {
+        const int n = std::max(1, static_cast<int>(std::ceil(s / kYawStep)));
+        if (n > kMaxSamples)
+            throw std::invalid_argument("path too long");
+        const double h = s / n;
+        const int half = std::min(n, static_cast<int>(std::round(0.5 * std::max(o.heading_blend, 0.) / h)));
+        std::vector<double> raw(n + 1);
+        std::size_t i = 0;
+        for (int k = 0; k <= n; ++k) {
+            const double at = std::min(k * h, s);
+            while (i + 1 < plan->segments_.size() && at >= plan->segments_[i].s1)
+                ++i;
+            const Segment &g = plan->segments_[i];
+            raw[k] = plan->yaw(g, at) + g.phase0 + g.spin_rate * (at - g.s0);
+        }
+        plan->yaw_step_ = h;
+        plan->yaw_half_ = half;
+        plan->yaw_.resize(n + 2 * half + 1);
+        plan->yaw_area_.assign(plan->yaw_.size(), 0.);
+        for (int j = 0; j < static_cast<int>(plan->yaw_.size()); ++j) {
+            const int k = j - half;
+            plan->yaw_[j] = k < 0 ? 2 * raw[0] - raw[-k] : k > n ? 2 * raw[n] - raw[2 * n - k] : raw[k];
+            if (j > 0)
+                plan->yaw_area_[j] = plan->yaw_area_[j - 1] + h * (plan->yaw_[j - 1] + plan->yaw_[j]) / 2;
+        }
+    }
+    plan->end_scale_ = std::max(1., rho * plan->attitudeRate(s, plan->segments_.size() - 1).norm());
+
     // Speed limits sampled along s (both ends of every piece included, so a
-    // join appears twice: once for each side).
+    // join appears twice: once for each side). Along the path, rates scale by
+    // the travel per metre of s (linear) and the attitude rate per metre of s
+    // (angular), so each sample's s limits keep both sets of limits.
     auto &samples = plan->samples_;
     std::vector<std::size_t> first_sample(plan->pieces_.size());
     for (std::size_t j = 0; j < plan->pieces_.size(); ++j) {
@@ -310,38 +348,44 @@ std::shared_ptr<const PathPlan> PathPlan::build(const Waypoint &start, const std
             x.s = p.s0 + p.length * i / n;
             Vector3d t, curvature;
             plan->geometry(x.s, j, j + 1, x.position, t, curvature);
-            if (p.kind == Piece::TURN) {
-                x.linear_cap = kInf;
-                x.accel = m.linear_accel;
-                x.jerk = m.linear_jerk;
-            } else {
-                const AxisLimits l = linearLimitsAlong(m, t);
-                x.linear_cap = l.speed;
-                x.accel = l.accel;
-                x.jerk = l.jerk;
+            const Vector3d moved = plan->travel(p, x.s);
+            const double per_metre = moved.norm();
+            AxisLimits linear{kInf, kInf, kInf};
+            if (per_metre > 1e-12) {
+                const AxisLimits l = linearLimitsAlong(m, moved);
+                linear = {l.speed / per_metre, l.accel / per_metre, l.jerk / per_metre};
             }
-            const double h = 0.005, sp = std::min(s, x.s + h), sm = std::max(0., x.s - h);
-            const double density = plan->orientation(sp).angularDistance(plan->orientation(sm)) / (sp - sm);
-            x.angular_cap = density > 1e-6 ? m.angular_speed / density : kInf;
+            const double rate = plan->attitudeRate(x.s, p.segment).norm(), bend = std::abs(plan->headingBend(x.s));
+            x.linear_cap = linear.speed;
+            x.angular_cap = rate > 1e-9 ? m.angular_speed / rate : kInf;
             const double kappa = curvature.norm();
-            x.envelope = std::min({x.linear_cap, x.angular_cap, kappa > 1e-9 ? std::sqrt(o.lateral_accel / kappa) : kInf});
+            // A changing turn rate takes up to half the angular acceleration (bend * v^2) ...
+            x.envelope = std::min({x.linear_cap, x.angular_cap, kappa > 1e-9 ? std::sqrt(o.lateral_accel / kappa) : kInf,
+                                   bend > 1e-9 ? std::sqrt(m.angular_accel / (2 * bend)) : kInf});
+            // ... and speeding up or slowing down along s (rate * a) the rest.
+            const double spare = m.angular_accel - bend * x.envelope * x.envelope;
+            x.accel = std::min(linear.accel, rate > 1e-9 ? spare / rate : kInf);
+            x.jerk = std::min(linear.jerk, rate > 1e-9 ? m.angular_jerk / rate : kInf);
+            if (!std::isfinite(x.accel)) // neither moves nor turns: a zero-length piece
+                x.accel = m.linear_accel;
+            if (!std::isfinite(x.jerk))
+                x.jerk = m.linear_jerk;
             samples.push_back(x);
         }
     }
-    // Joins: a velocity jump of 2 v sin(turn/2) is held to the kink speed.
+    // Joins: a velocity jump of v * |change in travel per metre| (2 v sin(turn/2)
+    // at a corner, v from a line into a turn in place) is held to the kink
+    // speed, and an attitude rate jump (roll and pitch; the yaw is blended) to
+    // the kink speed's turn rate.
     for (std::size_t j = 0; j + 1 < plan->pieces_.size(); ++j) {
         const Piece &A = plan->pieces_[j], &B = plan->pieces_[j + 1];
         double cap = kInf;
-        if ((A.kind == Piece::TURN) != (B.kind == Piece::TURN)) {
-            cap = o.kink_speed;
-        } else if (A.kind != Piece::TURN) {
-            Vector3d p, ta, tb, d2;
-            A.derivatives(A.t1, p, ta, d2);
-            B.derivatives(B.t0, p, tb, d2);
-            const double half = std::acos(std::clamp(ta.normalized().dot(tb.normalized()), -1., 1.)) / 2;
-            if (std::sin(half) > 1e-9)
-                cap = o.kink_speed / (2 * std::sin(half));
-        }
+        const double jump = (plan->travel(A, B.s0) - plan->travel(B, B.s0)).norm();
+        if (jump > 1e-9)
+            cap = o.kink_speed / jump;
+        const double turn_jump = (plan->attitudeRate(B.s0, A.segment) - plan->attitudeRate(B.s0, B.segment)).norm();
+        if (turn_jump > 1e-9)
+            cap = std::min(cap, o.kink_speed / rho / turn_jump);
         for (std::size_t i : {first_sample[j + 1] - 1, first_sample[j + 1]})
             samples[i].envelope = std::min(samples[i].envelope, cap);
     }
@@ -421,8 +465,67 @@ Quaterniond PathPlan::orientation(double s) const {
     s = std::clamp(s, 0., length_);
     const Segment &g = segments_[segmentAt(s)];
     const double len = g.s1 - g.s0, u = len > 1e-12 ? std::clamp((s - g.s0) / len, 0., 1.) : 1.;
-    const double spin = g.phase0 + g.spin_rate * (s - g.s0);
-    return (yawRotation(yaw(g, s) + spin) * g.tilt0.slerp(u, g.tilt1)).normalized();
+    return (yawRotation(heading(s)) * g.tilt0.slerp(u, g.tilt1)).normalized();
+}
+
+Vector3d PathPlan::travel(const Piece &piece, double s) const {
+    if (piece.kind == Piece::TURN)
+        return piece.length > 0 ? Vector3d((piece.b - piece.a) / piece.length) : Vector3d::Zero();
+    Vector3d p, d1, d2;
+    piece.derivatives(piece.tAt(s - piece.s0), p, d1, d2);
+    const double speed = d1.norm();
+    return speed > 1e-12 ? Vector3d(d1 / speed) : Vector3d::Zero();
+}
+
+// The yaw grid: index i is s = (i - yaw_half_) * yaw_step_, linear in between.
+double PathPlan::heading(double s) const {
+    const auto area = [this](double at) { // integral of the yaw from the grid's start
+        const double u = at / yaw_step_ + yaw_half_;
+        const int i = std::clamp(static_cast<int>(std::floor(u)), 0, static_cast<int>(yaw_.size()) - 2);
+        const double f = u - i;
+        return yaw_area_[i] + yaw_step_ * f * (yaw_[i] + 0.5 * f * (yaw_[i + 1] - yaw_[i]));
+    };
+    s = std::clamp(s, 0., length_);
+    const double w = yaw_half_ * yaw_step_;
+    if (yaw_half_ == 0) {
+        const double u = s / yaw_step_;
+        const int i = std::clamp(static_cast<int>(std::floor(u)), 0, static_cast<int>(yaw_.size()) - 2);
+        return yaw_[i] + (u - i) * (yaw_[i + 1] - yaw_[i]);
+    }
+    return (area(s + w) - area(s - w)) / (2 * w);
+}
+
+double PathPlan::headingRate(double s) const {
+    const auto value = [this](double at) {
+        const double u = at / yaw_step_ + yaw_half_;
+        const int i = std::clamp(static_cast<int>(std::floor(u)), 0, static_cast<int>(yaw_.size()) - 2);
+        return yaw_[i] + (u - i) * (yaw_[i + 1] - yaw_[i]);
+    };
+    s = std::clamp(s, 0., length_);
+    const double w = yaw_half_ * yaw_step_;
+    if (yaw_half_ == 0) {
+        const int i = std::clamp(static_cast<int>(std::floor(s / yaw_step_)), 0, static_cast<int>(yaw_.size()) - 2);
+        return (yaw_[i + 1] - yaw_[i]) / yaw_step_;
+    }
+    return (value(s + w) - value(s - w)) / (2 * w);
+}
+
+double PathPlan::headingBend(double s) const {
+    if (yaw_half_ == 0) // the turn rate steps at the grid points: no bound
+        return 0;
+    const auto slope = [this](double at) {
+        const double u = at / yaw_step_ + yaw_half_;
+        const int i = std::clamp(static_cast<int>(std::floor(u)), 0, static_cast<int>(yaw_.size()) - 2);
+        return (yaw_[i + 1] - yaw_[i]) / yaw_step_;
+    };
+    s = std::clamp(s, 0., length_);
+    const double w = yaw_half_ * yaw_step_;
+    return (slope(s + w) - slope(s - w)) / (2 * w);
+}
+
+Vector3d PathPlan::attitudeRate(double s, std::size_t segment) const {
+    // orientation = yawRotation(heading) * tilt: the tilt's own rate turns with the heading.
+    return headingRate(s) * Vector3d::UnitZ() + yawRotation(heading(s)) * segments_[segment].tilt_rate;
 }
 
 std::size_t PathPlan::sampleAt(double s) const {
@@ -436,25 +539,28 @@ void PathPlan::step(PathProgress &p, double linear_scale, double angular_scale, 
     const int steps = static_cast<int>(std::ceil(dt / kSubstep - 1e-9));
     const double h = dt / std::max(steps, 1);
     for (int i = 0; i < steps; ++i) {
-        const double remaining = length_ - p.s;
-        if (remaining < 2e-4 && std::abs(p.v) < 2e-3 && std::abs(p.a) < 2e-2) {
+        const double remaining = length_ - p.s, e = end_scale_; // e: thresholds in s for a fast-turning end
+        if (remaining < 2e-4 / e && std::abs(p.v) < 2e-3 / e && std::abs(p.a) < 2e-2 / e) {
             p = {length_, 0, 0};
             return;
         }
         const std::size_t here = sampleAt(p.s);
-        const AxisLimits l{samples_[here].linear_cap, samples_[here].accel, samples_[here].jerk};
+        AxisLimits l{samples_[here].linear_cap, samples_[here].accel, samples_[here].jerk};
         double j;
         bool braking = false;
-        if (remaining < 2e-3 && std::abs(p.v) < 2e-2 && std::abs(p.a) < 1e-1) { // capture onto the end
+        if (remaining < 2e-3 / e && std::abs(p.v) < 2e-2 / e && std::abs(p.a) < 1e-1 / e) { // capture onto the end
             const double c = kCapturePole;
             j = std::clamp(c * c * c * remaining - 3 * c * c * p.v - 3 * c * p.a, -l.jerk, l.jerk);
         } else {
-            // Cruise at what the path allows a little ahead (the accel ramp's worth).
+            // Cruise at what the path allows a little ahead (the accel ramp's worth),
+            // within the tightest acceleration and jerk limits on the way there.
             const double look = p.s + std::max(p.v, 0.) * (l.accel / l.jerk + h);
             double target = 1e3;
             for (std::size_t k = here; k < samples_.size(); ++k) {
                 const Sample &x = samples_[k];
                 target = std::min({target, x.envelope, linear_scale * x.linear_cap, angular_scale * x.angular_cap});
+                l.accel = std::min(l.accel, x.accel);
+                l.jerk = std::min(l.jerk, x.jerk);
                 if (x.s > look)
                     break;
             }
@@ -467,7 +573,7 @@ void PathPlan::step(PathProgress &p, double linear_scale, double angular_scale, 
             }
         }
         double d = advance(p.v, p.a, j, h);
-        if (p.v < 0 && (braking || remaining > 2e-3)) { // never back up along the path
+        if (p.v < 0 && (braking || remaining > 2e-3 / e)) { // never back up along the path
             p.v = p.a = 0;
             d = std::max(d, 0.);
         }
@@ -479,15 +585,12 @@ void PathPlan::pose(const PathProgress &p, MotionProfile &out) const {
     const double s = std::clamp(p.s, 0., length_);
     Vector3d t, k;
     geometry(s, 0, pieces_.size(), out.position, t, k);
-    out.velocity = t * p.v;
-    out.acceleration = t * p.a + k * p.v * p.v;
+    const Vector3d moved = travel(pieces_[pieceAt(s, 0, pieces_.size())], s);
+    out.velocity = moved * p.v;
+    out.acceleration = moved * p.a + k * p.v * p.v;
     out.orientation = orientation(s);
-    // Attitude rate per metre of s (world frame), and its change, by differences.
-    const auto rate = [this](double at) {
-        const double h = 0.005, sp = std::min(length_, at + h), sm = std::max(0., at - h);
-        return sp > sm ? Vector3d(quaternionLog(orientation(sp) * orientation(sm).conjugate()) / (sp - sm))
-                       : Vector3d::Zero();
-    };
+    // Attitude rate per metre of s (world frame), and its change by differences.
+    const auto rate = [this](double at) { return attitudeRate(at, segmentAt(at)); };
     const Vector3d w = rate(s);
     const double h = 0.02, sp = std::min(length_, s + h), sm = std::max(0., s - h);
     const Vector3d w_dot = sp > sm ? Vector3d((rate(sp) - rate(sm)) / (sp - sm)) : Vector3d::Zero();

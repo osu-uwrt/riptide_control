@@ -83,6 +83,10 @@
       corner_radius: 0.3        # m
       lateral_accel: 0.3        # m/s^2; sideways acceleration on arcs and rounded corners
       kink_speed: 0.03          # m/s; joins that cannot be rounded (reversals) are crossed this slowly
+      turn_drift: 0.05          # m; a point this close is reached while turning in place (e.g. a spin at the
+                                #    odometry position, a few mm from the reference), not by a line
+      heading_blend: 0.3        # m of path; changes in the turn rate are spread over this so the
+                                #    angular acceleration limit holds at any speed (0: off)
       success_trust: 0.8        # result once trust (below) reaches this on the last waypoint
       progress_timeout: 10.0    # s without 5 cm of progress -> PROGRESS_FAIL
     trust:

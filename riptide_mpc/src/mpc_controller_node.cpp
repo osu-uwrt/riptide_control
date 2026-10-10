@@ -504,6 +504,8 @@ class MpcControllerNode : public rclcpp::Node {
         path_options_.corner_radius = declare_parameter("path.corner_radius", path_options_.corner_radius);
         path_options_.lateral_accel = declare_parameter("path.lateral_accel", path_options_.lateral_accel);
         path_options_.kink_speed = declare_parameter("path.kink_speed", path_options_.kink_speed);
+        path_options_.turn_drift = declare_parameter("path.turn_drift", path_options_.turn_drift);
+        path_options_.heading_blend = declare_parameter("path.heading_blend", path_options_.heading_blend);
         path_success_trust_ = declare_parameter("path.success_trust", 0.8);
         path_progress_timeout_ = declare_parameter("path.progress_timeout", 10.0);
         // Also done once the reference has arrived and the vehicle is this close

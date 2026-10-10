@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <vector>
 
 using namespace riptide_mpc;
 
@@ -59,7 +60,8 @@ std::shared_ptr<const PathPlan> plan(const Vector3d &from, double from_yaw, cons
 
 // Flies the reference along a plan and records what it did.
 struct Flight {
-    double time = 0, max_speed = 0, max_lateral = 0, max_rate = 0;
+    double time = 0, max_speed = 0, max_lateral = 0, max_rate = 0, max_angular_accel = 0;
+    std::vector<double> yaw_rates;
     bool ended = false;
 };
 
@@ -68,9 +70,14 @@ Flight fly(const PathPlan &p, double timeout = 200) {
     PathProgress progress;
     MotionProfile pose;
     const double dt = 0.01;
+    Vector3d last_rate = Vector3d::Zero();
     for (; f.time < timeout && !p.atEnd(progress); f.time += dt) {
         p.step(progress, 1, 1, dt);
         p.pose(progress, pose);
+        if (!p.atEnd(progress)) // the last step snaps onto the end
+            f.max_angular_accel = std::max(f.max_angular_accel, (pose.angular_velocity - last_rate).norm() / dt);
+        last_rate = pose.angular_velocity;
+        f.yaw_rates.push_back(pose.angular_velocity.z());
         const double speed = pose.velocity.norm();
         f.max_speed = std::max(f.max_speed, speed);
         if (speed > 1e-6) {
@@ -165,7 +172,8 @@ TEST(PathPlan, LookAtFacesTheCenterAroundAnArc) {
     for (double s = 0; s <= p->length(); s += 0.01) {
         const Vector3d to = -p->position(s);
         const double error = std::abs(wrap(yawOf(p->orientation(s)) - std::atan2(to.y(), to.x())));
-        if (s > 1.5 * M_PI * limits().linear_speed / limits().angular_speed + 1e-6) // past the turn round
+        // past the turn round, and the heading blend out of it
+        if (s > 1.5 * M_PI * limits().linear_speed / limits().angular_speed + PathOptions().heading_blend / 2 + 1e-6)
             worst = std::max(worst, error);
     }
     const Flight f = fly(*p);
@@ -233,7 +241,7 @@ TEST(PathPlan, LookYawFacesAMovedTarget) {
     const Vector3d moved(0.3, 0.5, 0);
     double worst = 0;
     const double end = p->project(Vector3d(1.5, 0, 0), p->length() / 2, p->length());
-    for (double s = 0; s < end - 1e-3; s += 0.01) {
+    for (double s = 0; s < end - PathOptions().heading_blend / 2; s += 0.01) { // before blending into the next leg
         const Vector3d to = moved - p->position(s);
         worst = std::max(worst, std::abs(wrap(yawOf(p->orientation(s)) + p->lookYaw(s, {moved}) - std::atan2(to.y(), to.x()))));
         EXPECT_EQ(p->lookYaw(s, {Vector3d::Zero()}), 0.); // not moved: as planned
@@ -280,3 +288,73 @@ TEST(PathPlan, SteadySpinIsConstantAcrossSegments) {
     EXPECT_LT(p->end().orientation.angularDistance(yaw(0)), 1e-9);
     EXPECT_LT(f.max_rate, limits().angular_speed * 1.1);
 }
+
+// Spinning where odometry put the vehicle: the path starts at the reference, a
+// little away. Old or new style (quarter-turn waypoints, or one point with spin),
+// it is one fluid turn in place within the angular limits, ending on the point.
+TEST(PathPlan, SpinNearTheStartIsOneFluidTurn) {
+    const double rho = limits().linear_speed / limits().angular_speed;
+    for (const double gap : {0., 1e-5, 3e-3, 0.03}) {
+        for (const bool quarters : {true, false}) {
+            std::vector<PathPoint> points;
+            if (quarters) {
+                for (int i = 1; i <= 8; ++i)
+                    points.push_back(line(Vector3d(0, 0, -1), i * M_PI / 2));
+            } else {
+                points.push_back(line(Vector3d(0, 0, -1)));
+                points.back().spin = 4 * M_PI;
+            }
+            const auto p = plan(Vector3d(gap, 0, -1), 0, points);
+            const Flight f = fly(*p);
+            std::size_t first = f.yaw_rates.size(), last = 0;
+            for (std::size_t i = 0; i < f.yaw_rates.size(); ++i)
+                if (f.yaw_rates[i] > 0.95 * limits().angular_speed) {
+                    first = std::min(first, i);
+                    last = i;
+                }
+            double dip = 1e9;
+            for (std::size_t i = first; i <= last && i < f.yaw_rates.size(); ++i)
+                dip = std::min(dip, f.yaw_rates[i]);
+            std::printf("gap %.0e m, %s: %.2f s, peak rate %.3f rad/s, lowest at speed %.3f, peak accel %.3f rad/s^2\n", gap,
+                        quarters ? "8 quarter turns" : "spin=2 turns", f.time, f.max_rate, dip, f.max_angular_accel);
+            EXPECT_TRUE(f.ended);
+            EXPECT_NEAR(p->length(), rho * 4 * M_PI, 1e-6); // turning is the progress
+            EXPECT_LT((p->end().position - Vector3d(0, 0, -1)).norm(), 1e-9);
+            EXPECT_LT(p->end().orientation.angularDistance(yaw(0)), 1e-9);
+            EXPECT_LT(f.max_rate, limits().angular_speed * 1.01);
+            EXPECT_LT(f.max_angular_accel, limits().angular_accel * 1.05);
+            EXPECT_GT(dip, 0.9 * limits().angular_speed); // no stop after the first quarter
+        }
+    }
+}
+
+// A short leg that turns a lot: the turn's acceleration, not just its rate,
+// keeps the angular limits (the linear limits alone allowed several times more).
+TEST(PathPlan, ShortTurningLegsKeepTheAngularLimits) {
+    for (const double leg : {0.06, 0.1, 0.3, 1.0}) {
+        for (const double turn : {M_PI / 2, 0.999 * M_PI}) {
+            const auto p = plan(Vector3d::Zero(), 0, {line(Vector3d(leg, 0, 0), turn)});
+            const Flight f = fly(*p);
+            std::printf("%.0f deg over %.2f m: %.2f s, peak rate %.3f rad/s, peak accel %.3f rad/s^2\n",
+                        turn * 180 / M_PI, leg, f.time, f.max_rate, f.max_angular_accel);
+            EXPECT_TRUE(f.ended);
+            EXPECT_LT(f.max_rate, limits().angular_speed * 1.01);
+            EXPECT_LT(f.max_angular_accel, limits().angular_accel * 1.05);
+            EXPECT_LT(p->end().orientation.angularDistance(yaw(turn)), 1e-9);
+        }
+    }
+}
+
+// The turn rate per metre changes at a waypoint (turning leg, then a straight
+// one). The heading blends across it instead of the rate stepping at speed.
+TEST(PathPlan, TurnRateDoesNotStepAtWaypoints) {
+    const auto p = plan(Vector3d::Zero(), 0, {line(Vector3d(3, 0, 0), M_PI / 2), line(Vector3d(6, 0, 0), M_PI / 2)});
+    const Flight f = fly(*p);
+    std::printf("turning leg into a straight one: %.2f s, peak rate %.3f rad/s, peak accel %.3f rad/s^2\n", f.time,
+                f.max_rate, f.max_angular_accel);
+    EXPECT_TRUE(f.ended);
+    EXPECT_LT(f.max_angular_accel, limits().angular_accel * 1.05);
+    EXPECT_LT(p->end().orientation.angularDistance(yaw(M_PI / 2)), 1e-9);
+    EXPECT_LT(std::abs(wrap(yawOf(p->orientation(3)) - M_PI / 2)), 0.05); // close to the waypoint's yaw there
+}
+
