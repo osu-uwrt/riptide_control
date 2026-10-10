@@ -1,15 +1,16 @@
-# Untuned prior for pool identification: everything else (rigid inertia, buoyancy radii, thruster dynamics,
-# limits, hardware thrust model) is talos.yaml's. What pool_identify learns is zeroed: diagonal added mass and
-# linear/quadratic drag on all six axes, COB at the COM, and buoyancy neutral (displaced volume = mass 32.444 kg
-# from riptide_descriptions talos.yaml / water_density; 0 would sink the vehicle). Per-thruster scales stay 1.
+# Untuned prior for pool identification: everything else (body, rigid inertia, buoyancy radii, thruster
+# dynamics, limits, hardware thrust model) is talos.yaml's. What pool_identify learns is zeroed: diagonal added
+# mass and linear/quadratic drag on all six axes, COB at the COM, and buoyancy neutral (displaced volume =
+# mass / water_density; 0 would sink the vehicle). Per-thruster scales stay 1.
 # Fly it with mpc_model:=talos_untuned and run pool_identify with model:=talos_untuned. Keep it in step with
 # talos.yaml when the non-identified parts change.
-schema_version: 1
 robot: talos
-parameter_status: unvalidated_prior
-provenance: 'Untuned prior for pool identification: talos.yaml with everything pool_identify learns zeroed (diagonal added
-  mass, linear and quadratic drag on all six axes; COB at the COM) and neutral buoyancy (displaced volume = mass / water_density).'
-rigid_body_inertia3x3: [1.8429, 0.0496, 0.0945, 0.0496, 1.0051, -0.0083, 0.0945, -0.0083, 1.8607]
+mass: 34.084
+com: [-0.150, 0.041, -0.016]
+rigid_body_inertia3x3:
+- [1.8429, 0.0496, 0.0945]
+- [0.0496, 1.0051, -0.0083]
+- [0.0945, -0.0083, 1.8607]
 added_mass6x6:
 - [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 - [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -27,7 +28,7 @@ linear_damping6x6:
 quadratic_damping: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 damping_center_relative: [0.0, 0.0, 0.0]
 water_density: 998.2
-displaced_volume: 0.032502505
+displaced_volume: 0.03414546183129633
 cob_relative: [0.0, 0.0, 0.0]
 buoyancy_radii: [0.175, 0.415, 0.275]
 water_level: 0.0

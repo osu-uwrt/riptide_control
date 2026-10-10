@@ -125,7 +125,7 @@ Reference poseStep(const Rig &rig) {
 } // namespace
 
 TEST(SensorMounts, MatchSimulatorConvention) {
-    const SensorMounts m = SensorMounts::load(TALOS_VEHICLE);
+    const SensorMounts m = SensorMounts::load(TALOS_VEHICLE, talos().com());
     EXPECT_LT(angleBetween(m.imu, mountRotation("imu")), 1e-12);
     EXPECT_LT(angleBetween(m.dvl, mountRotation("dvl")), 1e-12);
     EXPECT_NEAR((m.fog_axis - Vector3d::UnitZ()).norm(), 0, 1e-12);
@@ -153,7 +153,7 @@ TEST(StateEstimator, TiltCorrectionKeepsHeading) {
 
 TEST(StateEstimator, TracksTruthDespiteLaggingEkfRates) {
     Rig rig;
-    StateEstimator est(talos(), SensorMounts::load(TALOS_VEHICLE), EstimatorSettings());
+    StateEstimator est(talos(), SensorMounts::load(TALOS_VEHICLE, talos().com()), EstimatorSettings());
     MpcController mpc(talos(), MpcSettings());
     rig.step(est, 0); // first EKF message seeds the estimate
     ASSERT_TRUE(est.initialized());
@@ -173,7 +173,7 @@ TEST(StateEstimator, TracksTruthDespiteLaggingEkfRates) {
 
 TEST(StateEstimator, FallsBackToEkfVelocityWhenDvlDrops) {
     Rig rig;
-    StateEstimator est(talos(), SensorMounts::load(TALOS_VEHICLE), EstimatorSettings());
+    StateEstimator est(talos(), SensorMounts::load(TALOS_VEHICLE, talos().com()), EstimatorSettings());
     MpcController mpc(talos(), MpcSettings());
     rig.step(est, 0);
     rig.dvl_enabled = false; // lost bottom lock for the whole run

@@ -40,10 +40,14 @@ struct SimRig {
     SimRig(const std::string &vehicle_yaml, const std::string &plant_hydro, const std::string &model_hydro,
            const MpcSettings &mpc_settings = MpcSettings(), const EstimatorSettings &estimator_settings = {},
            const Vector3d &start = Vector3d(0, 0, -2))
-        : plant(FossenModel::load(vehicle_yaml, plant_hydro)), plant_actuator(plant.makeActuator()),
-          mounts(SensorMounts::load(vehicle_yaml)),
-          estimator(FossenModel::load(vehicle_yaml, model_hydro), mounts, estimator_settings),
-          mpc(FossenModel::load(vehicle_yaml, model_hydro), mpc_settings) {
+        : SimRig(vehicle_yaml, FossenModel::load(vehicle_yaml, plant_hydro), FossenModel::load(vehicle_yaml, model_hydro),
+                 mpc_settings, estimator_settings, start) {}
+    // `mounts` are the plant's (sensor synthesis); the estimator takes them about its own model's COM.
+    SimRig(const std::string &vehicle_yaml, const FossenModel &plant_model, const FossenModel &model,
+           const MpcSettings &mpc_settings = MpcSettings(), const EstimatorSettings &estimator_settings = {},
+           const Vector3d &start = Vector3d(0, 0, -2))
+        : plant(plant_model), plant_actuator(plant.makeActuator()), mounts(SensorMounts::load(vehicle_yaml, plant.com())),
+          estimator(model, SensorMounts::load(vehicle_yaml, model.com()), estimator_settings), mpc(model, mpc_settings) {
         x = plant.fromBaseLink(start, Quaterniond::Identity(), Vector3d::Zero(), Vector3d::Zero());
         stepPlant(); // first EKF message seeds the estimate
     }

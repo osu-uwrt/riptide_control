@@ -40,6 +40,9 @@ struct HardwareConfig {
 // hydrodynamics YAML) and the simulator's own MarineDynamics library. Every
 // function here mirrors c_simulator's Robot/physics loop so that, in simulation,
 // the model and the plant are the same equations with the same coefficients.
+// One extension: the hydrodynamics (model) file may give its own `mass` and `com`
+// (vehicle config frame), which then replace the vehicle config's. Thruster and
+// sensor poses always come from the vehicle config.
 //
 // State13d is the simulator state: [COM position (world), q_wxyz (body->world),
 // body linear velocity at COM, body angular velocity]. Thruster forces are the
@@ -66,6 +69,10 @@ class FossenModel {
     }
     double mass() const {
         return mass_;
+    }
+    // COM in the vehicle config's frame: the body frame origin, which thruster and sensor positions are taken from.
+    const Vector3d &com() const {
+        return com_;
     }
     const HardwareConfig &hardware() const {
         return hardware_;
@@ -126,6 +133,7 @@ class FossenModel {
     MatrixXd thruster_matrix_;
     std::vector<Vector3d> positions_, directions_;
     std::vector<ThrusterParameters> actuators_;
+    Vector3d com_ = Vector3d::Zero();
     Vector3d base_link_offset_ = Vector3d::Zero();
     Vector3d water_current_ = Vector3d::Zero();
     Vector6d disturbance_ = Vector6d::Zero();
@@ -133,6 +141,8 @@ class FossenModel {
     double mass_ = 1., propeller_radius_ = .05, command_timeout_ = .5;
 };
 
+// A 3x3 matrix from YAML: three rows, or nine values row-major.
+Eigen::Matrix3d matrix3(const YAML::Node &node, const char *name);
 // tf2::Quaternion::setRPY convention, as used by the simulator for every mounting pose.
 Quaterniond rpyToQuaternion(double roll, double pitch, double yaw);
 Quaterniond quaternionExp(const Vector3d &rotation_vector);

@@ -500,7 +500,7 @@ class PoolIdentifyNode : public rclcpp::Node {
     // The prior (model_path_ with vehicle_): the recorder's thrust model, the fit's starting point.
     void loadModel() {
         const FossenModel model = FossenModel::load(vehicle_, model_path_);
-        recorder_.emplace(model, SensorMounts::load(vehicle_));
+        recorder_.emplace(model, SensorMounts::load(vehicle_, model.com()));
         thruster_matrix_ = model.thrusterMatrix();
         null_space_ = ident::nullSpacePatterns(thruster_matrix_);
         thrusters_ = model.thrusterCount();
@@ -532,16 +532,12 @@ class PoolIdentifyNode : public rclcpp::Node {
         const double t = now_s();
         if (recorder_->recording())
             recorder_->end(t);
-        const YAML::Node prior = YAML::LoadFile(current_model_);
-        const double mass = YAML::LoadFile(vehicle_)["mass"].as<double>();
+        const YAML::Node prior = ident::withBody(YAML::LoadFile(current_model_), YAML::LoadFile(vehicle_));
+        const double mass = prior["mass"].as<double>();
         const auto result = ident::fit(prior, mass, recorder_->samples(), recorder_->segments(), thruster_matrix_,
                                        YAML::LoadFile(vehicle_));
         const std::string path = dir_ + "/model_iter" + std::to_string(iteration_ + 1) + ".yaml";
-        std::ofstream(path) << ident::identifiedModel(prior, result,
-                                                      "pool identification " + stamp_ + " iteration " +
-                                                          std::to_string(iteration_ + 1) + " from " + current_model_,
-                                                      YAML::LoadFile(model_path_))
-                            << "\n";
+        std::ofstream(path) << ident::identifiedModel(prior, result, YAML::LoadFile(model_path_)) << "\n";
         YAML::Node entry;
         entry["iteration"] = iteration_ + 1;
         entry["flown_with"] = current_model_;
@@ -688,8 +684,8 @@ class PoolIdentifyNode : public rclcpp::Node {
         }
         const std::string dir = dir_;
         ident::writeRecording(dir, recorder_->samples(), recorder_->segments());
-        const YAML::Node prior = YAML::LoadFile(current_model_);
-        const double mass = YAML::LoadFile(vehicle_)["mass"].as<double>();
+        const YAML::Node prior = ident::withBody(YAML::LoadFile(current_model_), YAML::LoadFile(vehicle_));
+        const double mass = prior["mass"].as<double>();
         const auto result = ident::fit(prior, mass, recorder_->samples(), recorder_->segments(), thruster_matrix_,
                                        YAML::LoadFile(vehicle_));
         YAML::Node report = ident::report(prior, result);
@@ -699,9 +695,7 @@ class PoolIdentifyNode : public rclcpp::Node {
         report["mpc_model_loaded"] = current_model_;
         std::ofstream(dir + "/report.yaml") << report << "\n";
         std::ofstream(dir + "/model_identified.yaml")
-            << ident::identifiedModel(prior, result, "pool identification " + stamp_ + " from " + current_model_,
-                                      YAML::LoadFile(model_path_))
-            << "\n";
+            << ident::identifiedModel(prior, result, YAML::LoadFile(model_path_)) << "\n";
         std::ofstream(dir + "/iterations.yaml") << iterations_ << "\n";
         RCLCPP_WARN(get_logger(), "Saved %zu samples to %s\n%s", recorder_->samples().size(), dir.c_str(),
                     YAML::Dump(report).c_str());

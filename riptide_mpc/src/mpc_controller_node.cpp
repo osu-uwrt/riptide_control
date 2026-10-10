@@ -110,6 +110,20 @@ class MpcControllerNode : public rclcpp::Node {
 
         FossenModel model = FossenModel::load(vehicle, hydro);
         vehicle_path_ = vehicle;
+        {
+            const Vector3d &c = model.com();
+            if (YAML::LoadFile(hydro)["mass"]) {
+                const YAML::Node v = YAML::LoadFile(vehicle);
+                const auto vc = v["com"].as<std::vector<double>>();
+                RCLCPP_INFO(get_logger(),
+                            "MPC body from the model file: mass %.3f kg, COM [%.3f, %.3f, %.3f] (vehicle config: "
+                            "%.3f kg, [%.3f, %.3f, %.3f])",
+                            model.mass(), c.x(), c.y(), c.z(), v["mass"].as<double>(), vc[0], vc[1], vc[2]);
+            } else {
+                RCLCPP_INFO(get_logger(), "MPC body from the vehicle config: mass %.3f kg, COM [%.3f, %.3f, %.3f]",
+                            model.mass(), c.x(), c.y(), c.z());
+            }
+        }
         // Thruster model (thruster_dynamics + thruster_efficiencies of the model file),
         // live-settable for thruster_sweep. Defaults are the file's values.
         thruster_file_ = model.actuatorParameters();
@@ -181,6 +195,14 @@ class MpcControllerNode : public rclcpp::Node {
                         rcl_interfaces::msg::SetParametersResult r;
                         r.successful = false;
                         r.reason = "hydrodynamics_config " + p.as_string() + ": " + e.what();
+                        return r;
+                    }
+                    // The estimate and the sensor lever arms are about the COM: a different one needs a restart.
+                    if ((new_model->com() - controller_->model().com()).norm() > 1e-9) {
+                        rcl_interfaces::msg::SetParametersResult r;
+                        r.successful = false;
+                        r.reason = "hydrodynamics_config " + p.as_string() +
+                                   " has a different COM: restart the MPC with it instead of swapping live";
                         return r;
                     }
                     continue;
@@ -411,7 +433,7 @@ class MpcControllerNode : public rclcpp::Node {
             e.max_disturbance_torque = declare_parameter("estimator.max_disturbance_torque", e.max_disturbance_torque);
             e.disturbance_gate_speed = declare_parameter("estimator.disturbance_gate_speed", e.disturbance_gate_speed);
             e.disturbance_gate_rate = declare_parameter("estimator.disturbance_gate_rate", e.disturbance_gate_rate);
-            mounts_ = SensorMounts::load(vehicle);
+            mounts_ = SensorMounts::load(vehicle, model.com());
             estimator_.emplace(model, mounts_, e);
         }
         RCLCPP_INFO(get_logger(), "State feedback: %s",

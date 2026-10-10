@@ -14,7 +14,8 @@ struct SensorMounts {
     Vector3d dvl_position = Vector3d::Zero();  // DVL relative to the COM, body axes
     Vector3d fog_axis = Vector3d::UnitZ();     // FOG sensitive axis, body axes
 
-    static SensorMounts load(const std::string &vehicle_yaml);
+    // Positions relative to `com`: the model's (FossenModel::com()), which may differ from the vehicle config's.
+    static SensorMounts load(const std::string &vehicle_yaml, const Vector3d &com);
 };
 
 struct EstimatorSettings {

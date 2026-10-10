@@ -33,15 +33,14 @@ double headingError(const Quaterniond &to, const Quaterniond &from) {
 }
 } // namespace
 
-SensorMounts SensorMounts::load(const std::string &vehicle_yaml) {
+SensorMounts SensorMounts::load(const std::string &vehicle_yaml, const Vector3d &com) {
     const YAML::Node vehicle = YAML::LoadFile(vehicle_yaml);
-    const auto com = vehicle["com"].as<std::vector<double>>();
     SensorMounts m;
     // Same interpretation as c_simulator Robot::storeConfigData.
     m.imu = pose(vehicle["imu"]["pose"], "imu").orientation;
     const Pose dvl = pose(vehicle["dvl"]["pose"], "dvl");
     m.dvl = dvl.orientation;
-    m.dvl_position = dvl.position - Vector3d(com[0], com[1], com[2]);
+    m.dvl_position = dvl.position - com;
     if (vehicle["fog"])
         m.fog_axis = pose(vehicle["fog"]["pose"], "fog").orientation * Vector3d::UnitZ();
     return m;

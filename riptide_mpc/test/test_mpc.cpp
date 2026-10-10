@@ -87,6 +87,59 @@ TEST(FossenModel, LoadsSimulatorConfiguration) {
     EXPECT_TRUE((m.baseLinkVelocity(x) - Vector3d(0.1, 0.2, 0.3)).norm() < 1e-12);
 }
 
+// A model file with its own mass and com flies that body: weight, rigid mass, and every position taken from
+// the vehicle config's poses (thrusters, base_link) re-centered on that COM.
+TEST(FossenModel, ModelFileBodyReplacesTheVehicleConfigs) {
+    const YAML::Node vehicle = YAML::LoadFile(TALOS_VEHICLE);
+    YAML::Node hydro = YAML::Clone(YAML::LoadFile(TALOS_HYDRO));
+    hydro.remove("schema_version"); // optional
+    const FossenModel nominal = FossenModel::fromNodes(vehicle, hydro);
+    const Vector3d shift(0.01, -0.02, 0.005), com = nominal.com() + shift;
+    hydro["mass"] = nominal.mass() + 1.5;
+    hydro["com"] = std::vector<double>{com.x(), com.y(), com.z()};
+    const FossenModel m = FossenModel::fromNodes(vehicle, hydro);
+    EXPECT_DOUBLE_EQ(m.mass(), nominal.mass() + 1.5);
+    EXPECT_NEAR(m.dynamics().mass()(0, 0) - nominal.dynamics().mass()(0, 0), 1.5, 1e-12);
+    EXPECT_LT((m.com() - com).norm(), 1e-15);
+    EXPECT_LT((m.baseLinkOffset() - (nominal.baseLinkOffset() - shift)).norm(), 1e-12);
+    for (int i = 0; i < m.thrusterCount(); ++i) {
+        const Vector3d f = nominal.thrusterMatrix().col(i).head<3>();
+        EXPECT_LT((m.thrusterMatrix().col(i).head<3>() - f).norm(), 1e-12);
+        const Vector3d torque = nominal.thrusterMatrix().col(i).tail<3>() - shift.cross(f);
+        EXPECT_LT((m.thrusterMatrix().col(i).tail<3>() - torque).norm(), 1e-12) << "thruster " << i;
+    }
+    // At rest, level and submerged, the net heave force is buoyancy minus the model's weight.
+    const auto restingHeaveForce = [](const FossenModel &model) {
+        const State13d rest =
+            model.fromBaseLink(Vector3d(0, 0, -2), Quaterniond::Identity(), Vector3d::Zero(), Vector3d::Zero());
+        const Vector6d nu_dot = model.derivative(rest, VectorXd::Zero(model.thrusterCount())).segment<6>(7);
+        return (model.dynamics().mass() * nu_dot)[2];
+    };
+    EXPECT_NEAR(restingHeaveForce(m) - restingHeaveForce(nominal), -1.5 * 9.80665, 1e-9);
+
+    YAML::Node half = YAML::Clone(hydro);
+    half.remove("com");
+    EXPECT_THROW(FossenModel::fromNodes(vehicle, half), std::invalid_argument);
+}
+
+TEST(FossenModel, ReadsTheRigidInertiaAsRowsOrFlat) {
+    const YAML::Node vehicle = YAML::LoadFile(TALOS_VEHICLE);
+    YAML::Node hydro = YAML::Clone(YAML::LoadFile(TALOS_HYDRO));
+    const Eigen::Matrix3d I = matrix3(hydro["rigid_body_inertia3x3"], "rigid_body_inertia3x3");
+    YAML::Node rows, flat_list;
+    for (int r = 0; r < 3; ++r) {
+        rows.push_back(std::vector<double>{I(r, 0), I(r, 1), I(r, 2)});
+        for (int c = 0; c < 3; ++c)
+            flat_list.push_back(I(r, c));
+    }
+    hydro["rigid_body_inertia3x3"] = rows;
+    const FossenModel from_rows = FossenModel::fromNodes(vehicle, hydro);
+    hydro["rigid_body_inertia3x3"] = flat_list;
+    const FossenModel from_flat = FossenModel::fromNodes(vehicle, hydro);
+    EXPECT_EQ(from_rows.dynamics().mass(), talos().dynamics().mass());
+    EXPECT_EQ(from_flat.dynamics().mass(), talos().dynamics().mass());
+}
+
 TEST(FossenModel, OwnActuatorStepMatchesSimulatorActuator) {
     const FossenModel m = talos();
     auto actuator = m.makeActuator();

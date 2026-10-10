@@ -25,11 +25,7 @@ TEST(DynamicsParity, MarineDynamicsMatchesTheSimulator) {
         return m;
     };
     auto v3 = [](const YAML::Node &n) { return Eigen::Vector3d(n[0].as<double>(), n[1].as<double>(), n[2].as<double>()); };
-    const auto I = h["rigid_body_inertia3x3"].as<std::vector<double>>();
-    Eigen::Matrix3d inertia;
-    for (int i = 0; i < 9; ++i)
-        inertia(i / 3, i % 3) = I[i];
-    sim.configure(model.mass(), inertia, m6(h["added_mass6x6"]));
+    sim.configure(model.mass(), matrix3(h["rigid_body_inertia3x3"], "rigid_body_inertia3x3"), m6(h["added_mass6x6"]));
     const auto q = h["quadratic_damping"].as<std::vector<double>>();
     sim.configureDamping(m6(h["linear_damping6x6"]), c_simulator::Vector6d(Eigen::Map<const c_simulator::Vector6d>(q.data())), v3(h["damping_center_relative"]));
     sim.configureHydrostatics(h["water_density"].as<double>(), h["displaced_volume"].as<double>(), v3(h["cob_relative"]),

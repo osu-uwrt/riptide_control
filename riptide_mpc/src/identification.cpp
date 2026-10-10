@@ -40,8 +40,7 @@ void setEntry(YAML::Node m, int r, int c, double v) {
 double rigidInertia(const YAML::Node &prior, int dof, double mass) {
     if (dof < 3)
         return mass;
-    const auto I = prior["rigid_body_inertia3x3"].as<std::vector<double>>();
-    return I.at((dof - 3) * 4); // diagonal of the row-major 3x3
+    return matrix3(prior["rigid_body_inertia3x3"], "rigid_body_inertia3x3").diagonal()[dof - 3];
 }
 
 // Signed motion along a run's axis: v for linear axes, the rate for yaw.
@@ -1149,8 +1148,34 @@ Result fit(const YAML::Node &prior, double mass, const std::vector<Sample> &samp
     return result;
 }
 
-YAML::Node identifiedModel(const YAML::Node &prior_in, const Result &r, const std::string &provenance,
-                           const YAML::Node &thrust_base_in) {
+namespace {
+// [a, b, c] for every list of numbers (a matrix: one row per line), like the hand-written model files.
+void flowNumberLists(YAML::Node n) {
+    if (n.IsMap()) {
+        for (auto kv : n)
+            flowNumberLists(kv.second);
+    } else if (n.IsSequence()) {
+        if (std::all_of(n.begin(), n.end(), [](const YAML::Node &e) { return e.IsScalar(); }))
+            n.SetStyle(YAML::EmitterStyle::Flow);
+        else
+            for (auto e : n)
+                flowNumberLists(e);
+    }
+}
+} // namespace
+
+YAML::Node withBody(const YAML::Node &model, const YAML::Node &vehicle) {
+    if (model["mass"] || model["com"])
+        return YAML::Clone(model);
+    YAML::Node m;
+    m["mass"] = YAML::Clone(vehicle["mass"]);
+    m["com"] = YAML::Clone(vehicle["com"]);
+    for (const auto &kv : model)
+        m[kv.first.as<std::string>()] = YAML::Clone(kv.second);
+    return m;
+}
+
+YAML::Node identifiedModel(const YAML::Node &prior_in, const Result &r, const YAML::Node &thrust_base_in) {
     YAML::Node m = YAML::Clone(prior_in);
     if (r.statics.ok) {
         m["displaced_volume"] = r.statics.volume;
@@ -1188,8 +1213,9 @@ YAML::Node identifiedModel(const YAML::Node &prior_in, const Result &r, const st
             m["thruster_reverse_scales"] = reverse;
         }
     }
-    m["parameter_status"] = "pool_identified";
-    m["provenance"] = provenance;
+    for (const char *unused : {"schema_version", "parameter_status", "provenance"})
+        m.remove(unused);
+    flowNumberLists(m);
     return m;
 }
 

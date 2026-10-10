@@ -236,16 +236,19 @@ struct Result {
     ThrusterFit thrusters;
 };
 
-// `prior` is the MPC model file (hydrodynamics schema); `mass` from the vehicle file. `thruster_matrix`
+// `model` with the vehicle config's mass and com put in when it has no body of its own: the fit is paired with
+// that body, so the identified model must carry it.
+YAML::Node withBody(const YAML::Node &model, const YAML::Node &vehicle);
+// `prior` is the MPC model file (hydrodynamics schema); `mass` its body's (withBody). `thruster_matrix`
 // (6 x n, the model's) enables the per-thruster fit; the other fits then use the corrected thrust.
 // `vehicle` (the vehicle document) enables the release fit (it simulates the releases with the model).
 Result fit(const YAML::Node &prior, double mass, const std::vector<Sample> &samples,
            const std::vector<Segment> &segments, const MatrixXd &thruster_matrix = MatrixXd(),
            const YAML::Node &vehicle = YAML::Node());
-// Copy of `prior` with every accepted value replaced. Thruster gains are relative to the model the recording's
-// thrust was computed with (the Recorder's): pass it as `thrust_base` when that is not `prior`.
-YAML::Node identifiedModel(const YAML::Node &prior, const Result &result, const std::string &provenance,
-                           const YAML::Node &thrust_base = YAML::Node());
+// Copy of `prior` with every accepted value replaced, number lists written inline. Thruster gains are relative
+// to the model the recording's thrust was computed with (the Recorder's): pass it as `thrust_base` when that is
+// not `prior`.
+YAML::Node identifiedModel(const YAML::Node &prior, const Result &result, const YAML::Node &thrust_base = YAML::Node());
 YAML::Node report(const YAML::Node &prior, const Result &result);
 
 void writeRecording(const std::string &dir, const std::vector<Sample> &samples, const std::vector<Segment> &segments);

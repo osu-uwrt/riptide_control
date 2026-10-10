@@ -36,6 +36,23 @@ Matrix6d matrix6(const YAML::Node &n, const char *name) {
 
 } // namespace
 
+Eigen::Matrix3d matrix3(const YAML::Node &n, const char *name) {
+    Eigen::Matrix3d m;
+    if (n.size() == 9) {
+        for (int i = 0; i < 9; ++i)
+            m(i / 3, i % 3) = n[i].as<double>();
+    } else if (n.size() == 3) {
+        for (int r = 0; r < 3; ++r) {
+            if (n[r].size() != 3)
+                throw std::invalid_argument(std::string(name) + ": expected 3x3 matrix");
+            for (int c = 0; c < 3; ++c)
+                m(r, c) = n[r][c].as<double>();
+        }
+    } else
+        throw std::invalid_argument(std::string(name) + ": expected flat 9-element or nested 3x3 matrix");
+    return m;
+}
+
 Quaterniond rpyToQuaternion(double roll, double pitch, double yaw) {
     return (Eigen::AngleAxisd(yaw, Vector3d::UnitZ()) * Eigen::AngleAxisd(pitch, Vector3d::UnitY()) *
             Eigen::AngleAxisd(roll, Vector3d::UnitX()))
@@ -64,21 +81,19 @@ FossenModel FossenModel::load(const std::string &vehicle_yaml, const std::string
 }
 
 FossenModel FossenModel::fromNodes(const YAML::Node &vehicle, const YAML::Node &hydro) {
-    if (hydro["schema_version"].as<int>() != 1)
-        throw std::invalid_argument("Unsupported hydrodynamic schema");
-
     FossenModel model;
+    // The body (mass and COM) is the model file's when it gives one: its statics and inertia were identified
+    // around that body. Otherwise the vehicle config's, as the simulator does.
+    const bool own_body = hydro["mass"] || hydro["com"];
+    if (own_body && !(hydro["mass"] && hydro["com"]))
+        throw std::invalid_argument("The model file must give both mass and com, or neither");
+    const YAML::Node &body = own_body ? hydro : vehicle;
     // Robot::storeConfigData, line for line where it affects the dynamics.
-    model.mass_ = vehicle["mass"].as<double>();
-    const Vector3d com = vector3(vehicle["com"], "com");
-    const auto inertia = hydro["rigid_body_inertia3x3"].as<std::vector<double>>();
-    if (inertia.size() != 9)
-        throw std::invalid_argument("Expected row-major 3x3 rigid inertia");
-    Eigen::Matrix3d body_inertia;
-    for (int r = 0; r < 3; ++r)
-        for (int c = 0; c < 3; ++c)
-            body_inertia(r, c) = inertia[r * 3 + c];
-    model.dynamics_.configure(model.mass_, body_inertia, matrix6(hydro["added_mass6x6"], "added_mass6x6"));
+    model.mass_ = body["mass"].as<double>();
+    model.com_ = vector3(body["com"], "com");
+    const Vector3d &com = model.com_;
+    model.dynamics_.configure(model.mass_, matrix3(hydro["rigid_body_inertia3x3"], "rigid_body_inertia3x3"),
+                              matrix6(hydro["added_mass6x6"], "added_mass6x6"));
     const auto quadratic = hydro["quadratic_damping"].as<std::vector<double>>();
     if (quadratic.size() != 6)
         throw std::invalid_argument("Expected six quadratic damping coefficients");

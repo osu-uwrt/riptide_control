@@ -30,16 +30,15 @@ int main(int argc, char **argv) {
     std::vector<ident::Sample> samples;
     std::vector<ident::Segment> segments;
     ident::readRecording(dir, samples, segments);
-    const YAML::Node prior = YAML::LoadFile(model);
+    const YAML::Node prior = ident::withBody(YAML::LoadFile(model), YAML::LoadFile(vehicle));
     // The recording's per-thruster thrust was computed with the session's model; --model should be that one.
     const MatrixXd thruster_matrix = FossenModel::load(vehicle, model).thrusterMatrix();
     const auto result =
-        ident::fit(prior, YAML::LoadFile(vehicle)["mass"].as<double>(), samples, segments, thruster_matrix,
-                   YAML::LoadFile(vehicle));
+        ident::fit(prior, prior["mass"].as<double>(), samples, segments, thruster_matrix, YAML::LoadFile(vehicle));
     YAML::Node report = ident::report(prior, result);
     report["prior_model"] = model;
     std::ofstream(dir + "/report.yaml") << report << "\n";
-    std::ofstream(dir + "/model_identified.yaml") << ident::identifiedModel(prior, result, "refit of " + dir + " from " + model) << "\n";
+    std::ofstream(dir + "/model_identified.yaml") << ident::identifiedModel(prior, result) << "\n";
     std::printf("%s\n\nwrote %s/report.yaml and %s/model_identified.yaml\n", YAML::Dump(report).c_str(), dir.c_str(),
                 dir.c_str());
     return 0;

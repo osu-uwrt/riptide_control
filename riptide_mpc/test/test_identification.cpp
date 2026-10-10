@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
+#include <sstream>
 
 using namespace riptide_mpc;
 
@@ -44,7 +45,8 @@ ident::Result flyAndFit(const std::string &plant_path, const std::string &model_
                         const ident::SequenceSettings &settings = ident::SequenceSettings(),
                         const Vector3d &start = Vector3d(0, 0, -2)) {
     SimRig rig(TALOS_VEHICLE, plant_path, model_path, MpcSettings(), EstimatorSettings(), start);
-    ident::Recorder recorder(FossenModel::load(TALOS_VEHICLE, model_path), SensorMounts::load(TALOS_VEHICLE));
+    const FossenModel model = FossenModel::load(TALOS_VEHICLE, model_path);
+    ident::Recorder recorder(model, SensorMounts::load(TALOS_VEHICLE, model.com()));
     rig.hooks.command = [&](double t, const VectorXd &u) { recorder.command(t, u); };
     rig.hooks.fog = [&](double t, double r) { recorder.fogRate(t, r); };
     rig.hooks.imu_rate = [&](double t, const Vector3d &w) { recorder.imuRate(t, w); };
@@ -122,17 +124,43 @@ void expectRecovered(const ident::Result &result, const YAML::Node &truth, const
         const double true_drag = entry(truth["linear_damping6x6"], d, d) * v +
                                  truth["quadratic_damping"][d].as<double>() * v * v;
         EXPECT_NEAR((a.d1 * v + a.d2 * v * v) / true_drag, 1.0, 0.1) << "drag axis " << d;
-        const double rigid = d < 3 ? mass : prior["rigid_body_inertia3x3"][8].as<double>();
+        const double rigid = d < 3 ? mass : matrix3(prior["rigid_body_inertia3x3"], "rigid_body_inertia3x3")(2, 2);
         const double true_total = rigid + entry(truth["added_mass6x6"], d, d);
         EXPECT_NEAR(a.mass_total / true_total, 1.0, 0.15) << "inertia axis " << d;
     }
 
-    const YAML::Node model = ident::identifiedModel(prior, result, "test");
+    const YAML::Node model = ident::identifiedModel(prior, result);
     for (int i = 0; i < 3; ++i) // the identified model carries the fitted statics
         EXPECT_NEAR(model["cob_relative"][i].as<double>(), truth["cob_relative"][i].as<double>(), 0.002);
     const std::string model_path = testing::TempDir() + "/identified.yaml";
     std::ofstream(model_path) << model;
     EXPECT_NO_THROW(FossenModel::load(TALOS_VEHICLE, model_path)); // loadable by the MPC
+}
+
+// A prior without its own body is fitted with the vehicle config's, and the identified model keeps that body
+// even when the vehicle config changes later. Number lists are written inline.
+TEST(Identification, IdentifiedModelCarriesTheBodyItWasFittedWith) {
+    const YAML::Node vehicle = YAML::LoadFile(TALOS_VEHICLE);
+    const YAML::Node prior = ident::withBody(YAML::LoadFile(TALOS_MODEL_SIM), vehicle);
+    EXPECT_EQ(prior["mass"].as<double>(), vehicle["mass"].as<double>());
+    const YAML::Node model = ident::identifiedModel(prior, ident::Result());
+    const std::string path = testing::TempDir() + "/identified_body.yaml";
+    std::ofstream(path) << model;
+
+    YAML::Node changed = YAML::Clone(vehicle);
+    changed["mass"] = 40.0;
+    changed["com"] = std::vector<double>{0.0, 0.0, 0.0};
+    const FossenModel loaded = FossenModel::fromNodes(changed, YAML::LoadFile(path));
+    const FossenModel original = FossenModel::load(TALOS_VEHICLE, TALOS_MODEL_SIM);
+    EXPECT_EQ(loaded.mass(), original.mass());
+    EXPECT_EQ(loaded.com(), original.com());
+    EXPECT_LT((loaded.thrusterMatrix() - original.thrusterMatrix()).norm(), 1e-12);
+
+    std::stringstream text;
+    text << model;
+    EXPECT_NE(text.str().find("cob_relative: ["), std::string::npos) << text.str();
+    EXPECT_NE(text.str().find("- ["), std::string::npos) << text.str(); // matrix rows
+    EXPECT_EQ(text.str().find("provenance"), std::string::npos);
 }
 
 TEST(Identification, RecoversThePoolParametersFromTheSequence) {
@@ -228,7 +256,7 @@ TEST(Identification, IdentifiesEachThrusterAndTheReleases) {
         if (a.axis < 2)
             continue;
         const int d = a.axis;
-        const double rigid = d < 3 ? mass : prior["rigid_body_inertia3x3"][(d - 3) * 4].as<double>();
+        const double rigid = d < 3 ? mass : matrix3(prior["rigid_body_inertia3x3"], "rigid_body_inertia3x3")(d - 3, d - 3);
         EXPECT_TRUE(a.drag_ok) << "axis " << d << ": " << a.note;
         EXPECT_NEAR(a.d1 / entry(truth["linear_damping6x6"], d, d), 1.0, 0.2) << "linear damping axis " << d;
         // Inertia only where the releases determine it: a release barely accelerates in heave, and righting
@@ -242,7 +270,7 @@ TEST(Identification, IdentifiesEachThrusterAndTheReleases) {
               3); // heave (runs, release cross-check), roll and pitch (releases)
 
     // The identified model flies the plant's thrusters (relative to the pinned mean) and loads in the MPC.
-    const YAML::Node model = ident::identifiedModel(prior, result, "test");
+    const YAML::Node model = ident::identifiedModel(prior, result);
     const std::string model_path = testing::TempDir() + "/identified_thrusters.yaml";
     std::ofstream(model_path) << model;
     const FossenModel identified = FossenModel::load(TALOS_VEHICLE, model_path);
