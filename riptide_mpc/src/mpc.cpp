@@ -33,9 +33,11 @@ void MpcController::stepReference(StageReference &s, const Reference &r, double 
         // The governor's slowdown, as fractions of the configured cruise speeds.
         r.path->step(s.progress, m.linear_speed / settings_.motion.linear_speed,
                      m.angular_speed / settings_.motion.angular_speed, dt);
+        if (!r.frame_shifts.empty()) // carried along by its points' frames as a separate profile
+            s.shift.stepLinear(r.path->frameShift(s.progress.s, r.frame_shifts), settings_.frame_motion, dt);
         if (r.path->followsTargets()) // turns toward the moving look targets as a separate profile
-            s.look.stepAngular(Quaterniond(Eigen::AngleAxisd(r.path->lookYaw(s.progress.s, r.look_targets),
-                                                             Vector3d::UnitZ())),
+            s.look.stepAngular(Quaterniond(Eigen::AngleAxisd(
+                                   r.path->lookYaw(s.progress.s, r.look_targets, s.shift.position), Vector3d::UnitZ())),
                                m, dt);
         pathPose(s, *r.path);
         return;
@@ -70,10 +72,13 @@ void MpcController::stepReference(StageReference &s, const Reference &r, double 
     }
 }
 
-// The path's pose at s.progress, its attitude turned about world z by s.look
-// (the rates and their change carry over).
+// The path's pose at s.progress, moved by s.shift and its attitude turned about
+// world z by s.look (the rates and their change carry over).
 void MpcController::pathPose(StageReference &s, const PathPlan &path) const {
     path.pose(s.progress, s.pose);
+    s.pose.position += s.shift.position;
+    s.pose.velocity += s.shift.velocity;
+    s.pose.acceleration += s.shift.acceleration;
     if (!path.followsTargets())
         return;
     const Quaterniond &c = s.look.orientation;
@@ -102,10 +107,11 @@ void MpcController::seedReference(const State13d &x, const Reference &r) {
         if (r.path != target_.path) { // a new path starts from the profile, moving as it was
             live_.progress = {};
             live_.look = {};
+            live_.shift = {};
             live_.progress.v = std::max(0., r.path->tangent(0).dot(linear_seeded_ ? live_.pose.velocity : v_world));
         } else if (!linear_seeded_ || (live_.pose.position - p).norm() > settings_.max_reference_lag) {
             // Fallen too far behind: restart from the nearest point a little either side.
-            live_.progress.s = r.path->project(p, live_.progress.s, 2.0);
+            live_.progress.s = r.path->project(p - live_.shift.position, live_.progress.s, 2.0);
             live_.progress.v = std::max(0., r.path->tangent(live_.progress.s).dot(v_world));
             live_.progress.a = 0;
         }

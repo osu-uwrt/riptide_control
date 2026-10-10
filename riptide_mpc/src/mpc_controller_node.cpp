@@ -92,6 +92,8 @@ class MpcControllerNode : public rclcpp::Node {
         s.governor_stop_lag = declare_parameter("motion.governor_stop_lag", s.governor_stop_lag);
         s.governor_angle = declare_parameter("motion.governor_angle", s.governor_angle);
         s.governor_stop_angle = declare_parameter("motion.governor_stop_angle", s.governor_stop_angle);
+        s.frame_motion.linear_speed = declare_parameter("path.frame_speed", s.frame_motion.linear_speed);
+        s.frame_motion.linear_accel = declare_parameter("path.frame_accel", s.frame_motion.linear_accel);
         reference_.linear_velocity_in_body = declare_parameter<std::string>("linear_velocity_frame", "body") == "body";
         respect_motion_enabled_ = declare_parameter("respect_motion_enabled", true);
         odom_timeout_ = declare_parameter("odom_timeout", 0.5);
@@ -530,6 +532,9 @@ class MpcControllerNode : public rclcpp::Node {
         path_options_.heading_blend = declare_parameter("path.heading_blend", path_options_.heading_blend);
         path_success_trust_ = declare_parameter("path.success_trust", 0.8);
         path_progress_timeout_ = declare_parameter("path.progress_timeout", 10.0);
+        // Path points given in a moving TF frame (mapping's object frames) carry the path with them
+        // while it runs; the robot's own frames never do.
+        follow_frames_ = declare_parameter("path.follow_frames", true);
         // Also done once the reference has arrived and the vehicle is this close
         // and slow, without waiting for full settle trust.
         finish_position_ = declare_parameter("path.finish_position", 0.10);
@@ -899,6 +904,7 @@ class MpcControllerNode : public rclcpp::Node {
         std::vector<PathPoint> path;
         std::vector<LookTarget> look_targets;
         std::vector<Vector3d> look_positions;
+        std::vector<FrameAnchor> anchors(points.size());
         for (std::size_t i = 0; i < points.size(); ++i) {
             const auto &point = points[i];
             if (point.header.frame_id.empty())
@@ -915,6 +921,8 @@ class MpcControllerNode : public rclcpp::Node {
             const Quaterniond q(o.w, o.x, o.y, o.z);
             PathPoint w;
             w.position = transform * Vector3d(p.x, p.y, p.z);
+            if (followsFrame(point.header.frame_id))
+                anchors[i] = {point.header.frame_id, Vector3d(p.x, p.y, p.z), w.position};
             // An empty quaternion keeps the previous waypoint's attitude (the current one for the first).
             w.orientation = q.norm() > 1e-6 ? Quaterniond(Quaterniond(transform.rotation()) * q.normalized())
                             : path.empty()  ? *current
@@ -971,18 +979,31 @@ class MpcControllerNode : public rclcpp::Node {
         reference_.path = plan;
         reference_.look_targets = look_positions;
         look_targets_ = look_targets;
+        const bool follows =
+            std::any_of(anchors.begin(), anchors.end(), [](const FrameAnchor &a) { return !a.frame.empty(); });
+        reference_.frame_shifts = follows ? std::vector<Vector3d>(points.size(), Vector3d::Zero()) : std::vector<Vector3d>();
+        frame_anchors_ = follows ? anchors : std::vector<FrameAnchor>();
+        published_shifts_ = reference_.frame_shifts;
         reference_.position = end.position;
         reference_.orientation = end.orientation;
         path_goal_ = goal;
         settle_trust_.reset(); // "settled" must mean on the new path's end
         path_best_progress_ = 0;
         path_progress_time_ = get_clock()->now();
-        RCLCPP_INFO(get_logger(), "Following a %zu-point path (%.2f m) in %s%s", path.size(), plan->length(),
-                    frame.c_str(), look_targets.empty() ? "" : ", following look_at frames");
+        RCLCPP_INFO(get_logger(), "Following a %zu-point path (%.2f m) in %s%s%s", path.size(), plan->length(),
+                    frame.c_str(), look_targets.empty() ? "" : ", following look_at frames",
+                    follows ? ", carried by its points' frames" : "");
         publishPlannedPath(plan.get(), frame);
     }
 
-    // The plan sampled every 10 cm (turns in place included, so their headings show).
+    // Whether a path point given in `frame` is carried along when that frame moves:
+    // anything but the odometry frame and the robot's own frames.
+    bool followsFrame(const std::string &frame) const {
+        return follow_frames_ && frame != odom_->header.frame_id && frame.rfind(robotName() + "/", 0) != 0;
+    }
+
+    // The plan sampled every 10 cm (turns in place included, so their headings show),
+    // where its points' frames have carried it.
     void publishPlannedPath(const PathPlan *plan, const std::string &frame) {
         nav_msgs::msg::Path msg;
         msg.header.stamp = get_clock()->now();
@@ -991,7 +1012,7 @@ class MpcControllerNode : public rclcpp::Node {
             const int n = std::max(1, static_cast<int>(std::ceil(plan->length() / 0.1)));
             for (int i = 0; i <= n; ++i) {
                 const double s = plan->length() * i / n;
-                const Vector3d p = plan->position(s);
+                const Vector3d p = plan->position(s) + plan->frameShift(s, reference_.frame_shifts);
                 const Quaterniond q = plan->orientation(s);
                 geometry_msgs::msg::PoseStamped pose;
                 pose.header = msg.header;
@@ -1012,9 +1033,12 @@ class MpcControllerNode : public rclcpp::Node {
     // reference can stop). The last waypoint stays the setpoint otherwise.
     void finishPath(bool success, uint8_t code, const std::string &message, bool canceled = false) {
         reference_.orientation = endOrientation(); // keep facing the look targets' last direction
+        reference_.position = endPosition();       // and hold where the frames carried the end
         reference_.path.reset();
         reference_.look_targets.clear();
         look_targets_.clear();
+        reference_.frame_shifts.clear();
+        frame_anchors_.clear();
         if (!path_goal_)
             return;
         publishPlannedPath(nullptr, odom_ ? odom_->header.frame_id : "");
@@ -1025,11 +1049,16 @@ class MpcControllerNode : public rclcpp::Node {
             if (canceled) {
                 reference_.position = controller_->profile().stopPoint(controller_->settings().motion);
                 reference_.orientation = controller_->profile().orientation;
-                path_goal_->canceled(result);
-            } else if (success) {
-                path_goal_->succeed(result);
-            } else {
-                path_goal_->abort(result);
+            }
+            try {
+                if (canceled)
+                    path_goal_->canceled(result);
+                else if (success)
+                    path_goal_->succeed(result);
+                else
+                    path_goal_->abort(result);
+            } catch (const std::runtime_error &e) { // the action server dropped the goal (shutting down)
+                RCLCPP_WARN(get_logger(), "Could not send the path result: %s", e.what());
             }
         }
         if (success)
@@ -1064,11 +1093,12 @@ class MpcControllerNode : public rclcpp::Node {
             // The profile's last fraction of a millimetre can take seconds; near and
             // slow is arrived enough to judge the vehicle.
             const Quaterniond end = endOrientation();
-            const bool arrived = (profile.position - reference_.position).norm() < 0.01 &&
+            const Vector3d end_position = endPosition();
+            const bool arrived = (profile.position - end_position).norm() < 0.01 &&
                                  profile.orientation.angularDistance(end) < 0.02 &&
                                  profile.velocity.norm() < 0.02 && profile.angular_velocity.norm() < 0.05;
             const bool close = vehicle_ && (now - vehicle_->stamp).seconds() < 0.5 &&
-                               (vehicle_->position - reference_.position).norm() < finish_position_ &&
+                               (vehicle_->position - end_position).norm() < finish_position_ &&
                                vehicle_->orientation.angularDistance(end) < finish_angle_ &&
                                vehicle_->twist.head<3>().norm() < finish_speed_ &&
                                vehicle_->twist.tail<3>().norm() < finish_rate_;
@@ -1093,6 +1123,38 @@ class MpcControllerNode : public rclcpp::Node {
     Quaterniond endOrientation() const {
         return reference_.path ? Quaterniond(controller_->lookOffset() * reference_.orientation)
                                : reference_.orientation;
+    }
+
+    // The setpoint position: a path's end, where its frames have carried it.
+    Vector3d endPosition() const {
+        return reference_.path ? Vector3d(reference_.position + controller_->frameShift()) : reference_.position;
+    }
+
+    // How far each path point's frame has moved since the path was planned; a frame
+    // that stops resolving keeps its last shift. The planned path is republished when
+    // a point has moved more than 2 cm since it was last drawn.
+    void updateFrameShifts() {
+        if (!reference_.path || frame_anchors_.empty())
+            return;
+        double moved = 0;
+        for (std::size_t i = 0; i < frame_anchors_.size(); ++i) {
+            const FrameAnchor &a = frame_anchors_[i];
+            if (a.frame.empty())
+                continue;
+            try {
+                const Vector3d shift = toOdom(a.frame) * a.point - a.planned;
+                if (shift.allFinite())
+                    reference_.frame_shifts[i] = shift;
+            } catch (const tf2::TransformException &e) {
+                RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "path frame %s unavailable, holding: %s",
+                                     a.frame.c_str(), e.what());
+            }
+            moved = std::max(moved, (reference_.frame_shifts[i] - published_shifts_[i]).norm());
+        }
+        if (moved > 0.02) {
+            published_shifts_ = reference_.frame_shifts;
+            publishPlannedPath(reference_.path.get(), odom_->header.frame_id);
+        }
     }
 
     // Moves the path's look targets to where their frames are now; a frame that
@@ -1274,6 +1336,7 @@ class MpcControllerNode : public rclcpp::Node {
                                                   Vector3d(t.angular.x, t.angular.y, t.angular.z));
         }
         updateLookTargets();
+        updateFrameShifts();
         MpcOutput out;
         try {
             out = controller_->compute(x, reference_);
@@ -1352,6 +1415,15 @@ class MpcControllerNode : public rclcpp::Node {
             int16_t zero[8] = {0};
             send_thruster_cmd_canbus(zero);
         }
+        // A goal handle destroyed while active cancels itself, which throws once Ctrl-C has shut the
+        // context down. Abort ends it first (the goal is terminal even when sending the result fails).
+        if (path_goal_ && path_goal_->is_active()) {
+            try {
+                path_goal_->abort(std::make_shared<FollowPath::Result>());
+            } catch (const std::exception &) {
+            }
+        }
+        path_goal_.reset();
     }
 
   private:
@@ -1388,6 +1460,14 @@ class MpcControllerNode : public rclcpp::Node {
         Vector3d point;
     };
     std::vector<LookTarget> look_targets_; // Reference::look_targets' sources
+    struct FrameAnchor { // a path point in a TF frame that carries it (empty frame: fixed)
+        std::string frame;
+        Vector3d point;   // in that frame
+        Vector3d planned; // where it was in the odometry frame when the path was planned
+    };
+    std::vector<FrameAnchor> frame_anchors_; // Reference::frame_shifts' sources
+    std::vector<Vector3d> published_shifts_; // frame shifts the planned path was last drawn with
+    bool follow_frames_ = true;
     double path_best_progress_ = 0;
     PathOptions path_options_;
     double finish_position_ = 0.10, finish_angle_ = 0.10, finish_speed_ = 0.10, finish_rate_ = 0.15;

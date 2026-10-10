@@ -254,6 +254,24 @@ TEST(PathPlan, LookYawFacesAMovedTarget) {
                      ->followsTargets());
 }
 
+TEST(PathPlan, FrameShiftBendsOntoMovedPoints) {
+    const auto p = plan(Vector3d::Zero(), 0, {line(Vector3d(2, 0, 0)), line(Vector3d(4, 0, 0))});
+    const std::vector<Vector3d> shifts{Vector3d(0, 0.2, 0), Vector3d(0.1, 0.5, -0.1)};
+    const double first_end = p->project(Vector3d(2, 0, 0), 2, 1);
+    EXPECT_TRUE(p->frameShift(0, shifts).isZero());                          // starts where the vehicle is
+    EXPECT_TRUE(p->frameShift(first_end, shifts).isApprox(shifts[0], 1e-9)); // on the moved points
+    EXPECT_TRUE(p->frameShift(p->length(), shifts).isApprox(shifts[1], 1e-9));
+    EXPECT_TRUE(p->frameShift(1.0, {}).isZero());       // none
+    EXPECT_TRUE(p->frameShift(1.0, {shifts[0]}).isZero()); // not one per point
+    // No step anywhere: the shift changes smoothly with s
+    double worst = 0;
+    for (double s = 0.01; s <= p->length(); s += 0.01)
+        worst = std::max(worst, (p->frameShift(s, shifts) - p->frameShift(s - 0.01, shifts)).norm() / 0.01);
+    std::printf("frame shift: steepest %.3f m per m of path\n", worst);
+    // Smoothstep peaks at 1.5x the mean slope: the second leg's change over its 2 m
+    EXPECT_LT(worst, 1.5 * (shifts[1] - shifts[0]).norm() / 2 + 1e-3);
+}
+
 TEST(PathPlan, ReversalSlowsToTheKinkSpeed) {
     PathOptions o;
     const auto p = plan(Vector3d::Zero(), 0, {line(Vector3d(2, 0, 0)), line(Vector3d::Zero())}, o);

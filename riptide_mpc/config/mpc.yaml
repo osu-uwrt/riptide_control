@@ -87,6 +87,10 @@
                                 #    odometry position, a few mm from the reference), not by a line
       heading_blend: 0.3        # m of path; changes in the turn rate are spread over this so the
                                 #    angular acceleration limit holds at any speed (0: off)
+      follow_frames: true       # points given in a TF frame that moves (mapping's object frames, not the
+                                #    robot's own) carry the path with them while it runs; headings stay as planned
+      frame_speed: 0.2          # m/s; how fast the path may be carried when its frames move or jump
+      frame_accel: 0.3          # m/s^2
       success_trust: 0.8        # result once trust (below) reaches this on the last waypoint
       progress_timeout: 10.0    # s without 5 cm of progress -> PROGRESS_FAIL
     trust:
