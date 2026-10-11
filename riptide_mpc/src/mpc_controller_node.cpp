@@ -966,9 +966,19 @@ class MpcControllerNode : public rclcpp::Node {
         }
         if (reference_.angular_mode != Mode::POSITION)
             start.orientation = *current;
+        // The goal's speed cap (0: the controller's limit), horizontal and vertical
+        MotionLimits limits = controller_->settings().motion;
+        const double max_speed = goal->get_goal()->max_speed;
+        if (max_speed < 0 || !std::isfinite(max_speed))
+            return reject(FollowPath::Result::BAD_WYPTS, "max_speed must be finite and not negative");
+        if (max_speed > 0) {
+            limits.linear_speed = std::min(limits.linear_speed, max_speed);
+            if (limits.linear_speed_vertical > 0)
+                limits.linear_speed_vertical = std::min(limits.linear_speed_vertical, max_speed);
+        }
         std::shared_ptr<const PathPlan> plan;
         try {
-            plan = PathPlan::build(start, path, controller_->settings().motion, path_options_);
+            plan = PathPlan::build(start, path, limits, path_options_);
         } catch (const std::exception &e) {
             return reject(FollowPath::Result::BAD_WYPTS, e.what());
         }
@@ -990,8 +1000,9 @@ class MpcControllerNode : public rclcpp::Node {
         settle_trust_.reset(); // "settled" must mean on the new path's end
         path_best_progress_ = 0;
         path_progress_time_ = get_clock()->now();
-        RCLCPP_INFO(get_logger(), "Following a %zu-point path (%.2f m) in %s%s%s", path.size(), plan->length(),
-                    frame.c_str(), look_targets.empty() ? "" : ", following look_at frames",
+        RCLCPP_INFO(get_logger(), "Following a %zu-point path (%.2f m) in %s at up to %.2f m/s%s%s", path.size(),
+                    plan->length(), frame.c_str(), limits.linear_speed,
+                    look_targets.empty() ? "" : ", following look_at frames",
                     follows ? ", carried by its points' frames" : "");
         publishPlannedPath(plan.get(), frame);
     }

@@ -164,6 +164,16 @@ TEST(PathPlan, StraightPathCruisesAtTheSpeedLimit) {
     EXPECT_NEAR(f.max_speed, limits().linear_speed, 1e-3);
 }
 
+// A goal's max_speed is a lower linear_speed in the limits the plan is built with (a slow search path).
+TEST(PathPlan, LowerSpeedLimitCruisesSlower) {
+    MotionLimits slow = limits();
+    slow.linear_speed = 0.2;
+    const auto p = PathPlan::build({Vector3d::Zero(), yaw(0)}, {line(Vector3d(3, 0, 0)), line(Vector3d(3, 2, 0))}, slow);
+    const Flight f = fly(*p);
+    EXPECT_TRUE(f.ended);
+    EXPECT_NEAR(f.max_speed, 0.2, 1e-3);
+}
+
 TEST(PathPlan, LookAtFacesTheCenterAroundAnArc) {
     // Starts facing away from the center, so it first has to turn round.
     const auto p = plan(Vector3d(3, 0, 0), 0,
