@@ -43,6 +43,6 @@
                               # default in pool_identify_node.cpp: thrust/rpm/telemetry, MPC state, raw sensors, tf)
     release_tilt: 0.785       # rad (45 deg): the righting signal grows with it
     release_secs: 30.0        # s, or until shallower than release_min_depth / tilted beyond release_max_tilt
-    release_min_depth: 3.0    # m below the surface: a release is cut when it rises above this
+    release_min_depth: 0.75   # m below the surface: a release is cut when it rises above this
     release_max_tilt: 1.05    # rad (60 deg); must exceed release_tilt or every release is cut at once
     recover_timeout: 90.0     # s to get back down to the release point (and to it at first)
