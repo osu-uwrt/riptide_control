@@ -115,7 +115,7 @@ class PoolIdentifyNode : public rclcpp::Node {
         current_model_ = model_path_;
         // Trigger mode (autonomy tree, untethered): start only on the pool_identify/start service,
         // report pool_identify/done (2 Hz), and stay up after finishing so the tree can read it.
-        wait_for_trigger_ = declare_parameter("wait_for_trigger", false);
+        wait_for_trigger_ = declare_parameter("wait_for_trigger", true);
 
         if (!vehicle_.empty() && !model_path_.empty())
             loadModel();
@@ -194,8 +194,12 @@ class PoolIdentifyNode : public rclcpp::Node {
                     triggered_ = true;
                 });
         timer_ = rclcpp::create_timer(this, get_clock(), 50ms, [this] { tick(); });
-        RCLCPP_WARN(get_logger(), "Pool identification: arm the vehicle at depth with the kill switch in hand. "
-                                  "Do not run an autonomy tree at the same time.");
+        if (wait_for_trigger_)
+            RCLCPP_WARN(get_logger(), "Pool identification: waiting for pool_identify/start (PoolIdentifyTree). "
+                                      "Keep the kill switch in hand.");
+        else
+            RCLCPP_WARN(get_logger(), "Pool identification: arm the vehicle at depth with the kill switch in hand. "
+                                      "Do not run an autonomy tree at the same time.");
     }
 
     ~PoolIdentifyNode() override {
@@ -373,7 +377,8 @@ class PoolIdentifyNode : public rclcpp::Node {
         }
         const Vector3d p = position();
         // Horizontal box around the start, and depth limits: a release rises freely toward release_min_depth.
-        const double deepest = start_.z() - (settings_.heave ? settings_.heave_span : 0.) - max_depth_margin_;
+        const double deepest =
+            start_.z() - (settings_.heave || settings_.releases ? settings_.heave_span : 0.) - max_depth_margin_;
         if ((p - start_).head<2>().norm() > abort_radius_ || p.z() > -min_depth_ || p.z() < deepest) {
             publishInputs(ident::Sequencer::Output());
             publish(start_, start_q_);
@@ -712,7 +717,7 @@ class PoolIdentifyNode : public rclcpp::Node {
     ident::SequenceSettings settings_;
     double min_start_depth_, min_depth_, abort_margin_, trust_threshold_, abort_radius_ = 0;
     int max_iterations_ = 1, iteration_ = 0;
-    bool wait_for_trigger_ = false, triggered_ = false;
+    bool wait_for_trigger_ = true, triggered_ = false;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr done_pub_;
     rclcpp::TimerBase::SharedPtr done_timer_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv_;

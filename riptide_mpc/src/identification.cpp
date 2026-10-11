@@ -312,13 +312,18 @@ std::vector<Step> buildSequence(const SequenceSettings &s, const Vector3d &start
             attitudes.push_back({"rolled +", Vector3d::UnitX(), s.release_tilt});
             attitudes.push_back({"rolled -", Vector3d::UnitX(), -s.release_tilt});
         }
+        // From the bottom of the heave span (already cleared of the floor): the most room to rise.
+        const Vector3d deep = start - Vector3d(0, 0, s.heave_span);
+        hold(deep, heading, "down for releases", false);
+        steps.back().timeout = s.recover_timeout;
         for (const auto &a : attitudes) {
             Step &st = ident(Step::Kind::Release, Segment::Kind::Release,
                              heading * Quaterniond(Eigen::AngleAxisd(a.angle, a.axis)),
                              std::string("release ") + a.label, s.release_secs);
+            st.position = deep;
             st.segment.axis = 2; // it rises: heave data, +z body
             st.segment.direction = 1;
-            hold(start, heading, std::string("recover after release ") + a.label, false);
+            hold(deep, heading, std::string("recover after release ") + a.label, false);
             steps.back().timeout = s.recover_timeout;
             steps.back().guarded = false; // it starts from the free-float attitude
         }

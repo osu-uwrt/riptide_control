@@ -1,7 +1,9 @@
 """Pool identification session (see src/pool_identify_node.cpp).
 
-The MPC must already be running (active_control_model:=mpc). Arm the vehicle at
-depth, with the kill switch in hand, in open water around the start point:
+The MPC must already be running (active_control_model:=mpc). By default the session
+waits for the pool_identify/start service (riptide_autonomy PoolIdentifyTree calls it
+once at the start point); wait_for_trigger:=false starts it as soon as the vehicle is
+armed at depth. It needs open water around the start point:
   surge/sway lanes of `lane_length` (+x / +y body from the start heading),
   `heave_span` below the start depth, and a yaw sweep in place.
 """
@@ -23,8 +25,7 @@ def overrides(context, *args, **kwargs):
         if not os.path.isfile(model):
             raise FileNotFoundError(f"prior model not found: {model}")
         params["hydrodynamics_config"] = model
-    if LaunchConfiguration("wait_for_trigger").perform(context).lower() in ("true", "1"):
-        params["wait_for_trigger"] = True
+    params["wait_for_trigger"] = LaunchConfiguration("wait_for_trigger").perform(context).lower() in ("true", "1")
     iterations = LaunchConfiguration("max_iterations").perform(context)
     if iterations:
         params["max_iterations"] = int(iterations)
@@ -54,9 +55,10 @@ def generate_launch_description():
                               description="Prior model override: a name in riptide_mpc config/models or a path. "
                                           "Default: whatever the running MPC flies (its hydrodynamics_config and "
                                           "vehicle_config, read from it)."),
-        DeclareLaunchArgument("wait_for_trigger", default_value="false",
-                              description="Start only on the pool_identify/start service (IdentificationTree, "
-                                          "untethered) and stay up reporting pool_identify/done"),
+        DeclareLaunchArgument("wait_for_trigger", default_value="true",
+                              description="Start only on the pool_identify/start service (PoolIdentifyTree, "
+                                          "untethered) and stay up reporting pool_identify/done; false: start "
+                                          "as soon as armed at depth and exit when done"),
         DeclareLaunchArgument("max_iterations", default_value="",
                               description="Override identification.yaml max_iterations"),
         DeclareLaunchArgument("record_bag", default_value="",
