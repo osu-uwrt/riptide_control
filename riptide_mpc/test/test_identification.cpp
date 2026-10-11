@@ -163,6 +163,36 @@ TEST(Identification, IdentifiedModelCarriesTheBodyItWasFittedWith) {
     EXPECT_EQ(text.str().find("provenance"), std::string::npos);
 }
 
+// pool_identify records ROS time (~1.8e9 s): the CSV round trip keeps it to the sample, and a recording written
+// with t rounded to whole seconds (before 2026-10-11) gets it back from dt within each segment.
+TEST(Identification, RecordingKeepsRosTime) {
+    std::vector<ident::Segment> segments(1);
+    segments[0].id = 1;
+    std::vector<ident::Sample> written(5);
+    for (std::size_t k = 0; k < written.size(); ++k) {
+        written[k].segment = 1;
+        written[k].dt = 0.125;
+        written[k].t = 1791757531.0625 + 0.125 * static_cast<double>(k);
+    }
+    std::vector<ident::Sample> read;
+    std::vector<ident::Segment> read_segments;
+    ident::writeRecording(testing::TempDir(), written, segments);
+    ident::readRecording(testing::TempDir(), read, read_segments);
+    ASSERT_EQ(read.size(), written.size());
+    for (std::size_t k = 0; k < read.size(); ++k)
+        EXPECT_NEAR(read[k].t, written[k].t, 1e-6) << "sample " << k;
+
+    std::ofstream legacy(testing::TempDir() + "/recording.csv");
+    legacy << "segment,t,dt,vx,vy,vz,wx,wy,wz,upx,upy,upz,jx,jy,jz,jroll,jpitch,jyaw\n";
+    for (const auto &s : written)
+        legacy << "1,1791757531," << s.dt << ",0,0,0,0,0,0,0,0,1,0,0,0,0,0,0\n";
+    legacy.close();
+    ident::readRecording(testing::TempDir(), read, read_segments);
+    ASSERT_EQ(read.size(), written.size());
+    for (std::size_t k = 0; k < read.size(); ++k)
+        EXPECT_NEAR(read[k].t - read[0].t, written[k].t - written[0].t, 1e-9) << "sample " << k;
+}
+
 TEST(Identification, RecoversThePoolParametersFromTheSequence) {
     const YAML::Node truth = truthPlant();
     const std::string plant_path = testing::TempDir() + "/identification_truth.yaml";

@@ -693,10 +693,13 @@ class PoolIdentifyNode : public rclcpp::Node {
         const double mass = prior["mass"].as<double>();
         const auto result = ident::fit(prior, mass, recorder_->samples(), recorder_->segments(), thruster_matrix_,
                                        YAML::LoadFile(vehicle_));
-        YAML::Node report = ident::report(prior, result);
+        // Before/after against the model the session started from: the fit's own prior can be a pass of this
+        // session, fitted to the same data, which would make every *_prior equal its fit.
+        YAML::Node report =
+            ident::report(ident::withBody(YAML::LoadFile(model_path_), YAML::LoadFile(vehicle_)), result);
         report["session"] = why;
         report["iterations_fitted"] = static_cast<int>(iterations_.size());
-        report["prior_model"] = current_model_;
+        report["prior_model"] = model_path_;
         report["mpc_model_loaded"] = current_model_;
         std::ofstream(dir + "/report.yaml") << report << "\n";
         std::ofstream(dir + "/model_identified.yaml")
