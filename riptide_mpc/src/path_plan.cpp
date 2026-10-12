@@ -436,17 +436,29 @@ std::size_t PathPlan::segmentAt(double s) const {
     return segments_.size() - 1;
 }
 
-double PathPlan::lookYaw(double s, const std::vector<Vector3d> &targets) const {
+double PathPlan::lookYaw(double s, const std::vector<Vector3d> &targets, const Vector3d &shift) const {
     s = std::clamp(s, 0., length_);
     const Segment &g = segments_[segmentAt(s)];
     if (g.look_target < 0 || static_cast<std::size_t>(g.look_target) >= targets.size() ||
         !targets[g.look_target].allFinite())
         return 0;
-    const Vector3d p = position(s);
+    const Vector3d p = position(s) + shift;
     const Vector2d live = targets[g.look_target].head<2>() - p.head<2>(), planned = g.look_at.head<2>() - p.head<2>();
     if (live.norm() < 0.05 || planned.norm() < 0.05) // on top of it: no direction to face
         return 0;
     return wrap(std::atan2(live.y(), live.x()) - std::atan2(planned.y(), planned.x()));
+}
+
+Vector3d PathPlan::frameShift(double s, const std::vector<Vector3d> &shifts) const {
+    if (shifts.size() != segments_.size())
+        return Vector3d::Zero();
+    s = std::clamp(s, 0., length_);
+    const std::size_t i = segmentAt(s);
+    const Segment &g = segments_[i];
+    const Vector3d before = i == 0 ? Vector3d::Zero() : shifts[i - 1];
+    const double len = g.s1 - g.s0, u = len > 1e-12 ? std::clamp((s - g.s0) / len, 0., 1.) : 1.;
+    const Vector3d shift = before + u * u * (3 - 2 * u) * (shifts[i] - before);
+    return shift.allFinite() ? shift : Vector3d::Zero();
 }
 
 Vector3d PathPlan::position(double s) const {

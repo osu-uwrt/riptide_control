@@ -27,6 +27,11 @@ struct Reference {
     // PathPoint::look_target. The reference turns toward them on top of the
     // planned heading, within the angular limits.
     std::vector<Vector3d> look_targets;
+    // How far each path point's frame has moved since the path was planned
+    // (odometry frame, index-aligned with the points; empty: none). The reference
+    // is carried along (PathPlan::frameShift) as a separate profile limited by
+    // MpcSettings::frame_motion, so a moving or jumping frame never steps it.
+    std::vector<Vector3d> frame_shifts;
 };
 
 struct MpcSettings {
@@ -42,6 +47,8 @@ struct MpcSettings {
     // instead of being chased directly.
     bool profile_motion = true;
     MotionLimits motion;
+    // Limits on how fast a path is carried along by its points' frames (Reference::frame_shifts).
+    MotionLimits frame_motion{0.2, 0.3, 2.0};
     double max_reference_lag = 1.0;       // m; re-seed the profile at the vehicle beyond this
     double max_reference_lag_angle = 0.8; // rad
     // Reference governor: when the vehicle falls this far behind the profile
@@ -148,6 +155,11 @@ class MpcController {
     const Quaterniond &lookOffset() const {
         return live_.look.orientation;
     }
+    // How far the profile has been carried from the path's plan by its points'
+    // frames (odometry frame; zero when they have not moved).
+    const Vector3d &frameShift() const {
+        return live_.shift.position;
+    }
     double referenceLead() const {
         return settings_.compensate_delay ? model_.actuatorParameters().front().delay : 0.;
     }
@@ -165,6 +177,7 @@ class MpcController {
         Vector3d angular_velocity = Vector3d::Zero(); // VELOCITY mode, body
         PathProgress progress;                        // along Reference::path
         MotionProfile look; // yaw toward Reference::look_targets, applied on the path's attitude
+        MotionProfile shift; // position toward the path's frame shift (Reference::frame_shifts), added to its pose
     };
 
     Point boxplus(const Point &p, const VectorXd &delta) const;
