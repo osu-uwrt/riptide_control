@@ -14,8 +14,9 @@
 //   thrusters:  one thruster's command ramped (+ and -) while the MPC holds with the other seven, plus
 //               zero-wrench (null-space) patterns while holding: the still balances fit each thruster's
 //               forward and reverse gain (relative: their forward mean stays the prior's, the load cell's).
-//   releases:   all thrusters off from level and tilted holds: the vehicle floats up and rights itself,
-//               with no thruster in the loop: heave inertia/drag and roll/pitch inertia/damping.
+//   releases:   all thrusters off from level and tilted holds heave_span below the start: the vehicle
+//               floats up and rights itself, with no thruster in the loop: heave inertia/drag and
+//               roll/pitch inertia/damping.
 //
 // The MPC flies the whole sequence in POSITION mode inside a small box, so the
 // vehicle is always under closed-loop control (except during a release).
@@ -99,7 +100,7 @@ class Recorder {
 struct SequenceSettings {
     bool statics = true, surge = true, sway = true, heave = true, yaw = true;
     double lane_length = 3.0;  // m, surge and sway runs (from the start point, +x / +y body)
-    double heave_span = 0.8;   // m, downward from the start depth
+    double heave_span = 0.8;   // m, downward from the start depth (heave lanes; the releases start there)
     double yaw_span = M_PI;    // rad, centred on the start heading
     std::vector<double> linear_speeds{0.2, 0.35, 0.5, 0.65};
     std::vector<double> heave_speeds{0.15, 0.25, 0.35};
@@ -116,7 +117,8 @@ struct SequenceSettings {
     bool null_space = false;
     double null_amplitude = 4, null_secs = 10, null_settle = 3;
     // Release block: thrusters off for release_secs (or until pool_identify cuts it: too shallow or tilted)
-    // from a level hold and, with release_tilted, from +tilt pitch and roll holds; then back to the start.
+    // from a level hold and, with release_tilted, from +tilt pitch and roll holds, all heave_span below the
+    // start (the most room to rise); back there after each, and to the start at the end.
     bool releases = false, release_tilted = true;
     double release_secs = 30, recover_timeout = 90;
     double release_tilt = 0.35; // rad: tilted releases at +- this in pitch and in roll (roll is barely damped by eye)

@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <map>
 #include <numeric>
@@ -312,13 +313,18 @@ std::vector<Step> buildSequence(const SequenceSettings &s, const Vector3d &start
             attitudes.push_back({"rolled +", Vector3d::UnitX(), s.release_tilt});
             attitudes.push_back({"rolled -", Vector3d::UnitX(), -s.release_tilt});
         }
+        // From the bottom of the heave span (already cleared of the floor): the most room to rise.
+        const Vector3d deep = start - Vector3d(0, 0, s.heave_span);
+        hold(deep, heading, "down for releases", false);
+        steps.back().timeout = s.recover_timeout;
         for (const auto &a : attitudes) {
             Step &st = ident(Step::Kind::Release, Segment::Kind::Release,
                              heading * Quaterniond(Eigen::AngleAxisd(a.angle, a.axis)),
                              std::string("release ") + a.label, s.release_secs);
+            st.position = deep;
             st.segment.axis = 2; // it rises: heave data, +z body
             st.segment.direction = 1;
-            hold(start, heading, std::string("recover after release ") + a.label, false);
+            hold(deep, heading, std::string("recover after release ") + a.label, false);
             steps.back().timeout = s.recover_timeout;
             steps.back().guarded = false; // it starts from the free-float attitude
         }
@@ -698,8 +704,9 @@ void fitHydrodynamics(const YAML::Node &prior, double mass, const std::vector<Sa
 // Output error over the releases: each release is simulated with the full model from the moment it starts,
 // driven by its recorded (decaying) thrust, and fitted (Levenberg-Marquardt) to the measured velocity, rates
 // and tilt. A free-floating vehicle pitches toward its COB-over-COM attitude while it rises, so the axes
-// couple too much for a one-axis regression. Fitted: heave/roll/pitch added mass and linear damping, and the
-// horizontal COB offset as a nuisance (the free-float attitude pins it; reported, not written). The statics'
+// couple too much for a one-axis regression. Fitted: heave/roll/pitch added mass and linear damping, roll/pitch
+// quadratic damping, and the horizontal COB offset as a nuisance (the free-float attitude pins it; reported, not
+// written). The statics'
 // vertical COB and buoyancy stay the holds' - a release only sees ratios to them (damping/stiffness) - and a
 // parameter not determined to 10% of its scale goes back to the prior.
 void fitReleases(const YAML::Node &prior, const YAML::Node &vehicle, double mass, const StaticsFit &hold_model,
@@ -739,15 +746,17 @@ void fitReleases(const YAML::Node &prior, const YAML::Node &vehicle, double mass
     mean /= count;
     const Eigen::Array<double, 9, 1> scale = (sq / count - mean * mean).max(0.).sqrt().max(0.005);
 
-    // Parameters: 0,1 = cob x, y; then per axis 2 (heave), 3 (roll), 4 (pitch): added mass, linear damping.
-    const int params = 8;
+    // Parameters: 0,1 = cob x, y; then per axis 2 (heave), 3 (roll), 4 (pitch): added mass, linear damping;
+    // then 8, 9 = roll, pitch quadratic damping (without them the linear terms absorb the faster swings' drag).
+    const int linear_params = 8, params = 10;
     const auto axisOf = [](int j) { return 2 + (j - 2) / 2; };
     const auto isMass = [](int j) { return j >= 2 && j % 2 == 0; };
+    const auto quadAxis = [](int j) { return j - 5; };
     Eigen::VectorXd theta(params), ref(params);
     theta[0] = hold_model.cob.x();
     theta[1] = hold_model.cob.y();
     ref[0] = ref[1] = 0.02; // m: 10% of it = 2 mm
-    for (int j = 2; j < params; ++j) {
+    for (int j = 2; j < linear_params; ++j) {
         const int d = axisOf(j);
         theta[j] = getEntry(base[isMass(j) ? "added_mass6x6" : "linear_damping6x6"], d, d);
         ref[j] = isMass(j) ? rigidInertia(prior, d, mass) + theta[j] : std::max(theta[j], 1.);
@@ -755,7 +764,7 @@ void fitReleases(const YAML::Node &prior, const YAML::Node &vehicle, double mass
     // Damping scale (and start, where the prior has next to none): roll/pitch their critical damping
     // 2 sqrt(I K) with the righting stiffness K = B |cob| from the holds; an untuned prior (zero damping)
     // would otherwise demand a 0.1 standard error and start the fit from an undamped, ringing model.
-    for (int j = 3; j < params; j += 2) {
+    for (int j = 3; j < linear_params; j += 2) {
         const int d = axisOf(j);
         if (d < 3)
             continue;
@@ -765,11 +774,28 @@ void fitReleases(const YAML::Node &prior, const YAML::Node &vehicle, double mass
         if (theta[j] < 0.1 * critical)
             theta[j] = critical;
     }
+    // Quadratic damping scale: the drag equal to the linear scale at the axis' fast swings (95th percentile
+    // rate over the releases). An axis that barely swings gets a tight scale, so its quadratic term stays at
+    // the prior's instead of trading against the linear one.
+    for (int j = linear_params; j < params; ++j) {
+        const int d = quadAxis(j);
+        std::vector<double> rates;
+        for (const auto &shot : shots)
+            for (const Sample *x : shot)
+                rates.push_back(std::abs(x->w[d - 3]));
+        const auto fast = rates.begin() + static_cast<long>(0.95 * (rates.size() - 1));
+        std::nth_element(rates.begin(), fast, rates.end());
+        const double rate = std::max(*fast, 0.05);
+        theta[j] = base["quadratic_damping"][d].as<double>();
+        ref[j] = std::max(ref[2 * d - 1] / rate, theta[j]); // 2d - 1: the axis' linear damping
+    }
     const auto residual = [&](const Eigen::VectorXd &th) {
         YAML::Node h = YAML::Clone(base);
         h["cob_relative"] = std::vector<double>{th[0], th[1], hold_model.cob.z()};
-        for (int j = 2; j < params; ++j)
+        for (int j = 2; j < linear_params; ++j)
             setEntry(h[isMass(j) ? "added_mass6x6" : "linear_damping6x6"], axisOf(j), axisOf(j), std::max(0., th[j]));
+        for (int j = linear_params; j < params; ++j)
+            h["quadratic_damping"][quadAxis(j)] = std::max(0., th[j]);
         const FossenModel model = FossenModel::fromNodes(vehicle, h);
         const int n = model.thrusterCount();
         std::vector<double> r;
@@ -888,19 +914,25 @@ void fitReleases(const YAML::Node &prior, const YAML::Node &vehicle, double mass
         const double rigid = rigidInertia(prior, d, mass);
         a.added_mass = theta[jm];
         a.mass_total = rigid + theta[jm];
+        // Heave keeps its quadratic damping (the runs'); roll and pitch fit theirs here.
+        const int jq = d >= 3 ? d + 5 : -1;
         a.d1 = theta[jd];
-        a.d2 = base["quadratic_damping"][d].as<double>();
+        a.d2 = jq >= 0 ? theta[jq] : base["quadratic_damping"][d].as<double>();
         a.mass_r2 = a.drag_r2 = r2;
         // An implausible inertia from the same fit discredits that axis' damping too.
         const bool plausible = !free[jm] || (a.added_mass > -0.25 * rigid && a.added_mass < 4 * rigid);
         a.mass_ok = fit_ok && free[jm] && plausible;
-        a.drag_ok = fit_ok && free[jd] && plausible;
-        char m[220];
+        // Either damping term determined (the other stays at the prior's).
+        a.drag_ok = fit_ok && (free[jd] || (jq >= 0 && free[jq])) && plausible;
+        const auto status = [&](bool determined) {
+            return !determined ? "not determined (prior)" : plausible ? "fitted" : "rejected with it";
+        };
+        char m[300];
         std::snprintf(m, sizeof m,
-                      "release fit (relative to the hold statics), R2 %.2f: inertia %s, damping %s; free-float cob x %.4f, "
-                      "y %.4f%s",
-                      r2, !free[jm] ? "not determined (prior)" : plausible ? "fitted" : "implausible",
-                      !free[jd] ? "not determined (prior)" : plausible ? "fitted" : "rejected with it", theta[0], theta[1],
+                      "release fit (relative to the hold statics), R2 %.2f: inertia %s, damping %s%s%s; free-float cob "
+                      "x %.4f, y %.4f%s",
+                      r2, !free[jm] ? "not determined (prior)" : plausible ? "fitted" : "implausible", status(free[jd]),
+                      jq >= 0 ? ", quadratic damping " : "", jq >= 0 ? status(free[jq]) : "", theta[0], theta[1],
                       free[0] && free[1] ? "" : " (not determined)");
         a.note = fit_ok ? m : "release fit rejected (R2 < 0.8 or worse than the prior)";
         const auto runs_fit = std::find_if(result.axes.begin(), result.axes.end(),
@@ -1302,7 +1334,8 @@ void writeRecording(const std::string &dir, const std::vector<Sample> &samples, 
             out << ',' << sign << i;
     out << '\n';
     for (const auto &s : samples) {
-        out << s.segment << ',' << s.t << ',' << s.dt;
+        // t is ROS time (~1.8e9 s): it needs all 17 digits, or it rounds to whole seconds.
+        out << s.segment << ',' << std::setprecision(17) << s.t << std::setprecision(10) << ',' << s.dt;
         for (const Vector3d *v : {&s.v, &s.w, &s.up})
             out << ',' << v->x() << ',' << v->y() << ',' << v->z();
         for (int i = 0; i < 6; ++i)
@@ -1374,6 +1407,10 @@ void readRecording(const std::string &dir, std::vector<Sample> &samples, std::ve
                 s.thrust_negative[i] = std::stod(c[18 + n + i]);
             }
         }
+        // Within a segment each sample's dt is the time since the previous one (Recorder::dvlVelocity), so t
+        // follows from the segment's first t. Recordings before 2026-10-11 wrote t rounded to whole seconds.
+        if (!samples.empty() && samples.back().segment == s.segment)
+            s.t = samples.back().t + s.dt;
         samples.push_back(s);
     }
 }

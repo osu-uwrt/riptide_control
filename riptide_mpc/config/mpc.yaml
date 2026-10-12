@@ -56,7 +56,7 @@
       # rather than chased directly. The MPC tracks its pose, velocity, and the
       # thrust it needs (inverse Fossen dynamics) as feedforward.
       profile: true
-      linear_speed: 0.7        # m/s; the sim model tops out near 0.9 m/s (drag vs 28 N thrusters)
+      linear_speed: 0.6        # m/s; 0.7 needs ~82 N for surge drag alone, over the 73 N hardware budget
       linear_accel: 0.5        # m/s^2; above ~0.7 the vehicle starts lagging the profile
       linear_jerk: 2.0         # m/s^3; accel ramps over accel/jerk = 0.25 s
       # Straight up/down limits; linear_* above are then horizontal and a
