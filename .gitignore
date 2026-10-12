@@ -147,3 +147,6 @@ generated_models/
 *.tgz
 codegen/
 *.mex*
+
+#vscode
+.vscode/
