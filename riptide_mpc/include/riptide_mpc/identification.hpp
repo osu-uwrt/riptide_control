@@ -128,6 +128,9 @@ struct Step {
     // Release/Ramp/NullSpace: settle on the pose like a Hold, then apply identification inputs and record.
     enum class Kind { Hold, Move, Release, Ramp, NullSpace };
     Kind kind = Kind::Hold;
+    // The part of the session the step belongs to, its setup holds included (pool_identify's status LEDs).
+    enum class Block { Statics, ThrusterRamps, NullSpace, Surge, Sway, Heave, Yaw, Releases, Finish };
+    Block block = Block::Statics;
     Vector3d position = Vector3d::Zero();
     Quaterniond orientation = Quaterniond::Identity();
     MotionLimits limits;
@@ -175,6 +178,10 @@ class Sequencer {
     }
     std::size_t size() const {
         return steps_.size();
+    }
+    // The step being flown (nullptr once done).
+    const Step *current() const {
+        return index_ < steps_.size() ? &steps_[index_] : nullptr;
     }
     // The current step is a release with the thrusters off (recording).
     bool releasing() const {

@@ -165,6 +165,29 @@ TEST(Identification, IdentifiedModelCarriesTheBodyItWasFittedWith) {
 
 // pool_identify records ROS time (~1.8e9 s): the CSV round trip keeps it to the sample, and a recording written
 // with t rounded to whole seconds (before 2026-10-11) gets it back from dt within each segment.
+// pool_identify's status LEDs show the block: every step is tagged in sequence order, setup holds included.
+TEST(Identification, StepsAreTaggedWithTheirBlock) {
+    ident::SequenceSettings s;
+    s.thruster_ramps = s.null_space = s.releases = true;
+    const auto steps = ident::buildSequence(s, Vector3d(0, 0, -1), 0.0, MotionLimits{}, 8, MatrixXd::Identity(8, 2));
+    using B = ident::Step::Block;
+    std::vector<B> order;
+    for (const auto &st : steps)
+        if (order.empty() || order.back() != st.block)
+            order.push_back(st.block);
+    EXPECT_EQ(order, (std::vector<B>{B::Statics, B::ThrusterRamps, B::NullSpace, B::Surge, B::Sway, B::Heave, B::Yaw,
+                                     B::Releases, B::Finish}));
+    for (const auto &st : steps) {
+        const std::string &label = st.segment.label;
+        if (st.kind == ident::Step::Kind::Release || label.find("release") != std::string::npos)
+            EXPECT_EQ(st.block, B::Releases) << label;
+        if (label.rfind("surge", 0) == 0 || label == "start surge")
+            EXPECT_EQ(st.block, B::Surge) << label;
+        if (label.rfind("yaw", 0) == 0 || label == "start yaw")
+            EXPECT_EQ(st.block, B::Yaw) << label;
+    }
+}
+
 TEST(Identification, RecordingKeepsRosTime) {
     std::vector<ident::Segment> segments(1);
     segments[0].id = 1;

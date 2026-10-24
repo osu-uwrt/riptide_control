@@ -179,6 +179,7 @@ MatrixXd nullSpacePatterns(const MatrixXd &T) {
 std::vector<Step> buildSequence(const SequenceSettings &s, const Vector3d &start, double yaw,
                                 const MotionLimits &base, int thrusters, const MatrixXd &null_space) {
     std::vector<Step> steps;
+    Step::Block block = Step::Block::Statics;
     const Quaterniond heading(Eigen::AngleAxisd(yaw, Vector3d::UnitZ()));
     auto hold = [&](const Vector3d &p, const Quaterniond &q, const std::string &label, bool record) {
         Step st;
@@ -191,6 +192,7 @@ std::vector<Step> buildSequence(const SequenceSettings &s, const Vector3d &start
         st.segment.kind = Segment::Kind::Hold;
         st.segment.label = label;
         st.timeout = s.settle_timeout;
+        st.block = block;
         steps.push_back(st);
     };
     auto run = [&](int axis, double speed, int direction, const Vector3d &p, const Quaterniond &q, double span,
@@ -218,6 +220,7 @@ std::vector<Step> buildSequence(const SequenceSettings &s, const Vector3d &start
         st.segment.direction = direction;
         st.segment.label = label;
         st.timeout = span / speed + s.run_timeout_margin;
+        st.block = block;
         steps.push_back(st);
     };
 
@@ -247,10 +250,12 @@ std::vector<Step> buildSequence(const SequenceSettings &s, const Vector3d &start
         st.segment.label = label;
         st.timeout = s.settle_timeout;
         st.thrusters = thrusters;
+        st.block = block;
         steps.push_back(st);
         return steps.back();
     };
     if (s.thruster_ramps && thrusters > 0) {
+        block = Step::Block::ThrusterRamps;
         hold(start, heading, "start thruster ramps", false);
         for (int i = 0; i < thrusters; ++i) {
             Step &st = ident(Step::Kind::Ramp, Segment::Kind::Ramp, heading, "ramp thruster " + std::to_string(i),
@@ -259,7 +264,8 @@ std::vector<Step> buildSequence(const SequenceSettings &s, const Vector3d &start
             st.segment.amplitude = s.ramp_force;
         }
     }
-    if (s.null_space && thrusters > 0 && null_space.rows() == thrusters)
+    if (s.null_space && thrusters > 0 && null_space.rows() == thrusters) {
+        block = Step::Block::NullSpace;
         for (int j = 0; j < null_space.cols(); ++j)
             for (double sign : {1., -1.}) {
                 Step &st = ident(Step::Kind::NullSpace, Segment::Kind::NullSpace, heading,
@@ -269,18 +275,21 @@ std::vector<Step> buildSequence(const SequenceSettings &s, const Vector3d &start
                 st.bias = sign * s.null_amplitude * null_space.col(j);
                 st.pre_secs = s.null_settle;
             }
+    }
     const struct {
         bool enabled;
         int axis;
         Vector3d offset;
         const std::vector<double> *speeds;
         const char *name;
-    } linear[] = {{s.surge, 0, heading * Vector3d(s.lane_length, 0, 0), &s.linear_speeds, "surge"},
-                  {s.sway, 1, heading * Vector3d(0, s.lane_length, 0), &s.linear_speeds, "sway"},
-                  {s.heave, 2, Vector3d(0, 0, -s.heave_span), &s.heave_speeds, "heave"}};
+        Step::Block block;
+    } linear[] = {{s.surge, 0, heading * Vector3d(s.lane_length, 0, 0), &s.linear_speeds, "surge", Step::Block::Surge},
+                  {s.sway, 1, heading * Vector3d(0, s.lane_length, 0), &s.linear_speeds, "sway", Step::Block::Sway},
+                  {s.heave, 2, Vector3d(0, 0, -s.heave_span), &s.heave_speeds, "heave", Step::Block::Heave}};
     for (const auto &l : linear) {
         if (!l.enabled)
             continue;
+        block = l.block;
         hold(start, heading, std::string("start ") + l.name, false);
         // Heave runs go down first: +z is up, so "direction" is the sign of the body z velocity.
         const int out_sign = l.axis == 2 ? -1 : 1;
@@ -291,6 +300,7 @@ std::vector<Step> buildSequence(const SequenceSettings &s, const Vector3d &start
             }
     }
     if (s.yaw) {
+        block = Step::Block::Yaw;
         const Quaterniond a(Eigen::AngleAxisd(yaw - s.yaw_span / 2, Vector3d::UnitZ()));
         const Quaterniond b(Eigen::AngleAxisd(yaw + s.yaw_span / 2, Vector3d::UnitZ()));
         hold(start, a, "start yaw", false);
@@ -301,6 +311,7 @@ std::vector<Step> buildSequence(const SequenceSettings &s, const Vector3d &start
             }
     }
     if (s.releases && thrusters > 0) {
+        block = Step::Block::Releases;
         struct Attitude {
             const char *label;
             Vector3d axis;
@@ -329,6 +340,7 @@ std::vector<Step> buildSequence(const SequenceSettings &s, const Vector3d &start
             steps.back().guarded = false; // it starts from the free-float attitude
         }
     }
+    block = Step::Block::Finish;
     hold(start, heading, "finish", false);
     return steps;
 }

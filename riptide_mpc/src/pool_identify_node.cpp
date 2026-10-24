@@ -12,6 +12,20 @@
 // a box around that point, and ends holding the start pose. Killing the vehicle
 // ends the session; whatever was recorded is saved and fitted. With record_bag, a
 // `ros2 bag record` of bag_topics runs for the whole session into <session>/bag.
+//
+// Status LEDs (command/led, so the session can be followed from the surface untethered); the colour is
+// the block, the LEDs blank for 0.4 s at every new step:
+//   yellow  slow flash  started, waiting for sensors / DVL lock / armed / depth / the MPC
+//   white   solid       statics holds (level, pitch, roll)
+//   magenta solid       thruster ramps          magenta slow flash  null-space patterns
+//   cyan    solid       surge runs              cyan    slow flash  sway runs
+//   blue    solid       heave runs              yellow  solid       yaw sweeps
+//   orange  solid       going to / recovering at the release point
+//   orange  fast flash  release: thrusters OFF, floating up (intentional)
+//   white   breath      finishing: back to the start, fitting, loading the fit
+//   green   breath      done (converged / max_iterations)
+//   red     breath      ended early (killed, no data, model rejected)
+//   red     fast flash  safety abort (left the box, too shallow/deep, unstable): holding the start pose
 #include "riptide_mpc/identification.hpp"
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -20,6 +34,7 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <riptide_msgs2/msg/controller_command.hpp>
+#include <riptide_msgs2/msg/led_command.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
@@ -46,6 +61,7 @@
 
 using namespace std::chrono_literals;
 using riptide_msgs2::msg::ControllerCommand;
+using riptide_msgs2::msg::LedCommand;
 
 namespace riptide_mpc {
 class PoolIdentifyNode : public rclcpp::Node {
@@ -116,6 +132,7 @@ class PoolIdentifyNode : public rclcpp::Node {
         // Trigger mode (autonomy tree, untethered): start only on the pool_identify/start service,
         // report pool_identify/done (2 Hz), and stay up after finishing so the tree can read it.
         wait_for_trigger_ = declare_parameter("wait_for_trigger", true);
+        status_leds_ = declare_parameter("status_leds", true); // the session's state on command/led
 
         if (!vehicle_.empty() && !model_path_.empty())
             loadModel();
@@ -178,6 +195,8 @@ class PoolIdentifyNode : public rclcpp::Node {
         ang_pub_ = create_publisher<ControllerCommand>("controller/angular", 10);
         params_ = std::make_shared<rclcpp::AsyncParametersClient>(this, mpc_node_);
         done_pub_ = create_publisher<std_msgs::msg::Bool>("pool_identify/done", 10);
+        if (status_leds_)
+            led_pub_ = create_publisher<LedCommand>("command/led", 10);
         done_timer_ = rclcpp::create_timer(this, get_clock(), 500ms, [this] {
             std_msgs::msg::Bool m;
             m.data = finished_;
@@ -217,6 +236,59 @@ class PoolIdentifyNode : public rclcpp::Node {
     Vector3d position() const {
         const auto &p = odom_->pose.pose.position;
         return Vector3d(p.x, p.y, p.z);
+    }
+
+    // Status LEDs (legend at the top). Sent only on a change: the LED board restarts its pattern on every command.
+    struct Led {
+        uint8_t r, g, b, mode;
+        bool operator==(const Led &o) const {
+            return r == o.r && g == o.g && b == o.b && mode == o.mode;
+        }
+    };
+    static constexpr Led kLedOff{0, 0, 0, LedCommand::MODE_SOLID};
+    static constexpr Led kLedWaiting{255, 200, 0, LedCommand::MODE_SLOW_FLASH};
+    static constexpr Led kLedFinishing{255, 255, 255, LedCommand::MODE_BREATH};
+    static constexpr Led kLedDone{0, 255, 0, LedCommand::MODE_BREATH};
+    static constexpr Led kLedFailed{255, 0, 0, LedCommand::MODE_BREATH};
+    static constexpr Led kLedAborted{255, 0, 0, LedCommand::MODE_FAST_FLASH};
+
+    void setLed(const Led &led) {
+        if (!led_pub_ || (led_ && *led_ == led))
+            return;
+        led_ = led;
+        LedCommand m;
+        m.red = led.r;
+        m.green = led.g;
+        m.blue = led.b;
+        m.mode = led.mode;
+        m.target = LedCommand::TARGET_ALL;
+        led_pub_->publish(m);
+    }
+
+    // The current step's block colour; off for a moment after each new step so steps can be counted.
+    void stepLed(double t) {
+        const ident::Step *step = sequencer_->current();
+        if (!step)
+            return;
+        if (t < blink_until_) {
+            setLed(kLedOff);
+            return;
+        }
+        using B = ident::Step::Block;
+        constexpr uint8_t solid = LedCommand::MODE_SOLID, slow = LedCommand::MODE_SLOW_FLASH;
+        switch (step->block) {
+        case B::Statics: setLed({255, 255, 255, solid}); break;
+        case B::ThrusterRamps: setLed({255, 0, 255, solid}); break;
+        case B::NullSpace: setLed({255, 0, 255, slow}); break;
+        case B::Surge: setLed({0, 255, 255, solid}); break;
+        case B::Sway: setLed({0, 255, 255, slow}); break;
+        case B::Heave: setLed({0, 0, 255, solid}); break;
+        case B::Yaw: setLed({255, 200, 0, solid}); break;
+        case B::Releases:
+            setLed({255, 80, 0, sequencer_->releasing() ? LedCommand::MODE_FAST_FLASH : solid});
+            break;
+        case B::Finish: setLed(kLedFinishing); break;
+        }
     }
 
     void publish(const Vector3d &p, const Quaterniond &q) {
@@ -368,6 +440,8 @@ class PoolIdentifyNode : public rclcpp::Node {
             return;
         const double t = now_s();
         if (!sequencer_) {
+            if (triggered_ || !wait_for_trigger_)
+                setLed(kLedWaiting);
             if (!ready())
                 return;
         }
@@ -382,7 +456,7 @@ class PoolIdentifyNode : public rclcpp::Node {
         if ((p - start_).head<2>().norm() > abort_radius_ || p.z() > -min_depth_ || p.z() < deepest) {
             publishInputs(ident::Sequencer::Output());
             publish(start_, start_q_);
-            finish("left the safe box (or too shallow/deep): holding the start pose");
+            finish("left the safe box (or too shallow/deep): holding the start pose", kLedAborted);
             return;
         }
         if (const std::string why = sequencer_->guarded() ? unstable(t) : ""; !why.empty()) {
@@ -393,10 +467,12 @@ class PoolIdentifyNode : public rclcpp::Node {
                 current_model_ = previous_model_;
             }
             publish(start_, start_q_);
-            finish(why + ": session ended");
+            finish(why + ": session ended", kLedAborted);
             return;
         }
         if (params_pending_) { // do not advance until the new limits are in the MPC
+            if (sequencer_->current())
+                stepLed(t);
             publish(setpoint_, setpoint_q_);
             return;
         }
@@ -418,6 +494,9 @@ class PoolIdentifyNode : public rclcpp::Node {
             iterationComplete();
             return;
         }
+        if (out.new_step)
+            blink_until_ = t + 0.4;
+        stepLed(t);
         setpoint_ = out.position;
         setpoint_q_ = out.orientation;
         if (out.new_step)
@@ -534,6 +613,7 @@ class PoolIdentifyNode : public rclcpp::Node {
     // One pass of the sequence is done: fit all data so far, write the model, then either
     // stop (agreed / last iteration) or load it into the MPC and fly again with it.
     void iterationComplete() {
+        setLed(kLedFinishing);
         const double t = now_s();
         if (recorder_->recording())
             recorder_->end(t);
@@ -582,7 +662,7 @@ class PoolIdentifyNode : public rclcpp::Node {
                 if (agreed || last) {
                     std::filesystem::copy_file(current_model_, dir_ + "/model_final.yaml",
                                                std::filesystem::copy_options::overwrite_existing);
-                    finish(agreed ? "converged" : "max_iterations reached");
+                    finish(agreed ? "converged" : "max_iterations reached", kLedDone);
                     return;
                 }
                 ++iteration_;
@@ -662,8 +742,10 @@ class PoolIdentifyNode : public rclcpp::Node {
         bag_pid_ = -1;
     }
 
-    void finish(const std::string &why) {
+    // `led`: what the status LEDs show from now on (they stay on it after the session).
+    void finish(const std::string &why, const Led &led = kLedFailed) {
         finished_ = true;
+        setLed(led);
         const double t = now_s();
         if (!recorder_) {
             RCLCPP_ERROR(get_logger(), "Identification finished before it started: %s", why.c_str());
@@ -720,7 +802,10 @@ class PoolIdentifyNode : public rclcpp::Node {
     ident::SequenceSettings settings_;
     double min_start_depth_, min_depth_, abort_margin_, trust_threshold_, abort_radius_ = 0;
     int max_iterations_ = 1, iteration_ = 0;
-    bool wait_for_trigger_ = true, triggered_ = false;
+    bool wait_for_trigger_ = true, triggered_ = false, status_leds_ = true;
+    rclcpp::Publisher<LedCommand>::SharedPtr led_pub_;
+    std::optional<Led> led_;
+    double blink_until_ = 0;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr done_pub_;
     rclcpp::TimerBase::SharedPtr done_timer_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv_;
