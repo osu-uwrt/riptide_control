@@ -11,8 +11,8 @@
     sway: true
     heave: true
     yaw: true
-    lane_length: 3.0          # m of clear water ahead (+x) and to port (+y) of the start
-    heave_span: 2.0           # m below the start depth for the heave lanes and the releases (keep clear of the
+    lane_length: 1.5          # m of clear water ahead (+x) and to port (+y) of the start
+    heave_span: 0.8           # m below the start depth for the heave lanes and the releases (keep clear of the
                               # floor); 0.4 never reached cruise
     yaw_span: 3.14159         # rad, centred on the start heading
     linear_speeds: [0.2, 0.35, 0.5, 0.7]   # 0.65 saturated the 73 N limit; slow levels cruise longest in 1.5 m lanes

@@ -57,8 +57,9 @@
       # thrust it needs (inverse Fossen dynamics) as feedforward.
       profile: true
       linear_speed: 0.6        # m/s; 0.7 needs ~82 N for surge drag alone, over the 73 N hardware budget
-      linear_accel: 0.5        # m/s^2; above ~0.7 the vehicle starts lagging the profile
-      linear_jerk: 2.0         # m/s^3; accel ramps over accel/jerk = 0.25 s
+      linear_accel: 0.1        # m/s^2; was 0.5 (above ~0.7 the vehicle lags the profile). 2026-10-24: at 0.5 a
+                               # 3 cm step took +-23 N bursts on the V thrusters and pitched Talos ~8 deg
+      linear_jerk: 0.3         # m/s^3; was 2.0. accel ramps over accel/jerk = 0.4 s
       # Straight up/down limits; linear_* above are then horizontal and a
       # diagonal move gets the ellipse between. -1: same as horizontal.
       # e.g. 0.3 / 0.3 / 2.0 to slow climbs and dives (the sim lags on climbs).
@@ -66,8 +67,8 @@
       linear_accel_vertical: 0.2   # m/s^2
       linear_jerk_vertical: -1.0    # m/s^3
       angular_speed: 1.0       # rad/s
-      angular_accel: 1.2       # rad/s^2
-      angular_jerk: 6.0        # rad/s^3; 0.2 s ramp
+      angular_accel: 0.8       # rad/s^2
+      angular_jerk: 3.0        # rad/s^3; 0.2 s ramp
       max_reference_lag: 1.0   # m; re-seed the profile at the vehicle if it falls this far behind
       max_reference_lag_angle: 0.8  # rad
       # Reference governor: when the vehicle lags the profile (thrust saturation,

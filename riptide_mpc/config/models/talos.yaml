@@ -1,3 +1,10 @@
+# 16:15 test: per-thruster forward/reverse scales set to 1.0 (as on 2026-10-03). The fitted ones (from holding still:
+# upper forward/lower reverse well observed, the other directions ~40 s) made tiny surge corrections pitch the robot.
+# Fitted scales: ~/model_backups/talos_1606_copybased_with_scales.yaml on optop.
+# 2026-10-24: pool fit talos_20261024_123216 (flown from the tuned model, so heave/roll/pitch keep their tuned
+# drag and added mass), from "talos copy.yaml". Mass 34.307 (new CAD); the fit used 34.084, so surge/sway/heave
+# added mass (-0.223), volume and COB are re-expressed to keep the identified totals, net buoyancy and buoyancy
+# torque. Inertia and COM are what the fit used. The 14:51 fit (heave/roll/pitch left at 0) is in ~/model_backups.
 # The MPC's model of the REAL Talos (default on hardware). Pool-identified 2026-10-03, session
 # talos_20261003_165241, flown WITH hardware.rpm_offset 140 (mpc.yaml), so thrust matched the force
 # curve: statics, drag on surge/sway/heave/yaw, added mass sway/heave/yaw. Surge added mass stays the
@@ -7,31 +14,31 @@
 # (+1.2 N), the in-water torques and the total inertia are unchanged. Change the body and re-identify.
 # rpm_offset is now 0 (ESC CAN decode bug fixed in firmware), so re-identify on the fixed firmware.
 robot: talos
-mass: 34.084
+mass: 34.307
 com: [-0.150, 0.041, -0.016]
 rigid_body_inertia3x3:
-- [1.8429, 0.0496, 0.0945]
-- [0.0496, 1.0051, -0.0083]
-- [0.0945, -0.0083, 1.8607]
+  - [1.8429, 0.0496, 0.0945]
+  - [0.0496, 1.0051, -0.0083]
+  - [0.0945, -0.0083, 1.8607]
 added_mass6x6:
-- [32.12441573413407, 0.0, 0.0, 0.0, 0.0, 0.0]
-- [0.0, 80.10606942743043, 0.0, 0.0, 0.0, 0.0]
-- [0.0, 0.0, 74.3378267671104, 0.0, 0.0, 0.0]
-- [0.0, 0.0, 0.0, 0.062395054069073454, 0.0, 0.0]
-- [0.0, 0.0, 0.0, 0.0, 0.060232298657156735, 0.0]
-- [0.0, 0.0, 0.0, 0.0, 0.0, 1.100818771116597]
+  - [31.90141573413407, 0.0, 0.0, 0.0, 0.0, 0.0]
+  - [0.0, 79.88306942743043, 0.0, 0.0, 0.0, 0.0]
+  - [0.0, 0.0, 74.1148267671104, 0.0, 0.0, 0.0]
+  - [0.0, 0.0, 0.0, 0.062395054069073454, 0.0, 0.0]
+  - [0.0, 0.0, 0.0, 0.0, 0.060232298657156735, 0.0]
+  - [0.0, 0.0, 0.0, 0.0, 0.0, 2.0867130857974843]
 linear_damping6x6:
-- [30.6532503270042, 0.0, 0.0, 0.0, 0.0, 0.0]
-- [0.0, 11.494245536364375, 0.0, 0.0, 0.0, 0.0]
-- [0.0, 0.0, 12.060685816169192, 0.0, 0.0, 0.0]
-- [0.0, 0.0, 0.0, 9.910927173896203, 0.0, 0.0]
-- [0.0, 0.0, 0.0, 0.0, 3.0045521578787238, 0.0]
-- [0.0, 0.0, 0.0, 0.0, 0.0, 0.8699017125361722]
-quadratic_damping: [123.85703897902883, 166.87346125534444, 266.4235873866048, 2.7724251278046257, 1.4991943770654037, 3.6378974294453426]
+  - [15.674518833750119, 0.0, 0.0, 0.0, 0.0, 0.0]
+  - [0.0, 46.202588210999501, 0.0, 0.0, 0.0, 0.0]
+  - [0.0, 0.0, 12.060685816169192, 0.0, 0.0, 0.0]
+  - [0.0, 0.0, 0.0, 9.910927173896203, 0.0, 0.0]
+  - [0.0, 0.0, 0.0, 0.0, 3.0045521578787238, 0.0]
+  - [0.0, 0.0, 0.0, 0.0, 0.0, 1.9477176266425569]
+quadratic_damping: [223.63059672581934, 153.78902746771288, 266.4235873866048, 2.7724251278046257, 1.4991943770654037, 4.9626656194988623]
 damping_center_relative: [0.0, 0.0, 0.0]
 water_density: 998.2
-displaced_volume: 0.034268310829795354
-cob_relative: [0.004622863431392177, -0.0017168358658824698, 0.014305413863462282]
+displaced_volume: 0.034535723698578415
+cob_relative: [0.008184181997598091, -0.0023077642759925313, 0.022498365677051498]
 buoyancy_radii: [0.175, 0.415, 0.275]
 water_level: 0.0
 current_velocity: [0.0, 0.0, 0.0]
@@ -53,9 +60,8 @@ thruster_efficiencies: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 hardware:
   can_interface: can0
   total_thrust_limit: 73.0
-  # Propeller law |F| = K_T * water_density * D^4 * (rpm/60)^2 with K_T = a + b*rpm, [a, b] per direction.
-  # Linear fit of K_T to the Blue Robotics T200 bollard data (all 10-20 V sheets, rpm and force columns):
-  # https://cad.bluerobotics.com/T200-Public-Performance-Data-10-20V-September-2019.xlsx
   propeller_diameter: 0.076
   thrust_coefficient_forward: [0.3964, 1.48e-5]
   thrust_coefficient_reverse: [0.3114, 1.25e-5]
+thruster_forward_scales: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+thruster_reverse_scales: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
