@@ -489,6 +489,50 @@ TEST(Mpc, PathSpreadsTurnOverTheLeg) {
     EXPECT_NEAR(yawOf(loop.orientation()), 2.5, 1e-3);
 }
 
+// A path whose end point's frame jumps 0.3 m sideways halfway along (mapping
+// relocating the target): the reference is carried onto the moved end within
+// the frame limits, the vehicle ends on it, and it tilts no more than on the
+// same path without the jump.
+TEST(Mpc, PathFollowsItsMovingEndFrame) {
+    struct Run {
+        double end_error = 0, shift_speed = 0, tilt = 0, seconds = 0;
+    };
+    const auto fly = [](const Vector3d &jump) {
+        ClosedLoop loop;
+        Reference r;
+        r.linear_mode = r.angular_mode = Mode::POSITION;
+        r.position = loop.position();
+        loop.run(r, 3.0);
+        loop.max_tilt = 0; // not the cold start
+        const Vector3d start = r.position, goal = start + Vector3d(4, 0, 0);
+        startPath(r, loop.controller, {point(goal)});
+        r.frame_shifts = {Vector3d::Zero()};
+        const double dt = loop.controller.settings().dt;
+        Run run;
+        Vector3d last = loop.controller.frameShift();
+        for (; run.seconds < 30 && !r.path->atEnd(loop.controller.pathProgress()); run.seconds += dt) {
+            if ((loop.position() - start).x() > 2)
+                r.frame_shifts = {jump};
+            loop.run(r, dt);
+            run.shift_speed = std::max(run.shift_speed, (loop.controller.frameShift() - last).norm() / dt);
+            last = loop.controller.frameShift();
+        }
+        loop.run(r, 4.0);
+        run.end_error = (loop.position() - (goal + jump)).norm();
+        run.tilt = loop.max_tilt;
+        return run;
+    };
+    const Run still = fly(Vector3d::Zero()), jumped = fly(Vector3d(0, 0.3, 0));
+    std::printf("end frame jumped 0.30 m mid-path: %.1f s (%.1f s unmoved), shift speed peak %.3f m/s, end error %.1f mm, "
+                "tilt %.2f deg (%.2f deg unmoved)\n",
+                jumped.seconds, still.seconds, jumped.shift_speed, jumped.end_error * 1e3, jumped.tilt * 180 / M_PI,
+                still.tilt * 180 / M_PI);
+    EXPECT_LT(still.end_error, 0.01);
+    EXPECT_LT(jumped.end_error, 0.01);
+    EXPECT_LT(jumped.shift_speed, MpcSettings().frame_motion.linear_speed * 1.01);
+    EXPECT_LT(jumped.tilt, still.tilt + 0.02);
+}
+
 // A path whose last leg turns sharply (a 5.6 m run, then 0.5 m straight up):
 // the reference must come to rest on the goal instead of circling it.
 TEST(Mpc, PathSettlesAfterSharpFinalCorner) {

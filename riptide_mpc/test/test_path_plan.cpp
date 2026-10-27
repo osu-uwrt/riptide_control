@@ -164,6 +164,16 @@ TEST(PathPlan, StraightPathCruisesAtTheSpeedLimit) {
     EXPECT_NEAR(f.max_speed, limits().linear_speed, 1e-3);
 }
 
+// A goal's max_speed is a lower linear_speed in the limits the plan is built with (a slow search path).
+TEST(PathPlan, LowerSpeedLimitCruisesSlower) {
+    MotionLimits slow = limits();
+    slow.linear_speed = 0.2;
+    const auto p = PathPlan::build({Vector3d::Zero(), yaw(0)}, {line(Vector3d(3, 0, 0)), line(Vector3d(3, 2, 0))}, slow);
+    const Flight f = fly(*p);
+    EXPECT_TRUE(f.ended);
+    EXPECT_NEAR(f.max_speed, 0.2, 1e-3);
+}
+
 TEST(PathPlan, LookAtFacesTheCenterAroundAnArc) {
     // Starts facing away from the center, so it first has to turn round.
     const auto p = plan(Vector3d(3, 0, 0), 0,
@@ -252,6 +262,24 @@ TEST(PathPlan, LookYawFacesAMovedTarget) {
     EXPECT_EQ(p->lookYaw(p->length(), {moved}), 0.); // the last leg looks nowhere
     EXPECT_FALSE(plan(Vector3d(-1.5, 0, 0), 0, {arc(Vector3d::Zero(), M_PI, Vector3d(1.5, 0, 0), PathHeading::LOOK_AT)})
                      ->followsTargets());
+}
+
+TEST(PathPlan, FrameShiftBendsOntoMovedPoints) {
+    const auto p = plan(Vector3d::Zero(), 0, {line(Vector3d(2, 0, 0)), line(Vector3d(4, 0, 0))});
+    const std::vector<Vector3d> shifts{Vector3d(0, 0.2, 0), Vector3d(0.1, 0.5, -0.1)};
+    const double first_end = p->project(Vector3d(2, 0, 0), 2, 1);
+    EXPECT_TRUE(p->frameShift(0, shifts).isZero());                          // starts where the vehicle is
+    EXPECT_TRUE(p->frameShift(first_end, shifts).isApprox(shifts[0], 1e-9)); // on the moved points
+    EXPECT_TRUE(p->frameShift(p->length(), shifts).isApprox(shifts[1], 1e-9));
+    EXPECT_TRUE(p->frameShift(1.0, {}).isZero());       // none
+    EXPECT_TRUE(p->frameShift(1.0, {shifts[0]}).isZero()); // not one per point
+    // No step anywhere: the shift changes smoothly with s
+    double worst = 0;
+    for (double s = 0.01; s <= p->length(); s += 0.01)
+        worst = std::max(worst, (p->frameShift(s, shifts) - p->frameShift(s - 0.01, shifts)).norm() / 0.01);
+    std::printf("frame shift: steepest %.3f m per m of path\n", worst);
+    // Smoothstep peaks at 1.5x the mean slope: the second leg's change over its 2 m
+    EXPECT_LT(worst, 1.5 * (shifts[1] - shifts[0]).norm() / 2 + 1e-3);
 }
 
 TEST(PathPlan, ReversalSlowsToTheKinkSpeed) {

@@ -97,8 +97,15 @@ class PathPlan {
     }
     // Yaw to add to orientation(s) so a segment that follows a look target faces
     // `targets[look_target]` (odometry frame) instead of the look_at it was
-    // planned with; 0 elsewhere, or for a missing target.
-    double lookYaw(double s, const std::vector<Vector3d> &targets) const;
+    // planned with; 0 elsewhere, or for a missing target. `shift`: how far the
+    // path has been carried from where it was planned (frameShift).
+    double lookYaw(double s, const std::vector<Vector3d> &targets, const Vector3d &shift = Vector3d::Zero()) const;
+    // How far the path at s has been carried from where it was planned, given how
+    // far each path point's frame has moved since (`shifts`, odometry frame,
+    // index-aligned with the points; any other size: none). Each segment blends
+    // (smoothstep) from the previous point's shift to its own, the first from zero
+    // at the start, so the path bends onto the moved points without a step.
+    Vector3d frameShift(double s, const std::vector<Vector3d> &shifts) const;
 
   private:
     struct Piece {
