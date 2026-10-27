@@ -452,7 +452,8 @@ void fitReleases(const YAML::Node &prior, const YAML::Node &vehicle, double mass
                  const std::vector<Sample> &samples, const std::vector<Segment> &segments, Result &result);
 
 void fitHydrodynamics(const YAML::Node &prior, double mass, const std::vector<Sample> &samples,
-                      const std::vector<Segment> &segments, Result &result, const YAML::Node &vehicle) {
+                      const std::vector<Segment> &segments, Result &result, const YAML::Node &vehicle,
+                      const FitOptions &options) {
     const double weight = mass * kGravity;
     const double rho = prior["water_density"].as<double>();
 
@@ -641,8 +642,13 @@ void fitHydrodynamics(const YAML::Node &prior, double mass, const std::vector<Sa
         const double d1 = a.drag_ok ? a.d1 : getEntry(prior["linear_damping6x6"], d, d);
         const double d2 = a.drag_ok ? a.d2 : prior["quadratic_damping"][d].as<double>();
 
-        // inertia: integral(excess - drag) dt = M dv over accel and decel windows
-        std::vector<double> dvs, js;
+        // inertia: integral(excess - drag) dt = M dv over accel and decel windows. Each window keeps its
+        // segment's samples so the fit can be repeated with the thrust delayed (the lag check).
+        struct Window {
+            std::vector<const Sample *> ss;
+            std::size_t i, j;
+        };
+        std::vector<Window> wins;
         for (const Segment *seg : list) {
             const auto ss = segmentSamples(samples, seg->id);
             std::vector<double> s(ss.size());
@@ -651,15 +657,7 @@ void fitHydrodynamics(const YAML::Node &prior, double mass, const std::vector<Sa
                 smax = std::max(smax, s[k] = seg->direction * along(*ss[k], axis));
             if (smax < 0.02 || ss.size() < 4)
                 continue;
-            auto window = [&](std::size_t i, std::size_t j) {
-                double y = 0;
-                for (std::size_t k = i + 1; k <= j; ++k) {
-                    const double v = 0.5 * (along(*ss[k - 1], axis) + along(*ss[k], axis));
-                    y += excess(*ss[k]) * ss[k]->dt - (d1 * v + d2 * std::abs(v) * v) * ss[k]->dt;
-                }
-                dvs.push_back(along(*ss[j], axis) - along(*ss[i], axis));
-                js.push_back(y);
-            };
+            auto window = [&](std::size_t i, std::size_t j) { wins.push_back({ss, i, j}); };
             std::size_t i0 = 0;
             while (i0 < s.size() && s[i0] < 0.05 * smax)
                 ++i0;
@@ -677,30 +675,79 @@ void fitHydrodynamics(const YAML::Node &prior, double mass, const std::vector<Sa
             if (j1 < s.size() && j1 > j0 && j0 > i1)
                 window(j0, j1);
         }
-        a.windows = static_cast<int>(dvs.size());
-        const double rigid = rigidInertia(prior, d, mass);
-        if (a.windows >= 2) {
+        // M dv = J over the windows (least squares through the origin), with the thrust taken `lag` s earlier:
+        // J = thrust impulse over (t_i - lag, t_j - lag] minus the drag over (t_i, t_j].
+        auto inertiaFit = [&](double lag, double &m_total, double &r2) {
+            std::vector<double> dvs, js;
+            for (const Window &w : wins) {
+                // cumulative excess impulse at each sample time; flat outside the segment (holding before it)
+                std::vector<double> ts(w.ss.size()), cs(w.ss.size(), 0.);
+                for (std::size_t k = 0; k < w.ss.size(); ++k) {
+                    ts[k] = w.ss[k]->t;
+                    if (k > 0)
+                        cs[k] = cs[k - 1] + excess(*w.ss[k]) * w.ss[k]->dt;
+                }
+                auto cumulative = [&](double t) {
+                    if (t <= ts.front())
+                        return cs.front();
+                    if (t >= ts.back())
+                        return cs.back();
+                    const std::size_t k = std::upper_bound(ts.begin(), ts.end(), t) - ts.begin();
+                    const double f = (t - ts[k - 1]) / (ts[k] - ts[k - 1]);
+                    return cs[k - 1] + f * (cs[k] - cs[k - 1]);
+                };
+                double y = cumulative(ts[w.j] - lag) - cumulative(ts[w.i] - lag);
+                for (std::size_t k = w.i + 1; k <= w.j; ++k) {
+                    const double v = 0.5 * (along(*w.ss[k - 1], axis) + along(*w.ss[k], axis));
+                    y -= (d1 * v + d2 * std::abs(v) * v) * w.ss[k]->dt;
+                }
+                dvs.push_back(along(*w.ss[w.j], axis) - along(*w.ss[w.i], axis));
+                js.push_back(y);
+            }
             double num = 0, den = 0;
             for (std::size_t k = 0; k < dvs.size(); ++k)
                 num += js[k] * dvs[k], den += dvs[k] * dvs[k];
-            a.mass_total = num / den;
-            a.added_mass = a.mass_total - rigid;
+            m_total = num / den;
             const double mean = std::accumulate(js.begin(), js.end(), 0.) / js.size();
             double res = 0, tot = 0;
             for (std::size_t k = 0; k < dvs.size(); ++k) {
-                res += std::pow(js[k] - a.mass_total * dvs[k], 2);
+                res += std::pow(js[k] - m_total * dvs[k], 2);
                 tot += std::pow(js[k] - mean, 2);
             }
-            a.mass_r2 = tot > 0 ? 1 - res / tot : 0;
-            // Over 3x rigid is rejected: Talos fits 3-4x on surge/sway, but a model with those
-            // values flew much worse (2026-10-03), so they are likely sensing/actuation lag
-            // folded into the inertia rather than mass.
+            r2 = tot > 0 ? 1 - res / tot : 0;
+        };
+        a.windows = static_cast<int>(wins.size());
+        const double rigid = rigidInertia(prior, d, mass);
+        if (a.windows >= 2) {
+            inertiaFit(0., a.mass_total, a.mass_r2);
+            a.added_mass = a.mass_total - rigid;
+            a.lag_checked = true;
+            a.lag_mass_total = a.mass_total, a.lag_r2 = a.mass_r2;
+            for (double lag = options.lag_step; lag <= options.lag_search + 1e-9; lag += options.lag_step) {
+                double m, r2;
+                inertiaFit(lag, m, r2);
+                if (std::isfinite(m) && r2 > a.lag_r2)
+                    a.best_lag = lag, a.lag_mass_total = m, a.lag_r2 = r2;
+            }
+            // Talos's surge fits came out at 3-4x rigid, and a model with that flew worse on 2026-10-03 (with the
+            // rpm_offset 140 ESC bug). The lag check tells real mass from thrust or sensing lag folded into it.
+            const double ratio = options.max_added_mass_ratio[d];
             const bool fit_ok = std::isfinite(a.mass_total) && a.mass_r2 >= 0.8;
-            const bool range_ok = a.added_mass > -0.25 * rigid && a.added_mass < 3 * rigid;
-            a.mass_ok = fit_ok && range_ok;
-            if (!a.mass_ok)
-                a.note += std::string(a.note.empty() ? "" : "; ") +
-                          (fit_ok ? "added mass rejected (outside -0.25..3x rigid)" : "added mass rejected (R2 < 0.8)");
+            const bool range_ok = a.added_mass > -0.25 * rigid && a.added_mass < ratio * rigid;
+            const bool lag_ok = a.best_lag <= options.max_inertia_lag + 1e-9;
+            a.mass_ok = fit_ok && range_ok && lag_ok;
+            if (!a.mass_ok) {
+                char why[160];
+                if (!fit_ok)
+                    std::snprintf(why, sizeof why, "added mass rejected (R2 < 0.8)");
+                else if (!range_ok)
+                    std::snprintf(why, sizeof why, "added mass rejected (outside -0.25..%gx rigid)", ratio);
+                else
+                    std::snprintf(why, sizeof why,
+                                  "added mass rejected (lag: %.2f s more thrust delay fits better, inertia %.1f)",
+                                  a.best_lag, a.lag_mass_total);
+                a.note += std::string(a.note.empty() ? "" : "; ") + why;
+            }
             a.added_mass = std::max(0., a.added_mass);
         } else {
             a.note += std::string(a.note.empty() ? "" : "; ") + "added mass: no complete accel/decel windows";
@@ -1178,17 +1225,18 @@ std::vector<Sample> correctedSamples(const std::vector<Sample> &samples, const T
 } // namespace
 
 Result fit(const YAML::Node &prior, double mass, const std::vector<Sample> &samples,
-           const std::vector<Segment> &segments, const MatrixXd &thruster_matrix, const YAML::Node &vehicle) {
+           const std::vector<Segment> &segments, const MatrixXd &thruster_matrix, const YAML::Node &vehicle,
+           const FitOptions &options) {
     Result result;
     if (thruster_matrix.cols() > 0) {
         result.thrusters = fitThrusters(mass, stillChunks(samples, segments), thruster_matrix);
         if (result.thrusters.ok) {
             fitHydrodynamics(prior, mass, correctedSamples(samples, result.thrusters, thruster_matrix), segments,
-                             result, vehicle);
+                             result, vehicle, options);
             return result;
         }
     }
-    fitHydrodynamics(prior, mass, samples, segments, result, vehicle);
+    fitHydrodynamics(prior, mass, samples, segments, result, vehicle, options);
     return result;
 }
 
@@ -1298,6 +1346,11 @@ YAML::Node report(const YAML::Node &prior, const Result &r) {
         n["total_inertia"] = a.mass_total;
         n["inertia_r2"] = a.mass_r2;
         n["accel_windows"] = a.windows;
+        if (a.lag_checked) {
+            n["inertia_best_lag"] = a.best_lag;
+            n["inertia_at_best_lag"] = a.lag_mass_total;
+            n["inertia_r2_at_best_lag"] = a.lag_r2;
+        }
         if (!a.note.empty())
             n["note"] = a.note;
         out[names[d]] = n;

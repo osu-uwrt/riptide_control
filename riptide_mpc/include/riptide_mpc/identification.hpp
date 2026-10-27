@@ -26,6 +26,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <array>
 #include <optional>
 #include <string>
 #include <vector>
@@ -217,6 +218,9 @@ struct AxisFit {
     int steady_samples = 0, speed_levels = 0;
     double mass_total = 0, added_mass = 0, mass_r2 = 0;
     int windows = 0;
+    // Lag check: the extra thrust delay that best explains the accel/decel windows, and the inertia it gives.
+    bool lag_checked = false;
+    double best_lag = 0, lag_mass_total = 0, lag_r2 = 0;
     std::string note;
 };
 
@@ -248,12 +252,24 @@ struct Result {
 // `model` with the vehicle config's mass and com put in when it has no body of its own: the fit is paired with
 // that body, so the identified model must carry it.
 YAML::Node withBody(const YAML::Node &model, const YAML::Node &vehicle);
+// Plausibility limits for the added mass fitted from the runs.
+struct FitOptions {
+    // Upper limit as a multiple of the rigid inertia, per axis (surge sway heave roll pitch yaw); the lower one is
+    // -0.25x. Talos's surge and sway fits come out at 2.3-3.6x rigid in every session, with no extra lag (the lag
+    // check below), so the translations get 5x.
+    std::array<double, 6> max_added_mass_ratio{5, 5, 5, 3, 3, 3};
+    // Lag check: the inertia fit is repeated with the thrust delayed by 0..lag_search s (beyond the model's
+    // thruster dynamics). When a delay over max_inertia_lag fits the windows best, the large inertia is
+    // actuation/sensing lag rather than mass, and it is rejected.
+    double max_inertia_lag = 0.25, lag_search = 0.6, lag_step = 0.05;
+};
+
 // `prior` is the MPC model file (hydrodynamics schema); `mass` its body's (withBody). `thruster_matrix`
 // (6 x n, the model's) enables the per-thruster fit; the other fits then use the corrected thrust.
 // `vehicle` (the vehicle document) enables the release fit (it simulates the releases with the model).
 Result fit(const YAML::Node &prior, double mass, const std::vector<Sample> &samples,
            const std::vector<Segment> &segments, const MatrixXd &thruster_matrix = MatrixXd(),
-           const YAML::Node &vehicle = YAML::Node());
+           const YAML::Node &vehicle = YAML::Node(), const FitOptions &options = FitOptions());
 // Copy of `prior` with every accepted value replaced, number lists written inline. Thruster gains are relative
 // to the model the recording's thrust was computed with (the Recorder's): pass it as `thrust_base` when that is
 // not `prior`.

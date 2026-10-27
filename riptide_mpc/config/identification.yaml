@@ -21,6 +21,10 @@
     linear_accel: 0.5
     angular_accel: 1.2
     tilt: 0.44                # rad (25 deg) roll/pitch holds for the vertical COB offset (more tilt, more torque)
+    max_added_mass_ratio: [5.0, 5.0, 5.0, 3.0, 3.0, 3.0]  # surge sway heave roll pitch yaw: added mass above this
+                              # many rigid inertias is rejected. Talos's surge/sway fits are 2.3-3.6x in every session
+    max_inertia_lag: 0.25     # s; the inertia fit is retried with the thrust delayed up to 0.6 s, and rejected when a
+                              # delay beyond this fits better (lag folded into the inertia, not mass)
     max_iterations: 1         # >1: fly, fit all data so far, load the fit into the MPC, fly again; stops early
                               # when two fits agree (convergence_tolerance 10%, cob_tolerance 2 mm)
     repeats: 1                # out-and-back pairs per speed: more data in a small pool
