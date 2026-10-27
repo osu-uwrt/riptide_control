@@ -122,6 +122,7 @@ class PoolIdentifyNode : public rclcpp::Node {
         trust_threshold_ = declare_parameter("trust_threshold", 0.95);
         // Iterations: fly, fit everything recorded so far, load the fitted model into the
         // running MPC, fly again; stop when two successive fits agree (or max_iterations).
+        // The last fit is only written, not flown, and the MPC goes back to its own model at the end.
         max_iterations_ = static_cast<int>(declare_parameter("max_iterations", static_cast<int64_t>(1)));
         tolerance_ = declare_parameter("convergence_tolerance", 0.10); // relative: drag, inertia, volume
         cob_tolerance_ = declare_parameter("cob_tolerance", 0.002);    // m
@@ -350,13 +351,13 @@ class PoolIdentifyNode : public rclcpp::Node {
             RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000, "Waiting for:%s", missing.c_str());
             return false;
         }
-        // Remember the MPC's own limits to restore at the end (async: never block the executor).
+        // Remember the MPC's own limits and model to restore at the end (async: never block the executor).
         if (!base_ready_) {
             if (!base_requested_) {
                 base_requested_ = true;
                 params_->get_parameters({"motion.linear_speed", "motion.linear_accel", "motion.angular_speed",
                                          "motion.angular_accel", "motion.linear_speed_vertical",
-                                         "motion.linear_accel_vertical"},
+                                         "motion.linear_accel_vertical", "hydrodynamics_config"},
                                         [this](std::shared_future<std::vector<rclcpp::Parameter>> f) {
                                             const auto v = f.get();
                                             base_.linear_speed = v.at(0).as_double();
@@ -365,6 +366,7 @@ class PoolIdentifyNode : public rclcpp::Node {
                                             base_.angular_accel = v.at(3).as_double();
                                             base_.linear_speed_vertical = v.at(4).as_double();
                                             base_.linear_accel_vertical = v.at(5).as_double();
+                                            original_model_ = v.at(6).as_string();
                                             base_ready_ = true;
                                         });
             }
@@ -641,15 +643,25 @@ class PoolIdentifyNode : public rclcpp::Node {
         previous_result_ = result;
 
         const bool last = iteration_ + 1 >= max_iterations_;
-        // Every iteration's fit flies next, including the last, so the session ends on the best model.
-        RCLCPP_WARN(get_logger(), "Iteration %d done%s: loading %s into the MPC", iteration_ + 1,
-                    agreed ? " (converged)" : last ? " (max_iterations)" : "", path.c_str());
+        // Only a fit that flies the next iteration goes into the MPC. The last one is written, not flown:
+        // the session ends with the MPC back on the model it started with (see finish()).
+        if (agreed || last) {
+            std::filesystem::copy_file(path, dir_ + "/model_final.yaml",
+                                       std::filesystem::copy_options::overwrite_existing);
+            RCLCPP_WARN(get_logger(), "Iteration %d done%s: fit written to %s (not loaded)", iteration_ + 1,
+                        agreed ? " (converged)" : " (max_iterations)", path.c_str());
+            finish(agreed ? "converged" : "max_iterations reached", kLedDone);
+            return;
+        }
+        RCLCPP_WARN(get_logger(), "Iteration %d done: loading %s into the MPC for iteration %d", iteration_ + 1,
+                    path.c_str(), iteration_ + 2);
+        fit_loaded_ = true;
         previous_model_ = current_model_;
         current_model_ = path;
         params_pending_ = true;
         params_->set_parameters(
             {rclcpp::Parameter("hydrodynamics_config", path)},
-            [this, agreed, last](std::shared_future<std::vector<rcl_interfaces::msg::SetParametersResult>> f) {
+            [this](std::shared_future<std::vector<rcl_interfaces::msg::SetParametersResult>> f) {
                 const auto r = f.get();
                 params_pending_ = false;
                 if (r.empty() || !r.front().successful) {
@@ -657,12 +669,6 @@ class PoolIdentifyNode : public rclcpp::Node {
                                  r.empty() ? "no reply" : r.front().reason.c_str());
                     current_model_ = previous_model_;
                     finish("MPC rejected the fitted model");
-                    return;
-                }
-                if (agreed || last) {
-                    std::filesystem::copy_file(current_model_, dir_ + "/model_final.yaml",
-                                               std::filesystem::copy_options::overwrite_existing);
-                    finish(agreed ? "converged" : "max_iterations reached", kLedDone);
                     return;
                 }
                 ++iteration_;
@@ -759,6 +765,19 @@ class PoolIdentifyNode : public rclcpp::Node {
             publishInputs(ident::Sequencer::Output());
             params_->set_parameters({rclcpp::Parameter("identification.allow", false)});
         }
+        // A fit loaded between iterations was only for this session: back to the MPC's own model.
+        if (fit_loaded_ && !original_model_.empty()) {
+            RCLCPP_WARN(get_logger(), "Restoring the MPC's model: %s", original_model_.c_str());
+            params_->set_parameters(
+                {rclcpp::Parameter("hydrodynamics_config", original_model_)},
+                [this](std::shared_future<std::vector<rcl_interfaces::msg::SetParametersResult>> f) {
+                    const auto r = f.get();
+                    if (r.empty() || !r.front().successful)
+                        RCLCPP_ERROR(get_logger(), "MPC did not take back %s: %s (restart it)", original_model_.c_str(),
+                                     r.empty() ? "no reply" : r.front().reason.c_str());
+                });
+            fit_loaded_ = false;
+        }
         if (sequencer_) {
             params_->set_parameters(motionParameters(base_));
             if (!killed_.value_or(false))
@@ -782,16 +801,17 @@ class PoolIdentifyNode : public rclcpp::Node {
         report["session"] = why;
         report["iterations_fitted"] = static_cast<int>(iterations_.size());
         report["prior_model"] = model_path_;
-        report["mpc_model_loaded"] = current_model_;
+        report["mpc_model_loaded"] = original_model_.empty() ? current_model_ : original_model_; // after the session
         std::ofstream(dir + "/report.yaml") << report << "\n";
         std::ofstream(dir + "/model_identified.yaml")
             << ident::identifiedModel(prior, result, YAML::LoadFile(model_path_)) << "\n";
         std::ofstream(dir + "/iterations.yaml") << iterations_ << "\n";
         RCLCPP_WARN(get_logger(), "Saved %zu samples to %s\n%s", recorder_->samples().size(), dir.c_str(),
                     YAML::Dump(report).c_str());
-        RCLCPP_WARN(get_logger(), "The MPC is flying %s until it restarts. To keep it, copy it over riptide_mpc "
-                                  "config/models/%s.yaml (or launch with mpc_model:=<that file>).",
-                    current_model_.c_str(), robotName().c_str());
+        RCLCPP_WARN(get_logger(), "The MPC is flying %s again. To use the fit, copy %s/model_identified.yaml over "
+                                  "riptide_mpc config/models/%s.yaml (or launch with mpc_model:=<that file>).",
+                    original_model_.empty() ? current_model_.c_str() : original_model_.c_str(), dir.c_str(),
+                    robotName().c_str());
         end();
     }
 
@@ -819,6 +839,8 @@ class PoolIdentifyNode : public rclcpp::Node {
     Eigen::MatrixXd thruster_matrix_, null_space_;
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr ident_pub_;
     std::string current_model_, previous_model_, dir_, stamp_;
+    std::string original_model_; // the MPC's hydrodynamics_config when the session started
+    bool fit_loaded_ = false;    // a fit of this session is in the MPC (restored in finish())
     std::optional<ident::Result> previous_result_;
     YAML::Node iterations_;
     std::deque<std::pair<double, double>> rates_;
