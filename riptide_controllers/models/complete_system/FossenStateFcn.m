@@ -65,7 +65,7 @@ function g = getRestoringVector(R, mass, buoyancy, com, cob)
 
     %get forces and moments
     forceBody = weightBody + buoyancyBody;
-    momentBody = cross(com, weightBody) + cross(cob, buoyancyBody);
+    momentBody = cross(weightBody, com) + cross(buoyancyBody, cob);
     
     g = [forceBody; momentBody];
 end
