@@ -25,19 +25,23 @@ M = blkdiag(mass * eye(3), I) + MA;
 
 offset = reshape(base_link, 3, 1) - reshape(center_of_mass, 3, 1);
 xCOM = baseLinkToCOM(xBase, offset);
-referenceBase = reshape(refBase, 13, 1);
+% referenceBase = reshape(refBase, 13, 1);
 % The angular command subscriber has an all-zero quaternion until the first
 % command arrives after enable. Use the measured attitude during that gap;
 % preserve the desired position and velocities instead of inventing a pose.
-if all(referenceBase(4:7) == 0)
-    referenceBase(4:7) = xCOM(4:7);
+if all(refBase(4:7) == 0)
+    refBase(4:7) = xCOM(4:7);
 end
-reference = baseLinkToCOM(referenceBase, offset);
+
+reference = zeros(10, 13);
+for i = 1:10
+    reference(i,:) = baseLinkToCOM(refBase(i, :), offset);
+end
 
 % q and -q describe the same attitude. Track the measured representation.
 reference(4:7) = reference(4:7) / norm(reference(4:7));
 if dot(reference(4:7), xCOM(4:7)) < 0
     reference(4:7) = -reference(4:7);
 end
-refCOM = reference.';
+refCOM = reference;
 end
