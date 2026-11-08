@@ -1,15 +1,27 @@
-function dxdt = FossenStateFcn(x, thrusterForces, M, MA, DQ, DL, B, mass, buoyancy, com, cob, I, flipCost) 
-    
+function dxdt = FossenStateFcn(x, thrusterForces, M, MA, DQ, DL, B, mass, buoyancy, com, cob, I, flipCost)
+    % x contains world COM position, wxyz attitude, and body velocity at COM.
+    % M, MA, damping, inertia and thruster moments are all based at COM.
+    % The parameter builder supplies com=zeros(3,1), with cob relative to COM.
     quat = x(4:7);
     nu = x(8:13); %linear and angular velos
     
-    C = getCoriolisMatrix(nu, MA, mass, com, I);
-    D = DL + DQ * diag(abs(nu));
     R = bodyToWorldRotation(quat);
     g = getRestoringVector(R, mass, buoyancy, com, cob);
+
     tau = B * thrusterForces;
-    
-    nu_dot = M \ (tau - C * nu - D * nu - g); %Same as M^-1(tau - C*nu - D*nu - g)
+
+    % Compute C(nu)*nu without constructing the full Coriolis matrix.
+    v = nu(1:3);
+    omega = nu(4:6);
+    MA_v = MA * nu;
+    a = MA_v(1:3);
+    b = MA_v(4:6);
+    coriolis = [mass * cross(omega, v) - mass * cross(omega, cross(com, omega)) + cross(omega, a);
+                mass * cross(com, cross(omega, v)) + cross(omega, I * omega) ...
+                - cross(a, v) + cross(omega, b)];
+
+    damping = DL * nu + DQ * (abs(nu) .* nu);
+    nu_dot = M \ (tau - coriolis - damping - g);
     position_dot = R * nu(1:3);
     
     quat_dot = getQuaternionDerivative(quat, nu);
@@ -39,24 +51,6 @@ function quat_dot = getQuaternionDerivative(quat, nu)
     ];
 end
 
-
-function C = getCoriolisMatrix(nu, MA, mass, com, I)
-    v = nu(1:3);
-    omega = nu(4:6);
-    %construct added coriolis
-    a = MA(1:3,1:3) * v + MA(1:3,4:6) * omega;
-    b = MA(4:6,1:3) * v + MA(4:6,4:6) * omega;
-    CA = [zeros(3), -skew(a); -skew(a), -skew(b)];
-    
-    %construct rigid body coriolis
-    Sw = skew(omega);
-    Sg = skew(com);
-    
-    CRB = [mass * Sw, -mass * Sw * Sg; ...
-           mass * Sg * Sw, -skew(I * omega)];
-    C = CRB + CA;
-end
-
 function g = getRestoringVector(R, mass, buoyancy, com, cob)
    
     %rotate gravity and bouyancy into body
@@ -65,9 +59,9 @@ function g = getRestoringVector(R, mass, buoyancy, com, cob)
 
     %get forces and moments
     forceBody = weightBody + buoyancyBody;
-    momentBody = cross(weightBody, com) + cross(buoyancyBody, cob);
+    momentBody = cross(com, weightBody) + cross(cob, buoyancyBody);
     
-    g = [forceBody; momentBody];
+    g = -[forceBody; momentBody];
 end
 
 function R = bodyToWorldRotation(quat)
@@ -76,9 +70,4 @@ function R = bodyToWorldRotation(quat)
     q = quat ./ qnorm;
     %make rotm
     R = quat2rotm(q');
-end
-
-%helper function
-function S = skew(v)
-    S = [0, -v(3), v(2); v(3), 0, -v(1); -v(2), v(1), 0];
 end

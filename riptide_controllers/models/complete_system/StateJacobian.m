@@ -1,75 +1,110 @@
-function [A, Bmv] = StateJacobian(x, thrusterForces, M, MA, DQ, DL, B, mass, buoyancy, com, cob, I, flipCost) 
+function [A, Bmv] = StateJacobian(x, ~, M, MA, DQ, DL, B, mass, buoyancy, com, cob, I, ~)
+% Local sensitivities: delta(x_dot) = A*delta(x) + Bmv*delta(u).
+% State position and body linear velocity are based at COM.
+% Output A: this gives the optimizer an idea of how a change in the state
+% will effect the RATE of change of the state
 
-%states
+% Output B: this gives the optimizer the matrix for how changes in the
+% control outputs will effect the RATE of change in the state
 quat = x(4:7);
 nu = x(8:13);
+v = nu(1:3);
+omega = nu(4:6);
 
-%from states
-qw = quat(1);
-qx = quat(2);
-qy = quat(3);
-qz = quat(4);
+% FossenStateFcn normalizes the quaternion before using its rotation matrix.
+nq = norm(quat);
+qhat = quat / nq;
+qw = qhat(1);
+qx = qhat(2);
+qy = qhat(3);
+qz = qhat(4);
+Jnormalize = (eye(4) - qhat * qhat.') / nq;
 
-vx = nu(1);
-vy = nu(2);
-vz = nu(3);
-p = nu(4);   
-q = nu(5);    
-r = nu(6);
-
-%constants
-g = 9.80665
-rCombined = buoyancy * cob - mass * g * com;
-
-%helper calculations
 R = bodyToWorldRotation(quat);
 
-S = 0.5 * [-qx, -qy, -qz;
-             qw, qy, -qz;
-             qw, qz, -qx;
-             qw, qx, -qy];
+%Finding positional derivatives based on orientation and velocities
+%
+dR_dqhat = rotationPartials(qhat);
+dR_dq = zeros(3, 3, 4);
+for j = 1:4
+    for k = 1:4
+        dR_dq(:, :, j) = dR_dq(:, :, j) + dR_dqhat(:, :, k) * Jnormalize(k, j);
+    end
+end
+dp_dq = zeros(3, 4);
+for j = 1:4
+    dp_dq(:, j) = dR_dq(:, :, j) * v;
+end
 
+A = zeros(13, 13);
+A(1:3, 4:7) = dp_dq;
+A(1:3, 8:10) = R;
 
-%partial derivatives
-dqd_dq = 0.5  * [0, -p, -q, -r;
-                  p, 0, r, -q;
-                  q, -r, 0, p;
-                  r, q, -p, 0];
+% Quaternion kinematics use the raw quaternion in FossenStateFcn, so their
+% derivatives must not include Jnormalize.
+A(4:7, 4:7) = 0.5 * [0, -omega.';
+                       omega, -skew(omega)];
+% These rates use the raw state quaternion, unlike rotation/restoring terms.
+w = quat(1);
+t = quat(2:4);
+A(4:7, 11:13) = 0.5 * [-t.';
+                         w * eye(3) + skew(t)];
 
+% Derivative of the physical restoring wrench used by FossenStateFcn.
+dup_dqhat = [-2*qy,  2*qz, -2*qw,  2*qx;
+              2*qx,  2*qw,  2*qz,  2*qy;
+              0,    -4*qx, -4*qy,  0];
+dup_dq = dup_dqhat * Jnormalize;
+rCombined = buoyancy * cob - mass * 9.80665 * com;
+restoringJacobian = [(buoyancy - mass * 9.80665) * dup_dq;
+                     skew(rCombined) * dup_dq];
+A(8:13, 4:7) = M \ restoringJacobian;
 
-dpd_dq = 2.0 * [
-    qy * vz - qz * vy,   qy * vy + qz * vz,   qw * vz + qx * vy - 2.0 * qy * vx,   -qw * vy + qx * vz - 2.0 * qz * vx;
-    -qx * vz + qz * vx,  -qw * vz - 2.0 * qx * vy + qy * vx,  qx * vx + qz * vz,   qw * vx + qy * vz - 2.0 * qz * vy;
-    qx * vy - qy * vx,   qw * vy - 2.0 * qx * vz + qz * vx,   -qw * vx - 2.0 * qy * vz + qz * vy,  qx * vx + qy * vy
-];
+% C(nu)*nu is quadratic in velocity. Differentiate both C and nu:
+% d(C*nu)/dnu_j = C(:,j) + (dC/dnu_j)*nu.
+C = getCoriolisMatrix(nu, MA, mass, com, I);
+Jcoriolis = C;
+unit = eye(6);
+for j = 1:6
+    Cj = getCoriolisMatrix(unit(:,j), MA, mass, com, I);
+    Jcoriolis(:,j) = Jcoriolis(:,j) + Cj*nu;
+end
+Jdamping = DL + DQ * diag(2 * abs(nu));
+A(8:13, 8:13) = -(M \ (Jcoriolis + Jdamping));
 
-du_dq = [-2 * qy, 2 * qz, -2 * qw, 2 * qx;
-          2 * qx, 2 * qw, 2 * qz, 2 * qy;
-          0, -4 * qx, -4 * qy, 0];
+% The input wrench is B*u; M and B are fixed parameters during a solve.
+Bmv = [zeros(7, size(B, 2)); M \ B];
+end
 
-dvd_dq = -(M \ [(buoyancy - mass * g) * du_dq;
-                cross(du_dq, repmat(rCombined, 1, 4))]); %%might need something with quat normalization im not sure how it comes in
+function C = getCoriolisMatrix(nu, MA, mass, com, I)
+omega = nu(4:6);
+MA_v = MA * nu;
+a = MA_v(1:3);
+b = MA_v(4:6);
+CA = [zeros(3), -skew(a); -skew(a), -skew(b)];
+Sg = skew(com);
+Sw = skew(omega);
+CRB = [mass*Sw, -mass*Sw*Sg; mass*Sg*Sw, -skew(I*omega)];
+C = CRB + CA;
+end
 
-dvd_dv = [];
-
-
-
-pdot_rows = [zeros(3,3), dpd_dq, R, zeros(3,3)]; %DONE?          
-qdot_rows = [zeros(4,3), dqd_dq, zeros(4,3), S]; %DONE?
-vdot_rows = [zeros(6,3), dvd_dq, dvd_dv]; %NOT DONE
-
-A = [pdot_rows;
-     qdot_rows;
-     vdot_rows];
-
-Bmv = [zeros(7,8); M\B];
-
-
+function dR = rotationPartials(quat)
+% Partials of the homogeneous quaternion rotation polynomial at qhat.
+w = quat(1);
+t = quat(2:4);
+e = eye(3);
+dR = zeros(3, 3, 4);
+dR(:, :, 1) = 2*w*eye(3) + 2*skew(t);
+for j = 1:3
+    dR(:, :, j + 1) = -2*t(j)*eye(3) + 2*(e(:,j)*t.' + t*e(:,j).') + 2*w*skew(e(:,j));
+end
+end
 
 function R = bodyToWorldRotation(quat)
-    %normalize quat
-    qnorm = sqrt(quat.' * quat);
-    q = quat ./ qnorm;
-    %make rotm
-    R = quat2rotm(q');
+q = quat / norm(quat);
+R = quat2rotm(q.');
+end
+
+function S = skew(v)
+S = [0, -v(3), v(2); v(3), 0, -v(1); -v(2), v(1), 0];
 end
