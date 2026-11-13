@@ -33,15 +33,12 @@ if all(refBase(4:7) == 0)
     refBase(4:7) = xCOM(4:7);
 end
 
-reference = zeros(10, 13);
-for i = 1:10
-    reference(i,:) = baseLinkToCOM(refBase(i, :), offset);
-end
+reference = baseLinkToCOM(refBase, offset);
 
 % q and -q describe the same attitude. Track the measured representation.
 reference(4:7) = reference(4:7) / norm(reference(4:7));
 if dot(reference(4:7), xCOM(4:7)) < 0
     reference(4:7) = -reference(4:7);
 end
-refCOM = reference;
+refCOM = transpose(reference);
 end

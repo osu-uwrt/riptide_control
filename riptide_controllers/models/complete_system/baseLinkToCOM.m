@@ -10,7 +10,7 @@ quat = xCOM(4:7);
 assert(all(isfinite(quat)) && norm(quat) > 0, ...
     'base_link orientation must be a finite, nonzero quaternion.');
 q = quat / norm(quat);
-R = quat2rotm(q.');
+R = quat2rotm(q');
 xCOM(1:3) = xCOM(1:3) - R * offset;
 xCOM(8:10) = xCOM(8:10) - cross(xCOM(11:13), offset);
 end
