@@ -1,16 +1,20 @@
-#include <arpa/inet.h>
 #include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include "send_thruster_cmd.h"
+
+// socketcan is linux only
+#ifdef __linux__
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <linux/can.h>
 #include <linux/can/raw.h>
 #include <net/if.h>
-#include <stdio.h>
-#include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/time.h>
-#include <unistd.h>
-#include "send_thruster_cmd.h"
+#endif
 
 #define CAN_INTERFACE_NAME "can0"
 #define CAN_ID_ESC_BOARD0 2
@@ -44,6 +48,8 @@
 
 
 static int socket_fd = -1;
+
+#ifdef __linux__
 
 static void report_init_error(const char* func_name, int err_val) {
     fprintf(stderr, "[send_thruster_cmd_canbus] Failed to initialize! Function '%s' failed with error: %s (%d)\n",
@@ -156,6 +162,22 @@ int send_thruster_cmd_canbus(int16_t cmds[8]) {
 
     return 0;
 }
+
+#else
+
+// no socketcan here. fail once like a failed init would, then stay quiet
+int send_thruster_cmd_canbus(int16_t cmds[8]) {
+    (void) cmds;
+    if (socket_fd == -2) {
+        return 0;
+    }
+
+    fprintf(stderr, "[send_thruster_cmd_canbus] SocketCAN is Linux only, not sending thruster commands\n");
+    socket_fd = -2;
+    return ENOTSUP;
+}
+
+#endif //__linux__
 
 #ifdef ENABLE_THRUSTER_TEST
 
