@@ -1,23 +1,19 @@
 function J = FossenCostFunction(X, U, e, data, M, MA, DQ, DL, B, mass, buoyancy, com, cob, I, flipCost) 
+%#codegen
 
-    %constants
-    weight = flipCost; %need to tune
-    deadband = 0.75; %in newtons
-    PH = size(U,1) - 1;
+    % Constants
+    weight = flipCost; 
+    deadband = 0.75; % Newtons deadband
+    PH = size(U, 1) - 1;
 
-    %pull thrusts
-    prev_real_thrust = data.LastMV; % 8 by 1
-    prev_predicted_thrusts = U(1:PH,:); % ph by 8
-    prev_thrusts = [prev_real_thrust'; prev_predicted_thrusts]; % ph + 1 by 8
-    %U 31 by 8
+    % Pull and align thrusts
+    prev_real_thrust = reshape(data.LastMV, 8, 1); 
+    prev_predicted_thrusts = U(1:PH, :); 
+    prev_thrusts = [prev_real_thrust'; prev_predicted_thrusts]; 
 
-    %cost function
-    sign_prev = tanh(prev_thrusts ./ deadband); % ph + 1 by 8 | smooths sign flipping
-    J_arr = weight .* max(0, (-sign_prev .* U)).^2; % ph + 1 by 8
-    J = sum(J_arr, "all"); % 1 by 1
+    % Cost function: penalize sign reversals, allow dropping to zero
+    sign_prev = tanh(prev_thrusts ./ deadband); 
+    J_arr = weight .* max(0, (-sign_prev .* U)).^2; 
+    J = sum(J_arr, "all"); 
 
-    %cost increases if signs are opposite
-    %cost zero if equal sign
-    %penalizes reversal from higher thrusts more
-    %doesnt penalize dropping to zero (I think what we want)
 end

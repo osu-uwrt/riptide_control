@@ -7,7 +7,7 @@ function [M, MA, DQ, DL, B, mass, buoyancy, com, cob, I, flipCost, ...
 % center_of_mass and base_link are positions from the shared vehicle datum.
 % All physical coefficients and wrench_mat already use COM; do not shift them.
 % center_of_buoyancy is an offset from COM, not from the shared datum.
-% xBase is a 13-state vector; refBase is the active 1-by-13 pose/velocity target.
+% xBase is a 13-state vector; refBase is the active N-by-13 pose/velocity target horizon.
 %#codegen
 DQ = diag(reshape(quadratic_damping, 6, 1));
 DL = reshape(linear_damping_matrix, 6, 6);
@@ -25,20 +25,33 @@ M = blkdiag(mass * eye(3), I) + MA;
 
 offset = reshape(base_link, 3, 1) - reshape(center_of_mass, 3, 1);
 xCOM = baseLinkToCOM(xBase, offset);
-% referenceBase = reshape(refBase, 13, 1);
-% The angular command subscriber has an all-zero quaternion until the first
-% command arrives after enable. Use the measured attitude during that gap;
-% preserve the desired position and velocities instead of inventing a pose.
-if all(refBase(4:7) == 0)
-    refBase(4:7) = xCOM(4:7);
+
+% Handle N-step prediction horizon for refBase
+[numSteps, ~] = size(refBase);
+referenceCOM = zeros(numSteps, 13);
+
+for i = 1:numSteps
+    refRow = refBase(i, :).';
+    
+    % The angular command subscriber has an all-zero quaternion until the first
+    % command arrives after enable. Use the measured attitude during that gap;
+    % preserve the desired position and velocities instead of inventing a pose.
+    if all(refRow(4:7) == 0)
+        refRow(4:7) = xCOM(4:7);
+    end
+    
+    refTransformed = baseLinkToCOM(refRow, offset);
+    
+    % q and -q describe the same attitude. Track the measured representation.
+    q = refTransformed(4:7);
+    q = q / norm(q);
+    if dot(q, xCOM(4:7)) < 0
+        q = -q;
+    end
+    refTransformed(4:7) = q;
+    
+    referenceCOM(i, :) = refTransformed.';
 end
 
-reference = baseLinkToCOM(refBase, offset);
-
-% q and -q describe the same attitude. Track the measured representation.
-reference(4:7) = reference(4:7) / norm(reference(4:7));
-if dot(reference(4:7), xCOM(4:7)) < 0
-    reference(4:7) = -reference(4:7);
-end
-refCOM = transpose(reference);
+refCOM = referenceCOM;
 end
