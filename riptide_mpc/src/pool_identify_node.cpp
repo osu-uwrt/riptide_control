@@ -40,7 +40,9 @@
 
 #include <fcntl.h>
 #include <signal.h>
+#ifdef __linux__
 #include <sys/prctl.h>
+#endif
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -620,7 +622,9 @@ class PoolIdentifyNode : public rclcpp::Node {
         const pid_t parent = getpid();
         const pid_t pid = fork();
         if (pid == 0) {
+#ifdef __linux__
             prctl(PR_SET_PDEATHSIG, SIGINT);
+#endif  // no PDEATHSIG on macos, there the recorder only outlives a crashed node
             if (getppid() != parent)
                 _exit(0);
             const int fd = open(log.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
