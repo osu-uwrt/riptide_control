@@ -1263,6 +1263,13 @@ YAML::Node report(const YAML::Node &prior, const Result &r) {
             n["note"] = a.note;
         out[names[d]] = n;
     }
+    // libc++'s vector<bool> elements aren't bools, so yaml-cpp can't convert the vector itself
+    const auto bools = [](const std::vector<bool> &v) {
+        YAML::Node n(YAML::NodeType::Sequence);
+        for (const bool b : v)
+            n.push_back(b);
+        return n;
+    };
     const ThrusterFit &f = r.thrusters;
     if (f.forward.size() > 0) {
         YAML::Node t;
@@ -1272,14 +1279,14 @@ YAML::Node report(const YAML::Node &prior, const Result &r) {
         t["reverse_gain"] = std::vector<double>(f.reverse.data(), f.reverse.data() + f.reverse.size());
         t["forward_seconds"] = std::vector<double>(f.forward_time.data(), f.forward_time.data() + f.forward_time.size());
         t["reverse_seconds"] = std::vector<double>(f.reverse_time.data(), f.reverse_time.data() + f.reverse_time.size());
-        t["forward_accepted"] = f.forward_ok;
-        t["reverse_accepted"] = f.reverse_ok;
+        t["forward_accepted"] = bools(f.forward_ok);
+        t["reverse_accepted"] = bools(f.reverse_ok);
         t["joint_net_buoyancy_N"] = f.buoyancy;
         t["joint_cob_relative"] = std::vector<double>{f.cob.x(), f.cob.y(), f.cob.z()};
         t["residual_force_rms_N"] = f.force_residual;
         t["residual_torque_rms_Nm"] = f.torque_residual;
         t["group"] = f.group;
-        t["reverse_mean_pinned"] = f.reverse_pinned; // per group: never at mixed signs, reverse mean = prior
+        t["reverse_mean_pinned"] = bools(f.reverse_pinned); // per group: never at mixed signs, reverse mean = prior
         t["note"] = f.note.empty() ? "gains relative to the prior model; each group's forward mean pinned to 1 "
                                      "(holding still cannot tell a group's overall scale from the statics)"
                                    : f.note;
