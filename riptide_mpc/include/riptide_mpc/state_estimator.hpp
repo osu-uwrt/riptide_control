@@ -25,6 +25,13 @@ struct EstimatorSettings {
     double gyro_gain = 1.0;
     double fog_gain = 1.0;
     double dvl_gain = 0.7;
+    // DVL outlier gate: a sample whose velocity innovation is larger than dvl_max_innovation [m/s] is skipped
+    // (0: off), unless the previous dvl_max_rejections samples were all skipped, so a real change in speed (or an
+    // estimate that drifted) still gets through. Single-sample DVL spikes over the table edge (beams split between
+    // the table top and the floor, 0.2-0.8 m/s with every beam valid, 2026-11-23) otherwise stepped the velocity
+    // estimate and taught the disturbance a wrench, which the MPC answered with thrust bursts and pitch swings.
+    double dvl_max_innovation = 0.15;
+    int dvl_max_rejections = 2;
     // Complementary-filter time constants [s]: how quickly the propagated state
     // is pulled toward a slow or noisy absolute reference.
     double tilt_time_constant = 1.0;       // IMU gravity reference (roll/pitch)
@@ -120,6 +127,10 @@ class StateEstimator {
         bool gyro, fog, tilt, dvl, depth;
     };
     Health health(double t) const;
+    // DVL samples the outlier gate skipped since startup
+    long dvlRejected() const {
+        return dvl_rejected_;
+    }
 
   private:
     static constexpr double kNever = -std::numeric_limits<double>::infinity();
@@ -155,6 +166,8 @@ class StateEstimator {
     double t_ = 0;
     bool initialized_ = false;
     bool learning_paused_ = false;
+    int dvl_rejections_ = 0; // consecutive
+    long dvl_rejected_ = 0;  // total
     double last_gyro_ = kNever, last_fog_ = kNever, last_tilt_ = kNever, last_dvl_ = kNever, last_depth_ = kNever,
            last_odom_ = kNever;
 };

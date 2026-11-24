@@ -232,6 +232,16 @@ void StateEstimator::dvlVelocity(double t, const Vector3d &velocity_dvl) {
         velocityAt(t, v, w);
     const Vector3d predicted = v + w.cross(mounts_.dvl_position);
     const Vector3d innovation = mounts_.dvl * velocity_dvl - predicted;
+    if (settings_.dvl_max_innovation > 0 && innovation.norm() > settings_.dvl_max_innovation &&
+        dvl_rejections_ < settings_.dvl_max_rejections) {
+        // An outlier: neither the velocity nor the disturbance learns from it. The DVL is still alive, so its
+        // channel stays off the EKF fallback
+        ++dvl_rejections_;
+        ++dvl_rejected_;
+        last_dvl_ = std::max(last_dvl_, t);
+        return;
+    }
+    dvl_rejections_ = 0;
     if (fresh(last_dvl_, settings_.dvl_timeout, t))
         learnForce(innovation);
     x_.segment<3>(7) += settings_.dvl_gain * innovation;
