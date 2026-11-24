@@ -38,6 +38,9 @@ struct Rig {
     Vector3d r_dvl; // DVL relative to COM
     Vector3d ekf_rate = Vector3d::Zero(), ekf_velocity = Vector3d::Zero();
     bool dvl_enabled = true;
+    int dvl_spike_every = 0; // every n-th DVL sample is off by dvl_spike (0: none)
+    Vector3d dvl_spike = Vector3d(0.5, 0.0, 0.0);
+    int dvl_samples = 0;
     std::mt19937 rng{7};
     std::normal_distribution<double> unit{0., 1.};
 
@@ -71,8 +74,12 @@ struct Rig {
             const Quaterniond jitter(Eigen::AngleAxisd(0.5 * M_PI / 180 * unit(rng), axis));
             est.imuOrientation(t, jitter * q() * q_imu);
         }
-        if (dvl_enabled && due(k, 8)) // sim dvl_noise_stddev 0.001
-            est.dvlVelocity(t, q_dvl.conjugate() * (x.segment<3>(7) + w.cross(r_dvl)) + noise(0.001));
+        if (dvl_enabled && due(k, 8)) { // sim dvl_noise_stddev 0.001
+            Vector3d v = q_dvl.conjugate() * (x.segment<3>(7) + w.cross(r_dvl)) + noise(0.001);
+            if (dvl_spike_every > 0 && ++dvl_samples % dvl_spike_every == 0)
+                v += dvl_spike;
+            est.dvlVelocity(t, v);
+        }
         if (due(k, 20)) // depth sigma 0.01
             est.depth(t, model.baseLinkPosition(x).z() + 0.01 * unit(rng));
         const double k_lag = 1 - std::exp(-0.002 / 4.0);
@@ -184,6 +191,57 @@ TEST(StateEstimator, FallsBackToEkfVelocityWhenDvlDrops) {
     std::printf("DVL out: max velocity error %.4f m/s\n", late.velocity);
     EXPECT_LT(late.velocity, 0.02);
     EXPECT_LT((rig.model.baseLinkPosition(rig.x) - r.position).norm(), 0.02);
+}
+
+// Single-sample DVL spikes (the table-edge glitches of the 2026-11-23 pool test) while holding a pose: the gate
+// keeps them out of the velocity estimate; without it each one steps the estimate by dvl_gain * spike.
+TEST(StateEstimator, SkipsSingleDvlSpikes) {
+    auto run = [](double max_innovation, long *rejected) {
+        Rig rig;
+        EstimatorSettings s;
+        s.dvl_max_innovation = max_innovation;
+        StateEstimator est(talos(), SensorMounts::load(TALOS_VEHICLE, talos().com()), s);
+        MpcController mpc(talos(), MpcSettings());
+        rig.step(est, 0);
+        Reference hold;
+        hold.linear_mode = hold.angular_mode = Mode::POSITION;
+        hold.position = rig.model.baseLinkPosition(rig.x);
+        hold.orientation = rig.q();
+        runClosedLoop(rig, est, mpc, hold, 2.0);
+        rig.dvl_spike_every = 20; // one 0.5 m/s spike every 2.5 s: three in the 10 s
+        const Errors e = runClosedLoop(rig, est, mpc, hold, 10.0);
+        if (rejected)
+            *rejected = est.dvlRejected();
+        return e;
+    };
+    long rejected = 0;
+    const Errors gated = run(0.15, &rejected), open = run(0.0, nullptr);
+    std::printf("DVL spikes: max velocity error %.3f m/s gated (%ld skipped), %.3f m/s without the gate\n",
+                gated.velocity, rejected, open.velocity);
+    EXPECT_EQ(rejected, 3); // one per spike, nothing else
+    EXPECT_LT(gated.velocity, 0.03);
+    EXPECT_GT(open.velocity, 0.2);
+}
+
+// A real change the estimate did not predict (a kick to the vehicle) is skipped for dvl_max_rejections samples
+// and then taken: the estimate still converges.
+TEST(StateEstimator, DvlGateLetsARealChangeThrough) {
+    Rig rig;
+    StateEstimator est(talos(), SensorMounts::load(TALOS_VEHICLE, talos().com()), EstimatorSettings());
+    MpcController mpc(talos(), MpcSettings());
+    rig.step(est, 0);
+    Reference hold;
+    hold.linear_mode = hold.angular_mode = Mode::POSITION;
+    hold.position = rig.model.baseLinkPosition(rig.x);
+    hold.orientation = rig.q();
+    runClosedLoop(rig, est, mpc, hold, 2.0);
+    rig.x.segment<3>(7) += rig.q().conjugate() * Vector3d(0.4, 0.0, 0.0); // kicked to 0.4 m/s
+    runClosedLoop(rig, est, mpc, hold, 0.2);
+    const Errors late = runClosedLoop(rig, est, mpc, hold, 4.0, rig.t + 1.0);
+    std::printf("Kick: %ld DVL samples skipped, max velocity error after 1 s %.4f m/s\n", est.dvlRejected(),
+                late.velocity);
+    EXPECT_EQ(est.dvlRejected(), 2);
+    EXPECT_LT(late.velocity, 0.02);
 }
 
 TEST(StateEstimator, ReseedsWhenEkfJumps) {

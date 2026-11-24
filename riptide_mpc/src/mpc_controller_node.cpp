@@ -410,6 +410,9 @@ class MpcControllerNode : public rclcpp::Node {
             e.gyro_gain = declare_parameter("estimator.gyro_gain", e.gyro_gain);
             e.fog_gain = declare_parameter("estimator.fog_gain", e.fog_gain);
             e.dvl_gain = declare_parameter("estimator.dvl_gain", e.dvl_gain);
+            e.dvl_max_innovation = declare_parameter("estimator.dvl_max_innovation", e.dvl_max_innovation);
+            e.dvl_max_rejections =
+                static_cast<int>(declare_parameter("estimator.dvl_max_rejections", int64_t{e.dvl_max_rejections}));
             // How long before its stamp a DVL velocity was measured; the estimate compares it with its
             // own state from that long ago. nortek_dvl already back-dates by the DVL's dt2 (~0.12 s).
             dvl_latency_ = declare_parameter("estimator.dvl_latency", 0.0);

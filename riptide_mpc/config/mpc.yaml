@@ -13,6 +13,9 @@
       gyro_gain: 1.0                  # fraction of each gyro innovation applied
       fog_gain: 1.0
       dvl_gain: 0.7
+      dvl_max_innovation: 0.15        # m/s; a DVL sample this far from the estimate is skipped (0: off). Table-edge
+                                      # spikes reach 0.2-0.8 m/s with every beam valid (2026-11-23 pool test)
+      dvl_max_rejections: 2           # consecutive skips before a sample is taken anyway (a real speed change)
       dvl_latency: 0.0                # s; extra age of DVL stamps. 0: nortek_dvl stamps at the measurement (arrival + dt2)
       tilt_time_constant: 1.0         # s; IMU gravity reference for roll/pitch
       depth_time_constant: 0.3        # s

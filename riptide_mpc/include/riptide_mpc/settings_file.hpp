@@ -64,6 +64,9 @@ inline void loadSettingsFile(const std::string &path, MpcSettings &s, EstimatorS
         num(x["gyro_gain"], e.gyro_gain);
         num(x["fog_gain"], e.fog_gain);
         num(x["dvl_gain"], e.dvl_gain);
+        num(x["dvl_max_innovation"], e.dvl_max_innovation);
+        if (x["dvl_max_rejections"])
+            e.dvl_max_rejections = x["dvl_max_rejections"].as<int>();
         num(x["tilt_time_constant"], e.tilt_time_constant);
         num(x["depth_time_constant"], e.depth_time_constant);
         num(x["heading_time_constant"], e.heading_time_constant);
